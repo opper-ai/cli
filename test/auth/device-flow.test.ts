@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock @opperai/login before importing our wrapper.
 const startDeviceAuth = vi.fn();
@@ -12,8 +12,15 @@ vi.mock("@opperai/login", () => ({
 }));
 
 const { runDeviceFlow } = await import("../../src/auth/device-flow.js");
+import { OpperLogin } from "@opperai/login";
 
 describe("runDeviceFlow", () => {
+  beforeEach(() => {
+    vi.mocked(OpperLogin).mockClear();
+    startDeviceAuth.mockReset();
+    pollDeviceToken.mockReset();
+  });
+
   it("calls startDeviceAuth then pollDeviceToken with the result", async () => {
     startDeviceAuth.mockResolvedValue({
       deviceCode: "dc",
@@ -42,6 +49,12 @@ describe("runDeviceFlow", () => {
     expect(result.user).toEqual({ email: "me@example.com", name: "Me" });
     expect(result.source).toBe("device-flow");
     expect(typeof result.obtainedAt).toBe("string");
+
+    expect(OpperLogin).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: "opper_app_cli" }),
+    );
+    const args = vi.mocked(OpperLogin).mock.calls[0]?.[0];
+    expect(args).not.toHaveProperty("opperUrl");
   });
 
   it("accepts a baseUrl override passed to OpperLogin", async () => {
@@ -58,5 +71,12 @@ describe("runDeviceFlow", () => {
     });
     const result = await runDeviceFlow({ baseUrl: "https://custom.example" });
     expect(result.baseUrl).toBe("https://custom.example");
+
+    expect(OpperLogin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: "opper_app_cli",
+        opperUrl: "https://custom.example",
+      }),
+    );
   });
 });
