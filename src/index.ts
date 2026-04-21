@@ -23,6 +23,11 @@ import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
 import { callCommand } from "./commands/call.js";
 import { modelsListCommand } from "./commands/models.js";
+import {
+  functionsListCommand,
+  functionsGetCommand,
+  functionsDeleteCommand,
+} from "./commands/functions.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -223,6 +228,37 @@ modelsCmd
       key: program.opts().key,
       ...(filter ? { filter } : {}),
     });
+  });
+
+const functionsCmd = program
+  .command("functions")
+  .description("Manage Opper functions");
+
+functionsCmd
+  .command("list")
+  .description("List functions")
+  .argument("[filter]", "optional substring filter on name")
+  .action(async (filter: string | undefined) => {
+    await functionsListCommand({
+      key: program.opts().key,
+      ...(filter ? { filter } : {}),
+    });
+  });
+
+functionsCmd
+  .command("get")
+  .description("Show details of a function")
+  .argument("<name>", "function name")
+  .action(async (name: string) => {
+    await functionsGetCommand({ name, key: program.opts().key });
+  });
+
+functionsCmd
+  .command("delete")
+  .description("Delete a function")
+  .argument("<name>", "function name")
+  .action(async (name: string) => {
+    await functionsDeleteCommand({ name, key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
