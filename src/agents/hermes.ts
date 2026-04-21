@@ -1,7 +1,10 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
+import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
+import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -41,15 +44,25 @@ async function install(): Promise<void> {
 }
 
 async function snapshotConfig(): Promise<SnapshotHandle> {
-  throw new Error("snapshotConfig not yet implemented");
+  const path = hermesConfigPath();
+  if (!existsSync(path)) {
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      `Hermes config not found at ${path}`,
+      "Run `hermes` once to initialise a config, then try again.",
+    );
+  }
+  const handle = await takeSnapshot("hermes", path);
+  await rotateBackups("hermes", 20);
+  return handle;
 }
 
 async function writeOpperConfig(_c: OpperRouting): Promise<void> {
   throw new Error("writeOpperConfig not yet implemented");
 }
 
-async function restoreConfig(_h: SnapshotHandle): Promise<void> {
-  throw new Error("restoreConfig not yet implemented");
+async function restoreConfig(h: SnapshotHandle): Promise<void> {
+  await restoreSnapshot(h, hermesConfigPath());
 }
 
 async function spawn(_args: string[]): Promise<number> {
