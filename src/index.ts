@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { OpperError, EXIT_CODES } from "./errors.js";
 import { printError } from "./ui/print.js";
 import { whoamiCommand } from "./commands/whoami.js";
+import { loginCommand } from "./commands/login.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -35,6 +36,19 @@ program
   .description("Show the authenticated user for the active slot")
   .action(async () => {
     await whoamiCommand({ key: program.opts().key });
+  });
+
+program
+  .command("login")
+  .description("Authenticate with Opper via the OAuth device flow")
+  .option("--force", "re-authenticate even if a key is already stored")
+  .option("--base-url <url>", "override the Opper API base URL")
+  .action(async (cmdOpts: { force?: boolean; baseUrl?: string }) => {
+    await loginCommand({
+      key: program.opts().key,
+      ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
+      ...(cmdOpts.force ? { force: true } : {}),
+    });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
