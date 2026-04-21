@@ -39,6 +39,7 @@ import {
   configGetCommand,
   configRemoveCommand,
 } from "./commands/config.js";
+import { indexesListCommand, indexesGetCommand } from "./commands/indexes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -352,6 +353,31 @@ configCmd
   .argument("<name>", "slot name")
   .action(async (name: string) => {
     await configRemoveCommand({ name });
+  });
+
+const indexesCmd = program
+  .command("indexes")
+  .description("Manage knowledge base indexes");
+
+indexesCmd
+  .command("list")
+  .description("List indexes")
+  .option("--limit <n>", "max items", (v) => parseInt(v, 10))
+  .option("--offset <n>", "items to skip", (v) => parseInt(v, 10))
+  .action(async (cmdOpts: { limit?: number; offset?: number }) => {
+    await indexesListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
+      ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
+    });
+  });
+
+indexesCmd
+  .command("get")
+  .description("Show details of an index")
+  .argument("<name>", "index name")
+  .action(async (name: string) => {
+    await indexesGetCommand({ name, key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
