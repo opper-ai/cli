@@ -22,7 +22,11 @@ import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
 import { callCommand } from "./commands/call.js";
-import { modelsListCommand } from "./commands/models.js";
+import {
+  modelsListCommand,
+  modelsCreateCommand,
+  modelsGetCommand,
+} from "./commands/models.js";
 import {
   functionsListCommand,
   functionsGetCommand,
@@ -251,6 +255,36 @@ modelsCmd
       key: program.opts().key,
       ...(filter ? { filter } : {}),
     });
+  });
+
+modelsCmd
+  .command("create")
+  .description("Register a custom model (LiteLLM-compatible)")
+  .argument("<name>", "friendly name")
+  .argument("<identifier>", "LiteLLM identifier (e.g. azure/gpt-4o)")
+  .argument("<apiKey>", "API key for the upstream provider")
+  .option("--extra <json>", "JSON provider-specific config (api_base, api_version, etc.)")
+  .action(async (
+    name: string,
+    identifier: string,
+    apiKey: string,
+    cmdOpts: { extra?: string },
+  ) => {
+    await modelsCreateCommand({
+      name,
+      identifier,
+      apiKey,
+      key: program.opts().key,
+      ...(cmdOpts.extra ? { extraJson: cmdOpts.extra } : {}),
+    });
+  });
+
+modelsCmd
+  .command("get")
+  .description("Show details of a custom model")
+  .argument("<name>", "custom model name")
+  .action(async (name: string) => {
+    await modelsGetCommand({ name, key: program.opts().key });
   });
 
 const functionsCmd = program

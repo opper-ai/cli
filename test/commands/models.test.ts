@@ -1,10 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 import { setSlot } from "../../src/auth/config.js";
 
 const getMock = vi.fn();
+const postMock = vi.fn();
+const delMock = vi.fn();
 vi.mock("../../src/api/client.js", () => ({
-  OpperApi: vi.fn().mockImplementation(() => ({ get: getMock })),
+  OpperApi: vi.fn().mockImplementation(() => ({ get: getMock, post: postMock, del: delMock })),
 }));
 
 const { modelsListCommand } = await import("../../src/commands/models.js");
@@ -46,6 +48,67 @@ describe("modelsListCommand", () => {
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("anthropic/claude-opus-4.7");
       expect(out).not.toContain("openai/gpt-4o");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+describe("models create + get", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+  });
+
+  it("create posts to /v2/models/custom with identifier, api_key, extra", async () => {
+    await setSlot("default", { apiKey: "k" });
+    postMock.mockResolvedValue({
+      id: "m_new",
+      name: "my-gpt4",
+      identifier: "azure/gpt-4o",
+    });
+    const { modelsCreateCommand } = await import("../../src/commands/models.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await modelsCreateCommand({
+        name: "my-gpt4",
+        identifier: "azure/gpt-4o",
+        apiKey: "sk-xxx",
+        extraJson: JSON.stringify({ api_base: "https://example.openai.azure.com" }),
+        key: "default",
+      });
+      expect(postMock).toHaveBeenCalledWith(
+        "/v2/models/custom",
+        expect.objectContaining({
+          name: "my-gpt4",
+          identifier: "azure/gpt-4o",
+          api_key: "sk-xxx",
+          extra: { api_base: "https://example.openai.azure.com" },
+        }),
+      );
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("my-gpt4");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("get fetches custom model by name", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockReset();
+    getMock.mockResolvedValue({
+      id: "m_1",
+      name: "my-gpt4",
+      identifier: "azure/gpt-4o",
+      type: "llm",
+    });
+    const { modelsGetCommand } = await import("../../src/commands/models.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await modelsGetCommand({ name: "my-gpt4", key: "default" });
+      expect(getMock).toHaveBeenCalledWith("/v2/models/custom/by-name/my-gpt4");
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("azure/gpt-4o");
     } finally {
       log.mockRestore();
     }
