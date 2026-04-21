@@ -33,6 +33,10 @@ opper --help
 - `opper editors opencode [--global|--local] [--overwrite]` — Write the Opper provider into OpenCode's config.
 - `opper editors continue [--global|--local] [--overwrite]` — Write Opper models into Continue.dev's config.
 
+### Agents
+- `opper agents list` — List supported AI agents and whether each is installed.
+- `opper launch <agent> [--model <id>] [--install] [-- <agent args>]` — Launch a supported agent with its inference routed through Opper. Snapshots the agent's config on entry, restores it on exit.
+
 ### Wizards
 - `opper setup` — Interactive wizard that ties the above together.
 

@@ -19,6 +19,8 @@ import {
   editorsContinueCommand,
 } from "./commands/editors.js";
 import { setupCommand } from "./commands/setup.js";
+import { agentsListCommand } from "./commands/agents.js";
+import { launchCommand } from "./commands/launch.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -140,6 +142,35 @@ program
   .description("Run the interactive setup wizard")
   .action(async () => {
     await setupCommand({ key: program.opts().key });
+  });
+
+const agentsCmd = program
+  .command("agents")
+  .description("Manage supported AI agents");
+
+agentsCmd
+  .command("list")
+  .description("List supported agents and whether each is installed")
+  .action(agentsListCommand);
+
+program
+  .command("launch")
+  .description("Launch an AI agent with its inference routed through Opper")
+  .argument("<agent>", "agent name (e.g. hermes)")
+  .option("--model <id>", "Opper model identifier", "anthropic/claude-opus-4.7")
+  .option("--install", "install the agent if missing", false)
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .action(async (agentName: string, cmdOpts: { model?: string; install?: boolean }, cmd) => {
+    const args = (cmd.args as string[]).slice(1);
+    const code = await launchCommand({
+      agent: agentName,
+      key: program.opts().key,
+      ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+      ...(cmdOpts.install ? { install: true } : {}),
+      passthrough: args,
+    });
+    process.exit(code);
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
