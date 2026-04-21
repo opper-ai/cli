@@ -37,6 +37,25 @@ opper --help
 - `opper traces get <id>` — Show a trace and its spans.
 - `opper traces delete <id>` — Delete a trace.
 
+### Knowledge / indexes
+- `opper indexes list [--limit <n>] [--offset <n>]` — List indexes.
+- `opper indexes get <name>` — Show details of an index.
+- `opper indexes create <name> [--embedding-model <id>]` — Create an index.
+- `opper indexes delete <name>` — Delete an index.
+- `opper indexes query <name> <query> [--top-k <n>] [--filters <json>]` — Semantic search.
+- `opper indexes add <name> <content> [--key <id>] [--metadata <json>]` — Add a document.
+
+### Custom models
+- `opper models create <name> <identifier> <apiKey> [--extra <json>]` — Register a custom model.
+- `opper models get <name>` — Show details of a custom model.
+- `opper models delete <name>` — Remove a custom model.
+
+### Usage analytics
+- `opper usage list [--from-date] [--to-date] [--granularity] [--fields] [--group-by] [--out csv]` — Query usage rows.
+
+### Image generation
+- `opper image generate <prompt> [-o <file>] [--base64] [-m <model>]` — Generate an image.
+
 ### Skills
 - `opper skills install` — Install the Opper skill pack via `npx skills`.
 - `opper skills update` — Update the installed skills.
