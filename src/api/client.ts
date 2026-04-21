@@ -30,6 +30,16 @@ export class OpperApi {
     return this.parseJson<T>(res);
   }
 
+  async patch<T>(path: string, body: unknown): Promise<T> {
+    const url = this.buildUrl(path);
+    const res = await this.fetch(url, {
+      method: "PATCH",
+      headers: this.headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    return this.parseJson<T>(res);
+  }
+
   async del(path: string): Promise<void> {
     const url = this.buildUrl(path);
     const res = await this.fetch(url, { method: "DELETE", headers: this.headers() });

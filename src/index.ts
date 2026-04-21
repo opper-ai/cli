@@ -22,7 +22,12 @@ import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
 import { callCommand } from "./commands/call.js";
-import { modelsListCommand } from "./commands/models.js";
+import {
+  modelsListCommand,
+  modelsCreateCommand,
+  modelsGetCommand,
+  modelsDeleteCommand,
+} from "./commands/models.js";
 import {
   functionsListCommand,
   functionsGetCommand,
@@ -39,6 +44,16 @@ import {
   configGetCommand,
   configRemoveCommand,
 } from "./commands/config.js";
+import {
+  indexesListCommand,
+  indexesGetCommand,
+  indexesCreateCommand,
+  indexesDeleteCommand,
+  indexesQueryCommand,
+  indexesAddCommand,
+} from "./commands/indexes.js";
+import { usageListCommand } from "./commands/usage.js";
+import { imageGenerateCommand } from "./commands/image.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -245,6 +260,44 @@ modelsCmd
     });
   });
 
+modelsCmd
+  .command("create")
+  .description("Register a custom model (LiteLLM-compatible)")
+  .argument("<name>", "friendly name")
+  .argument("<identifier>", "LiteLLM identifier (e.g. azure/gpt-4o)")
+  .argument("<apiKey>", "API key for the upstream provider")
+  .option("--extra <json>", "JSON provider-specific config (api_base, api_version, etc.)")
+  .action(async (
+    name: string,
+    identifier: string,
+    apiKey: string,
+    cmdOpts: { extra?: string },
+  ) => {
+    await modelsCreateCommand({
+      name,
+      identifier,
+      apiKey,
+      key: program.opts().key,
+      ...(cmdOpts.extra ? { extraJson: cmdOpts.extra } : {}),
+    });
+  });
+
+modelsCmd
+  .command("get")
+  .description("Show details of a custom model")
+  .argument("<name>", "custom model name")
+  .action(async (name: string) => {
+    await modelsGetCommand({ name, key: program.opts().key });
+  });
+
+modelsCmd
+  .command("delete")
+  .description("Delete a custom model by name")
+  .argument("<name>", "custom model name")
+  .action(async (name: string) => {
+    await modelsDeleteCommand({ name, key: program.opts().key });
+  });
+
 const functionsCmd = program
   .command("functions")
   .description("Manage Opper functions");
@@ -352,6 +405,162 @@ configCmd
   .argument("<name>", "slot name")
   .action(async (name: string) => {
     await configRemoveCommand({ name });
+  });
+
+const indexesCmd = program
+  .command("indexes")
+  .description("Manage knowledge base indexes");
+
+indexesCmd
+  .command("list")
+  .description("List indexes")
+  .option("--limit <n>", "max items", (v) => parseInt(v, 10))
+  .option("--offset <n>", "items to skip", (v) => parseInt(v, 10))
+  .action(async (cmdOpts: { limit?: number; offset?: number }) => {
+    await indexesListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
+      ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
+    });
+  });
+
+indexesCmd
+  .command("get")
+  .description("Show details of an index")
+  .argument("<name>", "index name")
+  .action(async (name: string) => {
+    await indexesGetCommand({ name, key: program.opts().key });
+  });
+
+indexesCmd
+  .command("create")
+  .description("Create a new index")
+  .argument("<name>", "index name")
+  .option("--embedding-model <id>", "override the embedding model")
+  .action(async (name: string, cmdOpts: { embeddingModel?: string }) => {
+    await indexesCreateCommand({
+      name,
+      key: program.opts().key,
+      ...(cmdOpts.embeddingModel ? { embeddingModel: cmdOpts.embeddingModel } : {}),
+    });
+  });
+
+indexesCmd
+  .command("delete")
+  .description("Delete an index by name")
+  .argument("<name>", "index name")
+  .action(async (name: string) => {
+    await indexesDeleteCommand({ name, key: program.opts().key });
+  });
+
+indexesCmd
+  .command("query")
+  .description("Query an index")
+  .argument("<name>", "index name")
+  .argument("<query>", "query string")
+  .option("--top-k <n>", "number of results", (v) => parseInt(v, 10))
+  .option("--filters <json>", "JSON-encoded filter object")
+  .action(async (
+    name: string,
+    query: string,
+    cmdOpts: { topK?: number; filters?: string },
+  ) => {
+    await indexesQueryCommand({
+      name,
+      query,
+      key: program.opts().key,
+      ...(cmdOpts.topK !== undefined ? { topK: cmdOpts.topK } : {}),
+      ...(cmdOpts.filters ? { filtersJson: cmdOpts.filters } : {}),
+    });
+  });
+
+indexesCmd
+  .command("add")
+  .description("Add a document to an index")
+  .argument("<name>", "index name")
+  .argument("<content>", "document content (or - to read from stdin)")
+  .option("--key <id>", "document key / id")
+  .option("--metadata <json>", "JSON-encoded metadata object")
+  .action(async (
+    name: string,
+    content: string,
+    cmdOpts: { key?: string; metadata?: string },
+  ) => {
+    let resolvedContent = content;
+    if (content === "-") {
+      resolvedContent = (await readStdinIfPiped()) ?? "";
+      if (!resolvedContent) {
+        throw new OpperError(
+          "API_ERROR",
+          "No content on stdin",
+          "Pipe content into the CLI or pass it as a positional argument.",
+        );
+      }
+    }
+    await indexesAddCommand({
+      name,
+      content: resolvedContent,
+      key: program.opts().key,
+      ...(cmdOpts.key ? { docKey: cmdOpts.key } : {}),
+      ...(cmdOpts.metadata ? { metadataJson: cmdOpts.metadata } : {}),
+    });
+  });
+
+const usageCmd = program
+  .command("usage")
+  .description("Analyse usage and costs");
+
+usageCmd
+  .command("list")
+  .description("List usage rows grouped/bucketed by the given params")
+  .option("--from-date <d>", "ISO date or RFC3339 start")
+  .option("--to-date <d>", "ISO date or RFC3339 end")
+  .option("--granularity <g>", "minute | hour | day | month | year")
+  .option("--fields <csv>", "comma-separated extra fields (e.g. total_tokens)")
+  .option("--group-by <csv>", "comma-separated group-by keys (e.g. model,customer_id)")
+  .option("--out <format>", "text (default) | csv", "text")
+  .action(async (cmdOpts: {
+    fromDate?: string;
+    toDate?: string;
+    granularity?: string;
+    fields?: string;
+    groupBy?: string;
+    out?: string;
+  }) => {
+    const out = cmdOpts.out === "csv" ? "csv" : "text";
+    await usageListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.fromDate ? { fromDate: cmdOpts.fromDate } : {}),
+      ...(cmdOpts.toDate ? { toDate: cmdOpts.toDate } : {}),
+      ...(cmdOpts.granularity ? { granularity: cmdOpts.granularity } : {}),
+      ...(cmdOpts.fields ? { fields: cmdOpts.fields.split(",").map((s) => s.trim()) } : {}),
+      ...(cmdOpts.groupBy ? { groupBy: cmdOpts.groupBy.split(",").map((s) => s.trim()) } : {}),
+      out: out as "text" | "csv",
+    });
+  });
+
+const imageCmd = program
+  .command("image")
+  .description("Image generation");
+
+imageCmd
+  .command("generate")
+  .description("Generate an image from a prompt")
+  .argument("<prompt>", "text prompt")
+  .option("-o, --output <path>", "output file path (default: image_<ts>.png in cwd)")
+  .option("--base64", "print raw base64 to stdout instead of saving a file")
+  .option("-m, --model <id>", "image model identifier")
+  .action(async (
+    prompt: string,
+    cmdOpts: { output?: string; base64?: boolean; model?: string },
+  ) => {
+    await imageGenerateCommand({
+      prompt,
+      key: program.opts().key,
+      ...(cmdOpts.output ? { output: cmdOpts.output } : {}),
+      ...(cmdOpts.base64 ? { base64: true } : {}),
+      ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+    });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

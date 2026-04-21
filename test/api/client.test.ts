@@ -140,4 +140,24 @@ describe("OpperApi", () => {
     }
     expect(chunks).toEqual(['{"delta":"no"}', '{"delta":" space"}']);
   });
+
+  it("sends PATCH with JSON body", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: "m_1", name: "new" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k" });
+    const result = await api.patch<{ id: string; name: string }>(
+      "/v2/models/custom/m_1",
+      { name: "new" },
+    );
+    expect(result.id).toBe("m_1");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(JSON.stringify({ name: "new" }));
+  });
 });
