@@ -8,6 +8,11 @@ import { printError } from "./ui/print.js";
 import { whoamiCommand } from "./commands/whoami.js";
 import { loginCommand } from "./commands/login.js";
 import { logoutCommand } from "./commands/logout.js";
+import {
+  skillsInstallCommand,
+  skillsUpdateCommand,
+  skillsListCommand,
+} from "./commands/skills.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -70,6 +75,23 @@ program
       ...(cmdOpts.yes ? { yes: true } : {}),
     });
   });
+
+const skills = program.command("skills").description("Manage Opper skills");
+
+skills
+  .command("install")
+  .description("Install Opper skills via `npx skills add opper-ai/opper-skills`")
+  .action(skillsInstallCommand);
+
+skills
+  .command("update")
+  .description("Update Opper skills to the latest version")
+  .action(skillsUpdateCommand);
+
+skills
+  .command("list")
+  .description("Show whether Opper skills are installed")
+  .action(skillsListCommand);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   printError(err);
