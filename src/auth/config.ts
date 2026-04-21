@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, writeFile, chmod } from "node:fs/promises";
+import { dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { configPath } from "./paths.js";
 
@@ -37,4 +38,43 @@ export async function readConfig(): Promise<Config | null> {
       "Delete the file or fix the JSON manually.",
     );
   }
+}
+
+export async function writeConfig(config: Config): Promise<void> {
+  const path = configPath();
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(config, null, 2) + "\n", {
+    mode: 0o600,
+  });
+  await chmod(path, 0o600);
+}
+
+function emptyConfig(): Config {
+  return { version: 1, defaultKey: "default", keys: {} };
+}
+
+export async function getSlot(name?: string): Promise<AuthSlot | null> {
+  const cfg = await readConfig();
+  if (!cfg) return null;
+  const key = name ?? cfg.defaultKey;
+  return cfg.keys[key] ?? null;
+}
+
+export async function setSlot(name: string, slot: AuthSlot): Promise<void> {
+  const cfg = (await readConfig()) ?? emptyConfig();
+  const isFirstSlot = Object.keys(cfg.keys).length === 0;
+  cfg.keys[name] = slot;
+  if (isFirstSlot) cfg.defaultKey = name;
+  await writeConfig(cfg);
+}
+
+export async function deleteSlot(name: string): Promise<void> {
+  const cfg = await readConfig();
+  if (!cfg || !(name in cfg.keys)) return;
+  delete cfg.keys[name];
+  if (cfg.defaultKey === name) {
+    const remaining = Object.keys(cfg.keys);
+    cfg.defaultKey = remaining[0] ?? "default";
+  }
+  await writeConfig(cfg);
 }
