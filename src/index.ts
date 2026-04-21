@@ -25,6 +25,12 @@ program
   .option("--no-telemetry", "disable anonymous telemetry")
   .option("--no-color", "disable ANSI colors");
 
+program.hook("preAction", () => {
+  if (program.opts().color === false) {
+    process.env.NO_COLOR = "1";
+  }
+});
+
 program
   .command("version")
   .description("Print the CLI version")
