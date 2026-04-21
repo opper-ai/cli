@@ -16,6 +16,7 @@ import {
   editorsListCommand,
 } from "./editors.js";
 import { brand } from "../ui/colors.js";
+import { OpperError } from "../errors.js";
 
 export interface SetupOptions {
   key: string;
@@ -78,7 +79,13 @@ export async function setupCommand(opts: SetupOptions): Promise<void> {
         });
       } else if (choice === "editors-list") await editorsListCommand();
     } catch (err) {
-      log.error(err instanceof Error ? err.message : String(err));
+      if (err instanceof OpperError) {
+        log.error(
+          `[${err.code}] ${err.message}${err.hint ? ` — ${err.hint}` : ""}`,
+        );
+      } else {
+        log.error(err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
