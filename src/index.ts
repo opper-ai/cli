@@ -19,6 +19,7 @@ import {
   editorsContinueCommand,
 } from "./commands/editors.js";
 import { setupCommand } from "./commands/setup.js";
+import { agentsListCommand } from "./commands/agents.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -141,6 +142,15 @@ program
   .action(async () => {
     await setupCommand({ key: program.opts().key });
   });
+
+const agentsCmd = program
+  .command("agents")
+  .description("Manage supported AI agents");
+
+agentsCmd
+  .command("list")
+  .description("List supported agents and whether each is installed")
+  .action(agentsListCommand);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   printError(err);
