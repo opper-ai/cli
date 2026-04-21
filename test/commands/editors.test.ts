@@ -73,4 +73,25 @@ describe("editors commands", () => {
       log.mockRestore();
     }
   });
+
+  it("continue falls back to OPPER_API_KEY env when no slot is stored", async () => {
+    const prev = process.env.OPPER_API_KEY;
+    process.env.OPPER_API_KEY = "op_live_env";
+    try {
+      mocks.configureContinue.mockResolvedValue({ path: "/tmp/cfg.yaml", wrote: true });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        await editorsContinueCommand({ location: "global", overwrite: false, key: "default" });
+        expect(mocks.configureContinue).toHaveBeenCalledWith({
+          location: "global",
+          apiKey: "op_live_env",
+        });
+      } finally {
+        log.mockRestore();
+      }
+    } finally {
+      if (prev === undefined) delete process.env.OPPER_API_KEY;
+      else process.env.OPPER_API_KEY = prev;
+    }
+  });
 });

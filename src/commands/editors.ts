@@ -44,16 +44,17 @@ export async function editorsContinueCommand(
   opts: EditorsContinueOptions,
 ): Promise<void> {
   const slot = await getSlot(opts.key);
-  if (!slot) {
+  const apiKey = slot?.apiKey ?? process.env.OPPER_API_KEY;
+  if (!apiKey) {
     throw new OpperError(
       "AUTH_REQUIRED",
       `No API key stored for slot "${opts.key}"`,
-      "Run `opper login` first so Continue.dev can be configured with a key.",
+      "Run `opper login`, or set OPPER_API_KEY in the environment.",
     );
   }
   const result = await configureContinue({
     location: opts.location,
-    apiKey: slot.apiKey,
+    apiKey,
     ...(opts.overwrite ? { overwrite: true } : {}),
   });
   if (!result.wrote && result.reason === "exists") {
