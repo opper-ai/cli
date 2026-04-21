@@ -188,11 +188,12 @@ program
   .argument("<instructions>", "instructions / system prompt")
   .argument("[input]", "input (or piped via stdin)")
   .option("--model <id>", "model identifier (e.g. anthropic/claude-opus-4.7)")
+  .option("--stream", "stream the response token-by-token", false)
   .action(async (
     name: string,
     instructions: string,
     input: string | undefined,
-    cmdOpts: { model?: string },
+    cmdOpts: { model?: string; stream?: boolean },
   ) => {
     const resolvedInput = input ?? (await readStdinIfPiped());
     if (!resolvedInput) {
@@ -204,6 +205,7 @@ program
       input: resolvedInput,
       key: program.opts().key,
       ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+      ...(cmdOpts.stream ? { stream: true } : {}),
     });
   });
 

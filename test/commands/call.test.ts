@@ -82,4 +82,36 @@ describe("callCommand", () => {
       log.mockRestore();
     }
   });
+
+  it("streams when --stream is passed and writes deltas to stdout", async () => {
+    await setSlot("default", { apiKey: "k" });
+    const streamMock = vi.fn(async function* () {
+      yield JSON.stringify({ delta: "hel" });
+      yield JSON.stringify({ delta: "lo" });
+    });
+    const { OpperApi } = await import("../../src/api/client.js");
+    vi.mocked(OpperApi).mockImplementation(
+      () => ({ post: postMock, stream: streamMock }) as unknown as InstanceType<typeof OpperApi>,
+    );
+
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await callCommand({
+        name: "f",
+        instructions: "i",
+        input: "x",
+        key: "default",
+        stream: true,
+      });
+      const written = writeSpy.mock.calls.map((c) => String(c[0])).join("");
+      expect(written).toContain("hel");
+      expect(written).toContain("lo");
+      expect(streamMock).toHaveBeenCalledWith(
+        "/v3/call/stream",
+        expect.objectContaining({ stream: true }),
+      );
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
 });

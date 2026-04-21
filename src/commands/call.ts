@@ -7,6 +7,7 @@ export interface CallOptions {
   input: string;
   key: string;
   model?: string;
+  stream?: boolean;
 }
 
 interface RunResponse {
@@ -22,12 +23,24 @@ export async function callCommand(opts: CallOptions): Promise<void> {
     name: opts.name,
     instructions: opts.instructions,
     input: opts.input,
-    stream: false,
+    stream: !!opts.stream,
   };
   if (opts.model) body.model = opts.model;
 
-  const result = await api.post<RunResponse>("/v3/call", body);
+  if (opts.stream) {
+    for await (const payload of api.stream("/v3/call/stream", body)) {
+      try {
+        const parsed = JSON.parse(payload) as { delta?: string };
+        if (parsed.delta) process.stdout.write(parsed.delta);
+      } catch {
+        process.stdout.write(payload);
+      }
+    }
+    process.stdout.write("\n");
+    return;
+  }
 
+  const result = await api.post<RunResponse>("/v3/call", body);
   if (result.data === undefined || result.data === null) {
     console.log("(empty response)");
     return;
