@@ -21,11 +21,36 @@ import {
 import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
+import { callCommand } from "./commands/call.js";
+import { modelsListCommand } from "./commands/models.js";
+import {
+  functionsListCommand,
+  functionsGetCommand,
+  functionsDeleteCommand,
+} from "./commands/functions.js";
+import {
+  tracesListCommand,
+  tracesGetCommand,
+  tracesDeleteCommand,
+} from "./commands/traces.js";
+import {
+  configAddCommand,
+  configListCommand,
+  configGetCommand,
+  configRemoveCommand,
+} from "./commands/config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
   readFileSync(resolve(__dirname, "..", "package.json"), "utf8"),
 ) as { version: string };
+
+async function readStdinIfPiped(): Promise<string | null> {
+  if (process.stdin.isTTY) return null;
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
 
 const program = new Command();
 
@@ -171,6 +196,162 @@ program
       passthrough: args,
     });
     process.exit(code);
+  });
+
+program
+  .command("call")
+  .description("Execute a function by name via the Opper v3 /call endpoint")
+  .argument("<name>", "function name")
+  .argument("<instructions>", "instructions / system prompt")
+  .argument("[input]", "input (or piped via stdin)")
+  .option("--model <id>", "model identifier (e.g. anthropic/claude-opus-4.7)")
+  .option("--stream", "stream the response token-by-token", false)
+  .action(async (
+    name: string,
+    instructions: string,
+    input: string | undefined,
+    cmdOpts: { model?: string; stream?: boolean },
+  ) => {
+    const resolvedInput = input ?? (await readStdinIfPiped());
+    if (!resolvedInput) {
+      throw new OpperError(
+        "API_ERROR",
+        "No input provided",
+        "Pass input as the third positional argument, or pipe via stdin.",
+      );
+    }
+    await callCommand({
+      name,
+      instructions,
+      input: resolvedInput,
+      key: program.opts().key,
+      ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+      ...(cmdOpts.stream ? { stream: true } : {}),
+    });
+  });
+
+const modelsCmd = program
+  .command("models")
+  .description("Manage models");
+
+modelsCmd
+  .command("list")
+  .description("List available models")
+  .argument("[filter]", "optional substring filter on name or id")
+  .action(async (filter: string | undefined) => {
+    await modelsListCommand({
+      key: program.opts().key,
+      ...(filter ? { filter } : {}),
+    });
+  });
+
+const functionsCmd = program
+  .command("functions")
+  .description("Manage Opper functions");
+
+functionsCmd
+  .command("list")
+  .description("List functions")
+  .argument("[filter]", "optional substring filter on name")
+  .action(async (filter: string | undefined) => {
+    await functionsListCommand({
+      key: program.opts().key,
+      ...(filter ? { filter } : {}),
+    });
+  });
+
+functionsCmd
+  .command("get")
+  .description("Show details of a function")
+  .argument("<name>", "function name")
+  .action(async (name: string) => {
+    await functionsGetCommand({ name, key: program.opts().key });
+  });
+
+functionsCmd
+  .command("delete")
+  .description("Delete a function")
+  .argument("<name>", "function name")
+  .action(async (name: string) => {
+    await functionsDeleteCommand({ name, key: program.opts().key });
+  });
+
+const tracesCmd = program
+  .command("traces")
+  .description("View and manage traces");
+
+tracesCmd
+  .command("list")
+  .description("List traces")
+  .option("--limit <n>", "max items to return", (v) => parseInt(v, 10))
+  .option("--offset <n>", "items to skip", (v) => parseInt(v, 10))
+  .option("--name <substring>", "filter by trace name substring")
+  .action(async (cmdOpts: { limit?: number; offset?: number; name?: string }) => {
+    await tracesListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
+      ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
+      ...(cmdOpts.name ? { name: cmdOpts.name } : {}),
+    });
+  });
+
+tracesCmd
+  .command("get")
+  .description("Show a trace and its spans")
+  .argument("<id>", "trace id")
+  .action(async (id: string) => {
+    await tracesGetCommand({ id, key: program.opts().key });
+  });
+
+tracesCmd
+  .command("delete")
+  .description("Delete a trace")
+  .argument("<id>", "trace id")
+  .action(async (id: string) => {
+    await tracesDeleteCommand({ id, key: program.opts().key });
+  });
+
+const configCmd = program
+  .command("config")
+  .description("Manage stored API keys");
+
+configCmd
+  .command("add")
+  .description("Manually store an API key for a slot")
+  .argument("<name>", "slot name")
+  .argument("<apiKey>", "Opper API key")
+  .option("--base-url <url>", "custom Opper base URL for this slot")
+  .action(async (
+    name: string,
+    apiKey: string,
+    cmdOpts: { baseUrl?: string },
+  ) => {
+    await configAddCommand({
+      name,
+      apiKey,
+      ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
+    });
+  });
+
+configCmd
+  .command("list")
+  .description("List configured slots")
+  .action(configListCommand);
+
+configCmd
+  .command("get")
+  .description("Print the API key for a slot (raw, for scripts)")
+  .argument("<name>", "slot name")
+  .action(async (name: string) => {
+    await configGetCommand({ name });
+  });
+
+configCmd
+  .command("remove")
+  .description("Delete a stored slot")
+  .argument("<name>", "slot name")
+  .action(async (name: string) => {
+    await configRemoveCommand({ name });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
