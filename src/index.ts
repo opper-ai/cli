@@ -52,6 +52,7 @@ import {
   indexesQueryCommand,
   indexesAddCommand,
 } from "./commands/indexes.js";
+import { usageListCommand } from "./commands/usage.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -501,6 +502,39 @@ indexesCmd
       key: program.opts().key,
       ...(cmdOpts.key ? { docKey: cmdOpts.key } : {}),
       ...(cmdOpts.metadata ? { metadataJson: cmdOpts.metadata } : {}),
+    });
+  });
+
+const usageCmd = program
+  .command("usage")
+  .description("Analyse usage and costs");
+
+usageCmd
+  .command("list")
+  .description("List usage rows grouped/bucketed by the given params")
+  .option("--from-date <d>", "ISO date or RFC3339 start")
+  .option("--to-date <d>", "ISO date or RFC3339 end")
+  .option("--granularity <g>", "minute | hour | day | month | year")
+  .option("--fields <csv>", "comma-separated extra fields (e.g. total_tokens)")
+  .option("--group-by <csv>", "comma-separated group-by keys (e.g. model,customer_id)")
+  .option("--out <format>", "text (default) | csv", "text")
+  .action(async (cmdOpts: {
+    fromDate?: string;
+    toDate?: string;
+    granularity?: string;
+    fields?: string;
+    groupBy?: string;
+    out?: string;
+  }) => {
+    const out = cmdOpts.out === "csv" ? "csv" : "text";
+    await usageListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.fromDate ? { fromDate: cmdOpts.fromDate } : {}),
+      ...(cmdOpts.toDate ? { toDate: cmdOpts.toDate } : {}),
+      ...(cmdOpts.granularity ? { granularity: cmdOpts.granularity } : {}),
+      ...(cmdOpts.fields ? { fields: cmdOpts.fields.split(",").map((s) => s.trim()) } : {}),
+      ...(cmdOpts.groupBy ? { groupBy: cmdOpts.groupBy.split(",").map((s) => s.trim()) } : {}),
+      out: out as "text" | "csv",
     });
   });
 
