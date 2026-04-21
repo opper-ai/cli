@@ -8,6 +8,17 @@ import { printError } from "./ui/print.js";
 import { whoamiCommand } from "./commands/whoami.js";
 import { loginCommand } from "./commands/login.js";
 import { logoutCommand } from "./commands/logout.js";
+import {
+  skillsInstallCommand,
+  skillsUpdateCommand,
+  skillsListCommand,
+} from "./commands/skills.js";
+import {
+  editorsListCommand,
+  editorsOpenCodeCommand,
+  editorsContinueCommand,
+} from "./commands/editors.js";
+import { setupCommand } from "./commands/setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -69,6 +80,66 @@ program
       all: cmdOpts.all ?? false,
       ...(cmdOpts.yes ? { yes: true } : {}),
     });
+  });
+
+const skills = program.command("skills").description("Manage Opper skills");
+
+skills
+  .command("install")
+  .description("Install Opper skills via `npx skills add opper-ai/opper-skills`")
+  .action(skillsInstallCommand);
+
+skills
+  .command("update")
+  .description("Update Opper skills to the latest version")
+  .action(skillsUpdateCommand);
+
+skills
+  .command("list")
+  .description("Show whether Opper skills are installed")
+  .action(skillsListCommand);
+
+const editors = program
+  .command("editors")
+  .description("Configure Opper in supported AI code editors");
+
+editors
+  .command("list")
+  .description("List supported editors")
+  .action(editorsListCommand);
+
+editors
+  .command("opencode")
+  .description("Write the Opper provider block into OpenCode's config")
+  .option("--global", "write to ~/.config/opencode/opencode.json", true)
+  .option("--local", "write to ./opencode.json in the current directory")
+  .option("--overwrite", "replace an existing Opper provider if present")
+  .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean }) => {
+    await editorsOpenCodeCommand({
+      location: cmdOpts.local ? "local" : "global",
+      overwrite: cmdOpts.overwrite ?? false,
+    });
+  });
+
+editors
+  .command("continue")
+  .description("Write Opper models into Continue.dev's config")
+  .option("--global", "write to ~/.continue/config.yaml", true)
+  .option("--local", "write to ./.continue/config.yaml")
+  .option("--overwrite", "replace existing Opper models if present")
+  .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean }) => {
+    await editorsContinueCommand({
+      location: cmdOpts.local ? "local" : "global",
+      overwrite: cmdOpts.overwrite ?? false,
+      key: program.opts().key,
+    });
+  });
+
+program
+  .command("setup")
+  .description("Run the interactive setup wizard")
+  .action(async () => {
+    await setupCommand({ key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
