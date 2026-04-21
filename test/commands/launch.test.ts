@@ -107,4 +107,21 @@ describe("launchCommand", () => {
     ).rejects.toThrow("spawn died");
     expect(adapter.restoreConfig).toHaveBeenCalled();
   });
+
+  it("restores config when spawn returns a non-zero exit code (e.g. after Ctrl-C)", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.snapshotConfig.mockResolvedValue({
+      agent: "hermes",
+      backupPath: "/tmp/x.yaml",
+      timestamp: "t",
+    });
+    adapter.writeOpperConfig.mockResolvedValue(undefined);
+    adapter.spawn.mockResolvedValue(-1); // simulates signalled exit
+    adapter.restoreConfig.mockResolvedValue(undefined);
+
+    const code = await launchCommand({ agent: "hermes", key: "default" });
+    expect(code).toBe(-1);
+    expect(adapter.restoreConfig).toHaveBeenCalled();
+  });
 });

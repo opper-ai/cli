@@ -71,18 +71,13 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
   await adapter.writeOpperConfig(routing);
 
-  const signalHandler = (signal: NodeJS.Signals) => {
-    process.once(signal, () => process.exit(128 + (signal === "SIGINT" ? 2 : 15)));
-  };
-  process.on("SIGINT", signalHandler);
-  process.on("SIGTERM", signalHandler);
-
+  // No custom signal handlers: the child inherits the terminal via
+  // stdio: "inherit", so SIGINT/SIGTERM go to it directly. When the child
+  // exits, adapter.spawn() returns and we always run restore() in finally.
   let exitCode: number;
   try {
     exitCode = await adapter.spawn(opts.passthrough ?? []);
   } finally {
-    process.off("SIGINT", signalHandler);
-    process.off("SIGTERM", signalHandler);
     await restore();
   }
 
