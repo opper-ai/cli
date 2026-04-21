@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { OpperError, EXIT_CODES } from "./errors.js";
 import { printError } from "./ui/print.js";
+import { whoamiCommand } from "./commands/whoami.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -27,6 +28,13 @@ program
   .description("Print the CLI version")
   .action(() => {
     console.log(pkg.version);
+  });
+
+program
+  .command("whoami")
+  .description("Show the authenticated user for the active slot")
+  .action(async () => {
+    await whoamiCommand({ key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
