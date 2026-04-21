@@ -184,11 +184,11 @@ describe("hermes adapter — writeOpperConfig", () => {
 });
 
 describe("hermes adapter — install", () => {
-  it("throws OpperError(API_ERROR) when the installer exits non-zero", async () => {
+  it("throws OpperError(AGENT_NOT_FOUND) when the installer exits non-zero", async () => {
     runMock.mockClear();
     runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
     await expect(hermes.install()).rejects.toMatchObject({
-      code: "API_ERROR",
+      code: "AGENT_NOT_FOUND",
     });
   });
 

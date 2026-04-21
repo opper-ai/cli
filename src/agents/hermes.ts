@@ -42,7 +42,7 @@ async function install(): Promise<void> {
   );
   if (result.code !== 0) {
     throw new OpperError(
-      "API_ERROR",
+      "AGENT_NOT_FOUND",
       `Hermes installer exited with code ${result.code}`,
       "Check your network connection and try again, or follow the manual install steps at https://hermes-agent.nousresearch.com/docs/",
     );
