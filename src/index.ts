@@ -33,6 +33,12 @@ import {
   tracesGetCommand,
   tracesDeleteCommand,
 } from "./commands/traces.js";
+import {
+  configAddCommand,
+  configListCommand,
+  configGetCommand,
+  configRemoveCommand,
+} from "./commands/config.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -299,6 +305,49 @@ tracesCmd
   .argument("<id>", "trace id")
   .action(async (id: string) => {
     await tracesDeleteCommand({ id, key: program.opts().key });
+  });
+
+const configCmd = program
+  .command("config")
+  .description("Manage stored API keys");
+
+configCmd
+  .command("add")
+  .description("Manually store an API key for a slot")
+  .argument("<name>", "slot name")
+  .argument("<apiKey>", "Opper API key")
+  .option("--base-url <url>", "custom Opper base URL for this slot")
+  .action(async (
+    name: string,
+    apiKey: string,
+    cmdOpts: { baseUrl?: string },
+  ) => {
+    await configAddCommand({
+      name,
+      apiKey,
+      ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
+    });
+  });
+
+configCmd
+  .command("list")
+  .description("List configured slots")
+  .action(configListCommand);
+
+configCmd
+  .command("get")
+  .description("Print the API key for a slot (raw, for scripts)")
+  .argument("<name>", "slot name")
+  .action(async (name: string) => {
+    await configGetCommand({ name });
+  });
+
+configCmd
+  .command("remove")
+  .description("Delete a stored slot")
+  .argument("<name>", "slot name")
+  .action(async (name: string) => {
+    await configRemoveCommand({ name });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
