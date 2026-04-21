@@ -22,6 +22,7 @@ import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
 import { callCommand } from "./commands/call.js";
+import { modelsListCommand } from "./commands/models.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -206,6 +207,21 @@ program
       key: program.opts().key,
       ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
       ...(cmdOpts.stream ? { stream: true } : {}),
+    });
+  });
+
+const modelsCmd = program
+  .command("models")
+  .description("Manage models");
+
+modelsCmd
+  .command("list")
+  .description("List available models")
+  .argument("[filter]", "optional substring filter on name or id")
+  .action(async (filter: string | undefined) => {
+    await modelsListCommand({
+      key: program.opts().key,
+      ...(filter ? { filter } : {}),
     });
   });
 
