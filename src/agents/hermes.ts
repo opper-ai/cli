@@ -79,8 +79,9 @@ async function restoreConfig(h: SnapshotHandle): Promise<void> {
   await restoreSnapshot(h, hermesConfigPath());
 }
 
-async function spawn(_args: string[]): Promise<number> {
-  throw new Error("spawn not yet implemented");
+async function spawn(args: string[]): Promise<number> {
+  const result = run("hermes", args, { inherit: true });
+  return result.code;
 }
 
 export const hermes: AgentAdapter = {

@@ -182,3 +182,24 @@ describe("hermes adapter — writeOpperConfig", () => {
     expect(files.filter((f) => f.includes(".tmp."))).toHaveLength(0);
   });
 });
+
+describe("hermes adapter — spawn", () => {
+  it("runs the hermes binary with inherited stdio and returns the exit code", async () => {
+    runMock.mockClear();
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    const code = await hermes.spawn(["--foo", "bar"]);
+    expect(code).toBe(0);
+    expect(runMock).toHaveBeenCalledWith(
+      "hermes",
+      ["--foo", "bar"],
+      { inherit: true },
+    );
+  });
+
+  it("propagates non-zero exit codes", async () => {
+    runMock.mockClear();
+    runMock.mockReturnValue({ code: 2, stdout: "", stderr: "" });
+    const code = await hermes.spawn([]);
+    expect(code).toBe(2);
+  });
+});
