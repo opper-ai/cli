@@ -7,6 +7,7 @@ import { OpperError, EXIT_CODES } from "./errors.js";
 import { printError } from "./ui/print.js";
 import { whoamiCommand } from "./commands/whoami.js";
 import { loginCommand } from "./commands/login.js";
+import { logoutCommand } from "./commands/logout.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -48,6 +49,19 @@ program
       key: program.opts().key,
       ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
       ...(cmdOpts.force ? { force: true } : {}),
+    });
+  });
+
+program
+  .command("logout")
+  .description("Clear stored Opper credentials for a slot")
+  .option("--all", "clear every slot", false)
+  .option("--yes", "skip confirmation for --all", false)
+  .action(async (cmdOpts: { all?: boolean; yes?: boolean }) => {
+    await logoutCommand({
+      key: program.opts().key,
+      all: cmdOpts.all ?? false,
+      ...(cmdOpts.yes ? { yes: true } : {}),
     });
   });
 
