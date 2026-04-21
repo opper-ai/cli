@@ -96,3 +96,89 @@ describe("hermes adapter — snapshot/restore", () => {
     expect(readFileSync(live, "utf8")).toBe("original\n");
   });
 });
+
+describe("hermes adapter — writeOpperConfig", () => {
+  let sandbox: string;
+  let prevHome: string | undefined;
+
+  beforeEach(() => {
+    sandbox = mkdtempSync(join(tmpdir(), "opper-hermes-write-"));
+    prevHome = process.env.HOME;
+    process.env.HOME = sandbox;
+    mkdirSync(join(sandbox, ".hermes"), { recursive: true });
+  });
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+  });
+
+  it("rewrites the model: block and preserves other sections", async () => {
+    const live = join(sandbox, ".hermes", "config.yaml");
+    writeFileSync(
+      live,
+      [
+        "model:",
+        "  provider: openrouter",
+        "  model: openai/gpt-4o",
+        "tools:",
+        "  enabled: [search, shell]",
+        "gateway:",
+        "  telegram: true",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await hermes.writeOpperConfig({
+      baseUrl: "https://api.opper.ai/v3/openai",
+      apiKey: "op_live_test",
+      model: "anthropic/claude-opus-4.7",
+      compatShape: "openai",
+    });
+
+    const { parse } = await import("yaml");
+    const parsed = parse(readFileSync(live, "utf8")) as {
+      model: Record<string, unknown>;
+      tools: Record<string, unknown>;
+      gateway: Record<string, unknown>;
+    };
+    expect(parsed.model).toEqual({
+      provider: "openai",
+      model: "anthropic/claude-opus-4.7",
+      base_url: "https://api.opper.ai/v3/openai",
+      api_key: "op_live_test",
+    });
+    expect(parsed.tools).toEqual({ enabled: ["search", "shell"] });
+    expect(parsed.gateway).toEqual({ telegram: true });
+  });
+
+  it("creates the model block if missing", async () => {
+    const live = join(sandbox, ".hermes", "config.yaml");
+    writeFileSync(live, "tools:\n  enabled: []\n", "utf8");
+    await hermes.writeOpperConfig({
+      baseUrl: "https://api.opper.ai/v3/openai",
+      apiKey: "op_live_x",
+      model: "anthropic/claude-opus-4.7",
+      compatShape: "openai",
+    });
+    const { parse } = await import("yaml");
+    const parsed = parse(readFileSync(live, "utf8")) as {
+      model?: { provider?: string };
+    };
+    expect(parsed.model?.provider).toBe("openai");
+  });
+
+  it("writes atomically via a temp file + rename", async () => {
+    const live = join(sandbox, ".hermes", "config.yaml");
+    writeFileSync(live, "model: {}\n", "utf8");
+    await hermes.writeOpperConfig({
+      baseUrl: "https://api.opper.ai/v3/openai",
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+    const { readdirSync } = await import("node:fs");
+    const files = readdirSync(join(sandbox, ".hermes"));
+    expect(files.filter((f) => f.includes(".tmp."))).toHaveLength(0);
+  });
+});

@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
+import { readFile, writeFile, rename, chmod } from "node:fs/promises";
+import { parse, stringify } from "yaml";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
@@ -57,8 +59,20 @@ async function snapshotConfig(): Promise<SnapshotHandle> {
   return handle;
 }
 
-async function writeOpperConfig(_c: OpperRouting): Promise<void> {
-  throw new Error("writeOpperConfig not yet implemented");
+async function writeOpperConfig(c: OpperRouting): Promise<void> {
+  const path = hermesConfigPath();
+  const raw = await readFile(path, "utf8");
+  const parsed = (parse(raw) as Record<string, unknown>) ?? {};
+  parsed.model = {
+    provider: c.compatShape === "openai" ? "openai" : c.compatShape,
+    model: c.model,
+    base_url: c.baseUrl,
+    api_key: c.apiKey,
+  };
+  const tmp = `${path}.tmp.${process.pid}`;
+  await writeFile(tmp, stringify(parsed), "utf8");
+  await chmod(tmp, 0o600);
+  await rename(tmp, path);
 }
 
 async function restoreConfig(h: SnapshotHandle): Promise<void> {
