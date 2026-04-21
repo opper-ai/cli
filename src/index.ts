@@ -28,6 +28,11 @@ import {
   functionsGetCommand,
   functionsDeleteCommand,
 } from "./commands/functions.js";
+import {
+  tracesListCommand,
+  tracesGetCommand,
+  tracesDeleteCommand,
+} from "./commands/traces.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -259,6 +264,41 @@ functionsCmd
   .argument("<name>", "function name")
   .action(async (name: string) => {
     await functionsDeleteCommand({ name, key: program.opts().key });
+  });
+
+const tracesCmd = program
+  .command("traces")
+  .description("View and manage traces");
+
+tracesCmd
+  .command("list")
+  .description("List traces")
+  .option("--limit <n>", "max items to return", (v) => parseInt(v, 10))
+  .option("--offset <n>", "items to skip", (v) => parseInt(v, 10))
+  .option("--name <substring>", "filter by trace name substring")
+  .action(async (cmdOpts: { limit?: number; offset?: number; name?: string }) => {
+    await tracesListCommand({
+      key: program.opts().key,
+      ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
+      ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
+      ...(cmdOpts.name ? { name: cmdOpts.name } : {}),
+    });
+  });
+
+tracesCmd
+  .command("get")
+  .description("Show a trace and its spans")
+  .argument("<id>", "trace id")
+  .action(async (id: string) => {
+    await tracesGetCommand({ id, key: program.opts().key });
+  });
+
+tracesCmd
+  .command("delete")
+  .description("Delete a trace")
+  .argument("<id>", "trace id")
+  .action(async (id: string) => {
+    await tracesDeleteCommand({ id, key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
