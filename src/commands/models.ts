@@ -99,3 +99,20 @@ export async function modelsGetCommand(
     console.log(`${brand.bold("extra:")}      ${JSON.stringify(m.extra)}`);
   }
 }
+
+export interface ModelsDeleteOptions {
+  name: string;
+  key: string;
+}
+
+export async function modelsDeleteCommand(
+  opts: ModelsDeleteOptions,
+): Promise<void> {
+  const ctx = await resolveApiContext(opts.key);
+  const api = new OpperApi(ctx);
+  const m = await api.get<CustomModel>(
+    `/v2/models/custom/by-name/${encodeURIComponent(opts.name)}`,
+  );
+  await api.del(`/v2/models/custom/${encodeURIComponent(m.id)}`);
+  console.log(brand.purple(`✓ Deleted custom model "${opts.name}".`));
+}

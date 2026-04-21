@@ -26,6 +26,7 @@ import {
   modelsListCommand,
   modelsCreateCommand,
   modelsGetCommand,
+  modelsDeleteCommand,
 } from "./commands/models.js";
 import {
   functionsListCommand,
@@ -285,6 +286,14 @@ modelsCmd
   .argument("<name>", "custom model name")
   .action(async (name: string) => {
     await modelsGetCommand({ name, key: program.opts().key });
+  });
+
+modelsCmd
+  .command("delete")
+  .description("Delete a custom model by name")
+  .argument("<name>", "custom model name")
+  .action(async (name: string) => {
+    await modelsDeleteCommand({ name, key: program.opts().key });
   });
 
 const functionsCmd = program

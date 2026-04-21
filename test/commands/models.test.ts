@@ -114,3 +114,25 @@ describe("models create + get", () => {
     }
   });
 });
+
+describe("models delete", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    delMock.mockReset();
+  });
+
+  it("looks up by name, DELETEs by id", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockResolvedValue({ id: "m_abc", name: "my-gpt4", identifier: "azure/gpt-4o" });
+    delMock.mockResolvedValue(undefined);
+    const { modelsDeleteCommand } = await import("../../src/commands/models.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await modelsDeleteCommand({ name: "my-gpt4", key: "default" });
+      expect(getMock).toHaveBeenCalledWith("/v2/models/custom/by-name/my-gpt4");
+      expect(delMock).toHaveBeenCalledWith("/v2/models/custom/m_abc");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
