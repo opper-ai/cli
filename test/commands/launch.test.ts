@@ -44,7 +44,30 @@ describe("launchCommand", () => {
     ).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 
-  it("throws AUTH_REQUIRED when no slot is stored", async () => {
+  it("calls loginCommand when no slot is stored, then continues with the new slot", async () => {
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.snapshotConfig.mockResolvedValue({
+      agent: "hermes",
+      backupPath: "/tmp/s.yaml",
+      timestamp: "t",
+    });
+    adapter.writeOpperConfig.mockResolvedValue(undefined);
+    adapter.spawn.mockResolvedValue(0);
+    adapter.restoreConfig.mockResolvedValue(undefined);
+    loginMock.mockImplementation(async () => {
+      await setSlot("default", { apiKey: "op_live_fresh" });
+    });
+
+    const code = await launchCommand({ agent: "hermes", key: "default" });
+    expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+    expect(code).toBe(0);
+    expect(adapter.writeOpperConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "op_live_fresh" }),
+    );
+  });
+
+  it("still throws AUTH_REQUIRED if login completes without storing a slot", async () => {
+    loginMock.mockResolvedValue(undefined); // no slot stored
     adapter.detect.mockResolvedValue({ installed: true });
     await expect(
       launchCommand({ agent: "hermes", key: "default" }),
@@ -123,5 +146,28 @@ describe("launchCommand", () => {
     const code = await launchCommand({ agent: "hermes", key: "default" });
     expect(code).toBe(-1);
     expect(adapter.restoreConfig).toHaveBeenCalled();
+  });
+
+  it("preserves the spawn error when restore also fails", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.snapshotConfig.mockResolvedValue({
+      agent: "hermes",
+      backupPath: "/tmp/x.yaml",
+      timestamp: "t",
+    });
+    adapter.writeOpperConfig.mockResolvedValue(undefined);
+    adapter.spawn.mockRejectedValue(new Error("spawn boom"));
+    adapter.restoreConfig.mockRejectedValue(new Error("restore boom"));
+
+    // Swallow the stderr from restore's recovery hint.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        launchCommand({ agent: "hermes", key: "default" }),
+      ).rejects.toThrow("spawn boom");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { getAdapter } from "../agents/registry.js";
 import { getSlot } from "../auth/config.js";
+import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
@@ -25,13 +26,17 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     );
   }
 
-  const slot = await getSlot(opts.key);
+  let slot = await getSlot(opts.key);
   if (!slot) {
-    throw new OpperError(
-      "AUTH_REQUIRED",
-      `No API key stored for slot "${opts.key}"`,
-      "Run `opper login` first.",
-    );
+    await loginCommand({ key: opts.key });
+    slot = await getSlot(opts.key);
+    if (!slot) {
+      throw new OpperError(
+        "AUTH_REQUIRED",
+        `No API key stored for slot "${opts.key}"`,
+        "Run `opper login` first.",
+      );
+    }
   }
 
   const detection = await adapter.detect();
@@ -75,11 +80,21 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   // stdio: "inherit", so SIGINT/SIGTERM go to it directly. When the child
   // exits, adapter.spawn() returns and we always run restore() in finally.
   let exitCode: number;
+  let spawnError: unknown;
   try {
     exitCode = await adapter.spawn(opts.passthrough ?? []);
+  } catch (err) {
+    spawnError = err;
+    throw err;
   } finally {
-    await restore();
+    try {
+      await restore();
+    } catch (restoreErr) {
+      // If spawn itself errored, preserve that error. The restore failure
+      // was already logged by the restore() wrapper with recovery hints.
+      if (!spawnError) throw restoreErr;
+    }
   }
 
-  return exitCode;
+  return exitCode!;
 }
