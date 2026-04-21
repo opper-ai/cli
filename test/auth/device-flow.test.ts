@@ -51,7 +51,7 @@ describe("runDeviceFlow", () => {
     expect(typeof result.obtainedAt).toBe("string");
 
     expect(OpperLogin).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: "opper_app_cli" }),
+      expect.objectContaining({ clientId: "opper_app_CK-rOJsIIPXlzYYE7MWFCQ" }),
     );
     const args = vi.mocked(OpperLogin).mock.calls[0]?.[0];
     expect(args).not.toHaveProperty("opperUrl");
@@ -74,7 +74,7 @@ describe("runDeviceFlow", () => {
 
     expect(OpperLogin).toHaveBeenCalledWith(
       expect.objectContaining({
-        clientId: "opper_app_cli",
+        clientId: "opper_app_CK-rOJsIIPXlzYYE7MWFCQ",
         opperUrl: "https://custom.example",
       }),
     );

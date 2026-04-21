@@ -1,8 +1,8 @@
 import { OpperLogin } from "@opperai/login";
 import type { AuthSlot } from "./config.js";
 
-// Public OAuth client for the CLI. Provisioning flagged in spec §4.
-const CLIENT_ID = "opper_app_cli";
+// Public OAuth client for the CLI.
+const CLIENT_ID = "opper_app_CK-rOJsIIPXlzYYE7MWFCQ";
 
 export interface DevicePrompt {
   userCode: string;

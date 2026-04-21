@@ -119,9 +119,9 @@ e.g. `opper_app_cli`. The CLI ships this client ID in the source code; no
 `clientSecret`. This requires Opper's OAuth server to support public clients
 (it already does — `@opperai/login` sends `client_secret` only when present).
 
-**Open item to confirm with the platform team before launch:** provisioning
-the `opper_app_cli` client ID and whether the device flow is enabled for it in
-production.
+**Resolved 2026-04-21:** CLI client ID provisioned as
+`opper_app_CK-rOJsIIPXlzYYE7MWFCQ` on the production OAuth server; device flow
+enabled.
 
 ## 5. Agent routing (`opper launch <agent>`)
 
@@ -350,8 +350,6 @@ path on the v3 API.
 
 - Exact Opper v3 OpenAI-compat base URL shape (e.g. `https://api.opper.ai/v3/openai`
   vs. `https://api.opper.ai/v3/chat/completions`).
-- Provisioning the `opper_app_cli` public OAuth client ID on the device-flow
-  server.
 - Telemetry endpoint path on the v3 API.
 
 These do not block design — they block launch. Flagged so the implementation
