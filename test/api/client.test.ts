@@ -116,4 +116,28 @@ describe("OpperApi", () => {
     }
     expect(chunks).toEqual(['{"delta":"hello"}', '{"delta":" world"}']);
   });
+
+  it("streams data: without space separator", async () => {
+    const body = [
+      "data:{\"delta\":\"no\"}",
+      "",
+      "data:{\"delta\":\" space\"}",
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    globalThis.fetch = vi.fn(async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    ) as unknown as typeof fetch;
+
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k" });
+    const chunks: string[] = [];
+    for await (const chunk of api.stream("/v3/call/stream", { name: "x" })) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toEqual(['{"delta":"no"}', '{"delta":" space"}']);
+  });
 });

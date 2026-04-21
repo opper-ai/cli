@@ -214,7 +214,11 @@ program
   ) => {
     const resolvedInput = input ?? (await readStdinIfPiped());
     if (!resolvedInput) {
-      throw new Error("No input provided. Pass as a positional arg or pipe via stdin.");
+      throw new OpperError(
+        "API_ERROR",
+        "No input provided",
+        "Pass input as the third positional argument, or pipe via stdin.",
+      );
     }
     await callCommand({
       name,

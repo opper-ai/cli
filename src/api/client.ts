@@ -61,12 +61,16 @@ export class OpperApi {
       while ((idx = buffer.indexOf("\n")) !== -1) {
         const line = buffer.slice(0, idx).replace(/\r$/, "");
         buffer = buffer.slice(idx + 1);
-        if (line.startsWith("data: ")) {
-          const payload = line.slice(6);
+        if (line.startsWith("data:")) {
+          const payload = line.slice(5).replace(/^\s/, "");
           if (payload === "[DONE]") return;
           yield payload;
         }
       }
+    }
+    if (buffer.startsWith("data:")) {
+      const payload = buffer.slice(5).replace(/^\s/, "");
+      if (payload && payload !== "[DONE]") yield payload;
     }
   }
 
