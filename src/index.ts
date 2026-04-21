@@ -44,6 +44,7 @@ import {
   indexesGetCommand,
   indexesCreateCommand,
   indexesDeleteCommand,
+  indexesQueryCommand,
 } from "./commands/indexes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -404,6 +405,27 @@ indexesCmd
   .argument("<name>", "index name")
   .action(async (name: string) => {
     await indexesDeleteCommand({ name, key: program.opts().key });
+  });
+
+indexesCmd
+  .command("query")
+  .description("Query an index")
+  .argument("<name>", "index name")
+  .argument("<query>", "query string")
+  .option("--top-k <n>", "number of results", (v) => parseInt(v, 10))
+  .option("--filters <json>", "JSON-encoded filter object")
+  .action(async (
+    name: string,
+    query: string,
+    cmdOpts: { topK?: number; filters?: string },
+  ) => {
+    await indexesQueryCommand({
+      name,
+      query,
+      key: program.opts().key,
+      ...(cmdOpts.topK !== undefined ? { topK: cmdOpts.topK } : {}),
+      ...(cmdOpts.filters ? { filtersJson: cmdOpts.filters } : {}),
+    });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

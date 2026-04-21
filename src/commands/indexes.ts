@@ -104,3 +104,52 @@ export async function indexesDeleteCommand(
   await api.del(`/v2/knowledge/${encodeURIComponent(kb.id)}`);
   console.log(brand.purple(`✓ Deleted index "${opts.name}".`));
 }
+
+export interface IndexesQueryOptions {
+  name: string;
+  query: string;
+  key: string;
+  topK?: number;
+  filtersJson?: string;
+}
+
+interface QueryResult {
+  score?: number;
+  content?: string;
+  key?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function indexesQueryCommand(
+  opts: IndexesQueryOptions,
+): Promise<void> {
+  const ctx = await resolveApiContext(opts.key);
+  const api = new OpperApi(ctx);
+  const kb = await api.get<GetResponse>(
+    `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
+  );
+  const body: Record<string, unknown> = { query: opts.query };
+  if (opts.topK !== undefined) body.top_k = opts.topK;
+  if (opts.filtersJson) {
+    try {
+      body.filters = JSON.parse(opts.filtersJson) as unknown;
+    } catch {
+      throw new Error(`--filters must be valid JSON; got: ${opts.filtersJson}`);
+    }
+  }
+  const results = await api.post<QueryResult[]>(
+    `/v2/knowledge/${encodeURIComponent(kb.id)}/query`,
+    body,
+  );
+  if (!Array.isArray(results) || results.length === 0) {
+    console.log("(no results)");
+    return;
+  }
+  for (const r of results) {
+    const score = r.score !== undefined ? r.score.toFixed(4) : "n/a";
+    console.log(`${brand.bold("score:")}   ${score}`);
+    if (r.key) console.log(`${brand.bold("key:")}     ${r.key}`);
+    if (r.content) console.log(`${brand.bold("content:")} ${r.content}`);
+    console.log("");
+  }
+}

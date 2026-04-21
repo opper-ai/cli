@@ -118,3 +118,38 @@ describe("indexes create + delete", () => {
     }
   });
 });
+
+describe("indexes query", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+  });
+
+  it("query looks up by name then POSTs to /v2/knowledge/{id}/query", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockResolvedValue({ id: "k_abc", name: "docs" });
+    postMock.mockResolvedValue([
+      { score: 0.92, content: "The quick brown fox", key: "doc1" },
+      { score: 0.81, content: "Lazy dogs sleep", key: "doc2" },
+    ]);
+    const { indexesQueryCommand } = await import("../../src/commands/indexes.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await indexesQueryCommand({
+        name: "docs",
+        query: "foxes",
+        topK: 5,
+        key: "default",
+      });
+      expect(postMock).toHaveBeenCalledWith(
+        "/v2/knowledge/k_abc/query",
+        expect.objectContaining({ query: "foxes", top_k: 5 }),
+      );
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("0.92");
+      expect(out).toContain("quick brown fox");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
