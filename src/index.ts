@@ -53,6 +53,7 @@ import {
   indexesAddCommand,
 } from "./commands/indexes.js";
 import { usageListCommand } from "./commands/usage.js";
+import { imageGenerateCommand } from "./commands/image.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -535,6 +536,30 @@ usageCmd
       ...(cmdOpts.fields ? { fields: cmdOpts.fields.split(",").map((s) => s.trim()) } : {}),
       ...(cmdOpts.groupBy ? { groupBy: cmdOpts.groupBy.split(",").map((s) => s.trim()) } : {}),
       out: out as "text" | "csv",
+    });
+  });
+
+const imageCmd = program
+  .command("image")
+  .description("Image generation");
+
+imageCmd
+  .command("generate")
+  .description("Generate an image from a prompt")
+  .argument("<prompt>", "text prompt")
+  .option("-o, --output <path>", "output file path (default: image_<ts>.png in cwd)")
+  .option("--base64", "print raw base64 to stdout instead of saving a file")
+  .option("-m, --model <id>", "image model identifier")
+  .action(async (
+    prompt: string,
+    cmdOpts: { output?: string; base64?: boolean; model?: string },
+  ) => {
+    await imageGenerateCommand({
+      prompt,
+      key: program.opts().key,
+      ...(cmdOpts.output ? { output: cmdOpts.output } : {}),
+      ...(cmdOpts.base64 ? { base64: true } : {}),
+      ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
     });
   });
 
