@@ -39,7 +39,12 @@ import {
   configGetCommand,
   configRemoveCommand,
 } from "./commands/config.js";
-import { indexesListCommand, indexesGetCommand } from "./commands/indexes.js";
+import {
+  indexesListCommand,
+  indexesGetCommand,
+  indexesCreateCommand,
+  indexesDeleteCommand,
+} from "./commands/indexes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -378,6 +383,27 @@ indexesCmd
   .argument("<name>", "index name")
   .action(async (name: string) => {
     await indexesGetCommand({ name, key: program.opts().key });
+  });
+
+indexesCmd
+  .command("create")
+  .description("Create a new index")
+  .argument("<name>", "index name")
+  .option("--embedding-model <id>", "override the embedding model")
+  .action(async (name: string, cmdOpts: { embeddingModel?: string }) => {
+    await indexesCreateCommand({
+      name,
+      key: program.opts().key,
+      ...(cmdOpts.embeddingModel ? { embeddingModel: cmdOpts.embeddingModel } : {}),
+    });
+  });
+
+indexesCmd
+  .command("delete")
+  .description("Delete an index by name")
+  .argument("<name>", "index name")
+  .action(async (name: string) => {
+    await indexesDeleteCommand({ name, key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

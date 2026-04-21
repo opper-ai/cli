@@ -70,3 +70,37 @@ export async function indexesGetCommand(
     console.log(`${brand.bold("documents:")} ${k.count}`);
   }
 }
+
+export interface IndexesCreateOptions {
+  name: string;
+  key: string;
+  embeddingModel?: string;
+}
+
+export interface IndexesDeleteOptions {
+  name: string;
+  key: string;
+}
+
+export async function indexesCreateCommand(
+  opts: IndexesCreateOptions,
+): Promise<void> {
+  const ctx = await resolveApiContext(opts.key);
+  const api = new OpperApi(ctx);
+  const body: Record<string, unknown> = { name: opts.name };
+  if (opts.embeddingModel) body.embedding_model = opts.embeddingModel;
+  const created = await api.post<GetResponse>("/v2/knowledge", body);
+  console.log(brand.purple(`✓ Created index "${created.name}" (${created.id}).`));
+}
+
+export async function indexesDeleteCommand(
+  opts: IndexesDeleteOptions,
+): Promise<void> {
+  const ctx = await resolveApiContext(opts.key);
+  const api = new OpperApi(ctx);
+  const kb = await api.get<GetResponse>(
+    `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
+  );
+  await api.del(`/v2/knowledge/${encodeURIComponent(kb.id)}`);
+  console.log(brand.purple(`✓ Deleted index "${opts.name}".`));
+}

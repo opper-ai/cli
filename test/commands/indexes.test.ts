@@ -67,3 +67,54 @@ describe("indexes list + get", () => {
     }
   });
 });
+
+describe("indexes create + delete", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+    delMock.mockReset();
+  });
+
+  it("create posts to /v2/knowledge with the name", async () => {
+    await setSlot("default", { apiKey: "k" });
+    postMock.mockResolvedValue({
+      id: "k_new",
+      name: "product-docs",
+      embedding_model: "opper/default",
+      created_at: "2026-04-21T00:00:00Z",
+    });
+    const { indexesCreateCommand } = await import("../../src/commands/indexes.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await indexesCreateCommand({ name: "product-docs", key: "default" });
+      expect(postMock).toHaveBeenCalledWith(
+        "/v2/knowledge",
+        expect.objectContaining({ name: "product-docs" }),
+      );
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("product-docs");
+      expect(out).toContain("k_new");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("delete looks up by name, then DELETEs by id", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockResolvedValue({
+      id: "k_abc",
+      name: "product-docs",
+      embedding_model: "m",
+    });
+    delMock.mockResolvedValue(undefined);
+    const { indexesDeleteCommand } = await import("../../src/commands/indexes.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await indexesDeleteCommand({ name: "product-docs", key: "default" });
+      expect(getMock).toHaveBeenCalledWith("/v2/knowledge/by-name/product-docs");
+      expect(delMock).toHaveBeenCalledWith("/v2/knowledge/k_abc");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
