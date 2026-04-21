@@ -18,6 +18,7 @@ import {
   editorsOpenCodeCommand,
   editorsContinueCommand,
 } from "./commands/editors.js";
+import { setupCommand } from "./commands/setup.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -132,6 +133,13 @@ editors
       overwrite: cmdOpts.overwrite ?? false,
       key: program.opts().key,
     });
+  });
+
+program
+  .command("setup")
+  .description("Run the interactive setup wizard")
+  .action(async () => {
+    await setupCommand({ key: program.opts().key });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
