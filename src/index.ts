@@ -21,11 +21,19 @@ import {
 import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
+import { callCommand } from "./commands/call.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
   readFileSync(resolve(__dirname, "..", "package.json"), "utf8"),
 ) as { version: string };
+
+async function readStdinIfPiped(): Promise<string | null> {
+  if (process.stdin.isTTY) return null;
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8").trim();
+}
 
 const program = new Command();
 
@@ -171,6 +179,32 @@ program
       passthrough: args,
     });
     process.exit(code);
+  });
+
+program
+  .command("call")
+  .description("Execute a function by name via the Opper v3 /call endpoint")
+  .argument("<name>", "function name")
+  .argument("<instructions>", "instructions / system prompt")
+  .argument("[input]", "input (or piped via stdin)")
+  .option("--model <id>", "model identifier (e.g. anthropic/claude-opus-4.7)")
+  .action(async (
+    name: string,
+    instructions: string,
+    input: string | undefined,
+    cmdOpts: { model?: string },
+  ) => {
+    const resolvedInput = input ?? (await readStdinIfPiped());
+    if (!resolvedInput) {
+      throw new Error("No input provided. Pass as a positional arg or pipe via stdin.");
+    }
+    await callCommand({
+      name,
+      instructions,
+      input: resolvedInput,
+      key: program.opts().key,
+      ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+    });
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {
