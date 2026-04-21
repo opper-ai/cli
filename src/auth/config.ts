@@ -1,4 +1,4 @@
-import { readFile, mkdir, writeFile, chmod } from "node:fs/promises";
+import { readFile, mkdir, writeFile, chmod, rename } from "node:fs/promises";
 import { dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { configPath } from "./paths.js";
@@ -43,10 +43,10 @@ export async function readConfig(): Promise<Config | null> {
 export async function writeConfig(config: Config): Promise<void> {
   const path = configPath();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(config, null, 2) + "\n", {
-    mode: 0o600,
-  });
-  await chmod(path, 0o600);
+  const tmp = `${path}.tmp.${process.pid}`;
+  await writeFile(tmp, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+  await chmod(tmp, 0o600);
+  await rename(tmp, path);
 }
 
 function emptyConfig(): Config {

@@ -106,4 +106,14 @@ describe("slot helpers", () => {
   it("deleteSlot is a no-op when slot missing", async () => {
     await expect(deleteSlot("nonexistent")).resolves.not.toThrow();
   });
+
+  it("deleteSlot reassigns defaultKey when the default slot is removed", async () => {
+    await setSlot("primary", { apiKey: "op_live_1" });
+    await setSlot("backup", { apiKey: "op_live_2" });
+    // primary is the default (first slot wins)
+    await deleteSlot("primary");
+    const cfg = await readConfig();
+    expect(cfg?.defaultKey).toBe("backup");
+    expect(cfg?.keys.primary).toBeUndefined();
+  });
 });
