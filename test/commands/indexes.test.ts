@@ -153,3 +153,39 @@ describe("indexes query", () => {
     }
   });
 });
+
+describe("indexes add", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+    postMock.mockReset();
+  });
+
+  it("add looks up by name then POSTs to /v2/knowledge/{id}/add", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockResolvedValue({ id: "k_abc", name: "docs" });
+    postMock.mockResolvedValue({ success: true });
+    const { indexesAddCommand } = await import("../../src/commands/indexes.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await indexesAddCommand({
+        name: "docs",
+        docKey: "doc1",
+        content: "Hello world",
+        metadataJson: JSON.stringify({ lang: "en" }),
+        key: "default",
+      });
+      expect(postMock).toHaveBeenCalledWith(
+        "/v2/knowledge/k_abc/add",
+        expect.objectContaining({
+          key: "doc1",
+          content: "Hello world",
+          metadata: { lang: "en" },
+        }),
+      );
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out.toLowerCase()).toContain("added");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});

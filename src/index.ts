@@ -45,6 +45,7 @@ import {
   indexesCreateCommand,
   indexesDeleteCommand,
   indexesQueryCommand,
+  indexesAddCommand,
 } from "./commands/indexes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -425,6 +426,38 @@ indexesCmd
       key: program.opts().key,
       ...(cmdOpts.topK !== undefined ? { topK: cmdOpts.topK } : {}),
       ...(cmdOpts.filters ? { filtersJson: cmdOpts.filters } : {}),
+    });
+  });
+
+indexesCmd
+  .command("add")
+  .description("Add a document to an index")
+  .argument("<name>", "index name")
+  .argument("<content>", "document content (or - to read from stdin)")
+  .option("--key <id>", "document key / id")
+  .option("--metadata <json>", "JSON-encoded metadata object")
+  .action(async (
+    name: string,
+    content: string,
+    cmdOpts: { key?: string; metadata?: string },
+  ) => {
+    let resolvedContent = content;
+    if (content === "-") {
+      resolvedContent = (await readStdinIfPiped()) ?? "";
+      if (!resolvedContent) {
+        throw new OpperError(
+          "API_ERROR",
+          "No content on stdin",
+          "Pipe content into the CLI or pass it as a positional argument.",
+        );
+      }
+    }
+    await indexesAddCommand({
+      name,
+      content: resolvedContent,
+      key: program.opts().key,
+      ...(cmdOpts.key ? { docKey: cmdOpts.key } : {}),
+      ...(cmdOpts.metadata ? { metadataJson: cmdOpts.metadata } : {}),
     });
   });
 

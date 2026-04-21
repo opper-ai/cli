@@ -153,3 +153,32 @@ export async function indexesQueryCommand(
     console.log("");
   }
 }
+
+export interface IndexesAddOptions {
+  name: string;
+  docKey?: string;
+  content: string;
+  metadataJson?: string;
+  key: string;
+}
+
+export async function indexesAddCommand(
+  opts: IndexesAddOptions,
+): Promise<void> {
+  const ctx = await resolveApiContext(opts.key);
+  const api = new OpperApi(ctx);
+  const kb = await api.get<GetResponse>(
+    `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
+  );
+  const body: Record<string, unknown> = { content: opts.content };
+  if (opts.docKey) body.key = opts.docKey;
+  if (opts.metadataJson) {
+    try {
+      body.metadata = JSON.parse(opts.metadataJson) as unknown;
+    } catch {
+      throw new Error(`--metadata must be valid JSON; got: ${opts.metadataJson}`);
+    }
+  }
+  await api.post(`/v2/knowledge/${encodeURIComponent(kb.id)}/add`, body);
+  console.log(brand.purple(`✓ Added document to "${opts.name}".`));
+}
