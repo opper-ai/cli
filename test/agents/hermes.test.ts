@@ -183,6 +183,22 @@ describe("hermes adapter — writeOpperConfig", () => {
   });
 });
 
+describe("hermes adapter — install", () => {
+  it("throws OpperError(API_ERROR) when the installer exits non-zero", async () => {
+    runMock.mockClear();
+    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
+    await expect(hermes.install()).rejects.toMatchObject({
+      code: "API_ERROR",
+    });
+  });
+
+  it("resolves when the installer exits 0", async () => {
+    runMock.mockClear();
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    await expect(hermes.install()).resolves.toBeUndefined();
+  });
+});
+
 describe("hermes adapter — spawn", () => {
   it("runs the hermes binary with inherited stdio and returns the exit code", async () => {
     runMock.mockClear();

@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rename, chmod } from "node:fs/promises";
+import { readFile, writeFile, rename, chmod, rm } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
@@ -41,7 +41,11 @@ async function install(): Promise<void> {
     { inherit: true },
   );
   if (result.code !== 0) {
-    throw new Error(`Hermes installer exited with code ${result.code}`);
+    throw new OpperError(
+      "API_ERROR",
+      `Hermes installer exited with code ${result.code}`,
+      "Check your network connection and try again, or follow the manual install steps at https://hermes-agent.nousresearch.com/docs/",
+    );
   }
 }
 
@@ -63,6 +67,9 @@ async function writeOpperConfig(c: OpperRouting): Promise<void> {
   const path = hermesConfigPath();
   const raw = await readFile(path, "utf8");
   const parsed = (parse(raw) as Record<string, unknown>) ?? {};
+  // Hermes recognises "openai" / "anthropic" providers. The Opper "responses"
+  // compat shape isn't a Hermes provider — callers today only pass "openai";
+  // if that changes, add a guard here.
   parsed.model = {
     provider: c.compatShape === "openai" ? "openai" : c.compatShape,
     model: c.model,
@@ -71,8 +78,13 @@ async function writeOpperConfig(c: OpperRouting): Promise<void> {
   };
   const tmp = `${path}.tmp.${process.pid}`;
   await writeFile(tmp, stringify(parsed), "utf8");
-  await chmod(tmp, 0o600);
-  await rename(tmp, path);
+  try {
+    await chmod(tmp, 0o600);
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 async function restoreConfig(h: SnapshotHandle): Promise<void> {
