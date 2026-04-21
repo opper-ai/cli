@@ -27,7 +27,7 @@ export async function configureOpenCode(
       const parsed = JSON.parse(await readFile(path, "utf8")) as {
         provider?: { opper?: unknown };
       };
-      if (parsed.provider?.opper) {
+      if (parsed.provider?.opper !== undefined) {
         return { path, wrote: false, reason: "exists" };
       }
     } catch {

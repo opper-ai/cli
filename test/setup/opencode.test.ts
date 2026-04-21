@@ -29,6 +29,11 @@ describe("configureOpenCode", () => {
     expect(existsSync(expected)).toBe(true);
     const parsed = JSON.parse(readFileSync(expected, "utf8"));
     expect(parsed.provider).toBeDefined();
+    const { readFileSync: readFileSync2 } = await import("node:fs");
+    const { assetPath } = await import("../../src/util/assets.js");
+    expect(readFileSync2(expected, "utf8")).toBe(
+      readFileSync2(assetPath("opencode.json"), "utf8"),
+    );
   });
 
   it("refuses to overwrite an existing Opper provider unless overwrite=true", async () => {
