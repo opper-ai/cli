@@ -1,57 +1,71 @@
-import { describe, it, expect, vi } from "vitest";
-
-const runMock = vi.fn();
-vi.mock("../../src/util/run.js", () => ({ run: runMock }));
-
-const { isSkillsInstalled, installSkills, updateSkills } = await import(
-  "../../src/setup/skills.js"
-);
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  isSkillsInstalled,
+  installSkills,
+  updateSkills,
+  listInstalledSkills,
+} from "../../src/setup/skills.js";
 
 describe("skills", () => {
-  it("isSkillsInstalled returns true when `npx skills list` mentions opper", () => {
-    runMock.mockReturnValue({
-      code: 0,
-      stdout: "• opper-ai/opper-skills\n• other",
-      stderr: "",
-    });
-    expect(isSkillsInstalled()).toBe(true);
-    expect(runMock).toHaveBeenCalledWith("npx", ["skills", "list"]);
+  let home: string;
+  let prev: string | undefined;
+
+  beforeEach(() => {
+    prev = process.env.OPPER_SKILLS_HOME;
+    home = mkdtempSync(join(tmpdir(), "opper-skills-"));
+    process.env.OPPER_SKILLS_HOME = home;
   });
 
-  it("isSkillsInstalled returns false when no match", () => {
-    runMock.mockReturnValue({ code: 0, stdout: "• foo\n• bar", stderr: "" });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+    if (prev === undefined) delete process.env.OPPER_SKILLS_HOME;
+    else process.env.OPPER_SKILLS_HOME = prev;
+  });
+
+  it("isSkillsInstalled returns false on a clean system", () => {
     expect(isSkillsInstalled()).toBe(false);
   });
 
-  it("isSkillsInstalled returns false when `npx skills` exits non-zero", () => {
-    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "no such command" });
-    expect(isSkillsInstalled()).toBe(false);
-  });
-
-  it("installSkills runs `npx skills add opper-ai/opper-skills` with inherited stdio", async () => {
-    runMock.mockClear();
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+  it("installSkills copies bundled skills into the install dir", async () => {
     await installSkills();
-    expect(runMock).toHaveBeenCalledWith(
-      "npx",
-      ["skills", "add", "opper-ai/opper-skills"],
-      { inherit: true },
-    );
+    // All six skills are present.
+    expect(existsSync(join(home, "opper-cli", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, "opper-api", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, "opper-node-sdk", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, "opper-node-agents", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, "opper-python-sdk", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(home, "opper-python-agents", "SKILL.md"))).toBe(true);
   });
 
-  it("installSkills throws when the install fails", async () => {
-    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
-    await expect(installSkills()).rejects.toMatchObject({ code: "API_ERROR" });
+  it("isSkillsInstalled returns true after install", async () => {
+    await installSkills();
+    expect(isSkillsInstalled()).toBe(true);
   });
 
-  it("updateSkills runs `npx skills update`", async () => {
-    runMock.mockClear();
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+  it("isSkillsInstalled ignores unrelated dirs", () => {
+    mkdirSync(join(home, "some-other-skill"), { recursive: true });
+    writeFileSync(join(home, "some-other-skill", "SKILL.md"), "# foo");
+    expect(isSkillsInstalled()).toBe(false);
+  });
+
+  it("updateSkills overwrites stale content", async () => {
+    mkdirSync(join(home, "opper-cli"), { recursive: true });
+    writeFileSync(join(home, "opper-cli", "SKILL.md"), "STALE CONTENT");
     await updateSkills();
-    expect(runMock).toHaveBeenCalledWith(
-      "npx",
-      ["skills", "update"],
-      { inherit: true },
-    );
+    const after = readFileSync(join(home, "opper-cli", "SKILL.md"), "utf8");
+    expect(after).not.toBe("STALE CONTENT");
+    expect(after).toContain("opper-cli");
+  });
+
+  it("listInstalledSkills returns the installed skill names", async () => {
+    expect(await listInstalledSkills()).toEqual([]);
+    await installSkills();
+    const installed = (await listInstalledSkills()).sort();
+    expect(installed).toContain("opper-cli");
+    expect(installed).toContain("opper-api");
+    expect(installed.length).toBeGreaterThanOrEqual(6);
   });
 });
