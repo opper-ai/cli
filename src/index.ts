@@ -54,6 +54,7 @@ import {
 } from "./commands/indexes.js";
 import { usageListCommand } from "./commands/usage.js";
 import { imageGenerateCommand } from "./commands/image.js";
+import { menuCommand } from "./commands/menu.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -76,7 +77,16 @@ program
   .option("--key <slot>", "API key slot to use", "default")
   .option("--debug", "enable debug output", false)
   .option("--no-telemetry", "disable anonymous telemetry")
-  .option("--no-color", "disable ANSI colors");
+  .option("--no-color", "disable ANSI colors")
+  .action(async () => {
+    // No subcommand given. Open the interactive menu on a TTY; print help
+    // otherwise so piped / scripted usage behaves predictably.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      program.outputHelp();
+      return;
+    }
+    await menuCommand({ key: program.opts().key });
+  });
 
 program.hook("preAction", () => {
   if (program.opts().color === false) {
