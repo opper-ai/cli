@@ -17,7 +17,7 @@ let pendingRouting: OpperRouting | null = null;
 const ANTHROPIC_COMPAT_BASE = "https://api.opper.ai/v3/compat";
 const DEFAULT_SONNET_MODEL = "anthropic/claude-sonnet-4.6";
 const DEFAULT_HAIKU_MODEL = "anthropic/claude-haiku-4.5";
-const DEFAULT_OPUS_MODEL = "anthropic/opus-4-6";
+const DEFAULT_OPUS_MODEL = "anthropic/claude-opus-4.7";
 
 const INSTALL_HINT =
   "Install via `npm i -g @anthropic-ai/claude-code` or see https://docs.claude.com/en/docs/claude-code/setup";

@@ -78,7 +78,7 @@ describe("claude-code adapter", () => {
     expect(init.env.ANTHROPIC_AUTH_TOKEN).toBe("op_live_run");
     expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("anthropic/claude-sonnet-4.6");
     expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("anthropic/claude-haiku-4.5");
-    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("anthropic/opus-4-6");
+    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("anthropic/claude-opus-4.7");
   });
 
   it("spawn propagates non-zero exit codes", async () => {

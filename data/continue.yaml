@@ -1,31 +1,31 @@
 models:
-  - name: Claude Sonnet 4.5
+  - name: Claude Sonnet 4.6
     provider: openai
-    model: anthropic/claude-sonnet-4.5
+    model: anthropic/claude-sonnet-4.6
     apiBase: https://api.opper.ai/v3/openai
     apiKey: OPPER_API_KEY
     roles:
       - chat
       - edit
-  - name: Claude Opus 4.5
+  - name: Claude Opus 4.7
     provider: openai
-    model: anthropic/claude-opus-4.5
+    model: anthropic/claude-opus-4.7
     apiBase: https://api.opper.ai/v3/openai
     apiKey: OPPER_API_KEY
     roles:
       - chat
       - edit
-  - name: Claude Sonnet 4.5 (EU)
+  - name: Claude Sonnet 4.6 (EU)
     provider: openai
-    model: aws/claude-sonnet-4.5-eu
+    model: aws/claude-sonnet-4.6-eu
     apiBase: https://api.opper.ai/v3/openai
     apiKey: OPPER_API_KEY
     roles:
       - chat
       - edit
-  - name: Claude Opus 4.5 (EU)
+  - name: Claude Opus 4.7 (EU)
     provider: openai
-    model: aws/claude-opus-4.5-eu
+    model: aws/claude-opus-4.7-eu
     apiBase: https://api.opper.ai/v3/openai
     apiKey: OPPER_API_KEY
     roles:
