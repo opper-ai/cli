@@ -1,12 +1,14 @@
 import type { AgentAdapter } from "./types.js";
 import { opencode } from "./opencode.js";
 import { claudeCode } from "./claude-code.js";
+import { codex } from "./codex.js";
 import { hermes } from "./hermes.js";
 import { continueDev } from "./continue.js";
 
 const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   opencode,
   claudeCode,
+  codex,
   hermes,
   continueDev,
 ];
