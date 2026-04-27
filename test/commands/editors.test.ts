@@ -23,14 +23,15 @@ const {
 useTempOpperHome();
 
 describe("editors commands", () => {
-  it("list prints each editor with its capability", async () => {
+  it("list prints non-launchable adapters from the registry", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await editorsListCommand();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(out).toContain("OpenCode");
+      // Continue.dev is the only registered configure-only adapter today;
+      // OpenCode is launchable so it shows up via `opper agents list` instead.
       expect(out).toContain("Continue.dev");
-      expect(out).toContain("Cursor");
+      expect(out).not.toContain("OpenCode");
     } finally {
       log.mockRestore();
     }

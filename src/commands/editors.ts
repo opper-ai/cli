@@ -1,6 +1,7 @@
 import { configureOpenCode } from "../setup/opencode.js";
 import { configureContinue } from "../setup/continue.js";
-import { listEditors } from "../setup/editors.js";
+import { listAdapters } from "../agents/registry.js";
+import { isLaunchable } from "../agents/types.js";
 import { getSlot } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
@@ -17,10 +18,25 @@ export interface EditorsContinueOptions {
   key: string;
 }
 
+/**
+ * Lists configure-only integrations from the agents registry. Anything in
+ * the registry without a `spawn` method is "an editor" for this command's
+ * purposes; launchable agents show up via `opper agents list`.
+ */
 export async function editorsListCommand(): Promise<void> {
-  for (const e of listEditors()) {
-    const status = e.configure ? brand.purple("auto") : brand.dim("docs-only");
-    console.log(`${e.displayName.padEnd(14)} ${status}  ${brand.dim(e.docsUrl)}`);
+  const editors = listAdapters().filter((a) => !isLaunchable(a));
+  if (editors.length === 0) {
+    console.log("(no editor integrations registered)");
+    return;
+  }
+  for (const adapter of editors) {
+    const configured = await adapter.isConfigured();
+    const status = configured
+      ? brand.purple("configured")
+      : brand.dim("not configured");
+    console.log(
+      `${adapter.displayName.padEnd(14)} ${status}  ${brand.dim(adapter.docsUrl)}`,
+    );
   }
 }
 

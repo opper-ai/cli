@@ -19,7 +19,6 @@ import {
   editorsOpenCodeCommand,
   editorsContinueCommand,
 } from "./commands/editors.js";
-import { setupCommand } from "./commands/setup.js";
 import { agentsListCommand } from "./commands/agents.js";
 import { launchCommand } from "./commands/launch.js";
 import { callCommand } from "./commands/call.js";
@@ -191,13 +190,6 @@ editors
       overwrite: cmdOpts.overwrite ?? false,
       key: program.opts().key,
     });
-  });
-
-program
-  .command("setup")
-  .description("Run the interactive setup wizard")
-  .action(async () => {
-    await setupCommand({ key: program.opts().key });
   });
 
 const agentsCmd = program
