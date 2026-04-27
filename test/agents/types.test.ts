@@ -1,41 +1,58 @@
 import { describe, it, expect } from "vitest";
-import type {
-  AgentAdapter,
-  DetectResult,
-  OpperRouting,
-  SnapshotHandle,
+import {
+  isLaunchable,
+  type AgentAdapter,
+  type DetectResult,
+  type OpperRouting,
 } from "../../src/agents/types.js";
 
 describe("AgentAdapter interface", () => {
-  it("allows a stub implementation to satisfy all required fields", () => {
+  it("a minimal adapter satisfies the required surface", () => {
     const stub: AgentAdapter = {
       name: "stub",
       displayName: "Stub",
-      binary: "stub",
       docsUrl: "https://example.com",
       async detect(): Promise<DetectResult> {
         return { installed: false };
       },
-      async install(): Promise<void> {
+      async isConfigured(): Promise<boolean> {
+        return false;
+      },
+      async configure(): Promise<void> {
         return;
       },
-      async snapshotConfig(): Promise<SnapshotHandle> {
-        return {
-          agent: "stub",
-          backupPath: "/tmp/stub.bak",
-          timestamp: "2026-04-21T00:00:00.000Z",
-        };
-      },
-      async writeOpperConfig(_c: OpperRouting): Promise<void> {
+      async unconfigure(): Promise<void> {
         return;
-      },
-      async restoreConfig(_h: SnapshotHandle): Promise<void> {
-        return;
-      },
-      async spawn(_args: string[]): Promise<number> {
-        return 0;
       },
     };
     expect(stub.name).toBe("stub");
+    expect(isLaunchable(stub)).toBe(false);
+  });
+
+  it("an adapter with spawn is recognised as launchable", () => {
+    const launchable: AgentAdapter = {
+      name: "launch",
+      displayName: "Launchable",
+      docsUrl: "https://example.com",
+      async detect(): Promise<DetectResult> {
+        return { installed: true };
+      },
+      async isConfigured(): Promise<boolean> {
+        return true;
+      },
+      async configure(): Promise<void> {
+        return;
+      },
+      async unconfigure(): Promise<void> {
+        return;
+      },
+      async spawn(_args: string[], _routing: OpperRouting): Promise<number> {
+        return 0;
+      },
+    };
+    expect(isLaunchable(launchable)).toBe(true);
+    if (isLaunchable(launchable)) {
+      expect(typeof launchable.spawn).toBe("function");
+    }
   });
 });

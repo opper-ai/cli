@@ -47,17 +47,12 @@ const hermesConfigure = vi.fn();
 const hermesAdapter = {
   name: "hermes",
   displayName: "Hermes Agent",
-  binary: "hermes",
   docsUrl: "https://example",
-  launchable: true,
   detect: hermesDetect,
   isConfigured: hermesIsConfigured,
   configure: hermesConfigure,
   unconfigure: vi.fn(),
   install: vi.fn(),
-  snapshotConfig: vi.fn(),
-  writeOpperConfig: vi.fn(),
-  restoreConfig: vi.fn(),
   spawn: vi.fn(),
 };
 vi.mock("../../src/agents/registry.js", () => ({
