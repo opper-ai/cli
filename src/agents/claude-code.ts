@@ -7,13 +7,12 @@ import type {
   OpperRouting,
 } from "./types.js";
 
+import { OPPER_ANTHROPIC_COMPAT_URL } from "../config/endpoints.js";
+import { DEFAULT_MODELS } from "../config/models.js";
+
 // Claude Code reads ANTHROPIC_BASE_URL and appends `/v1/messages`. Opper's
 // Anthropic-shaped compat endpoint is rooted at `/v3/compat`, which gives us
 // `/v3/compat/v1/messages` per the v3 OpenAPI spec.
-const ANTHROPIC_COMPAT_BASE = "https://api.opper.ai/v3/compat";
-const DEFAULT_SONNET_MODEL = "anthropic/claude-sonnet-4.6";
-const DEFAULT_HAIKU_MODEL = "anthropic/claude-haiku-4.5";
-const DEFAULT_OPUS_MODEL = "anthropic/claude-opus-4.7";
 
 const INSTALL_HINT =
   "Install via `npm i -g @anthropic-ai/claude-code` or see https://docs.claude.com/en/docs/claude-code/setup";
@@ -53,11 +52,11 @@ async function unconfigure(): Promise<void> {
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ANTHROPIC_BASE_URL: ANTHROPIC_COMPAT_BASE,
+    ANTHROPIC_BASE_URL: OPPER_ANTHROPIC_COMPAT_URL,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: DEFAULT_SONNET_MODEL,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: DEFAULT_HAIKU_MODEL,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: DEFAULT_OPUS_MODEL,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: DEFAULT_MODELS.sonnet,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: DEFAULT_MODELS.haiku,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: DEFAULT_MODELS.opus,
   };
   const result = spawnSync("claude", args, { stdio: "inherit", env });
   return result.status ?? -1;

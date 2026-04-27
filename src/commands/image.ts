@@ -4,8 +4,9 @@ import { OpperApi } from "../api/client.js";
 import { resolveApiContext } from "../api/resolve.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 
-const DEFAULT_IMAGE_MODEL = "gcp/imagen-4.0-fast-generate-001-eu";
+const DEFAULT_IMAGE_MODEL = DEFAULT_MODELS.image;
 
 export interface ImageGenerateOptions {
   prompt: string;

@@ -11,9 +11,11 @@ import type {
   OpperRouting,
 } from "./types.js";
 
+import { OPPER_ANTHROPIC_COMPAT_URL } from "../config/endpoints.js";
+import { DEFAULT_MODELS } from "../config/models.js";
+
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
-const COMPAT_BASE = "https://api.opper.ai/v3/compat";
 const DEFAULT_PROFILE = "opper-opus";
 
 const OPPER_BLOCK = [
@@ -23,16 +25,16 @@ const OPPER_BLOCK = [
   "",
   "[model_providers.opper]",
   'name = "Opper"',
-  `base_url = "${COMPAT_BASE}"`,
+  `base_url = "${OPPER_ANTHROPIC_COMPAT_URL}"`,
   'env_key = "OPPER_API_KEY"',
   'wire_api = "responses"',
   "",
   "[profiles.opper-opus]",
-  'model = "anthropic/claude-opus-4.7"',
+  `model = "${DEFAULT_MODELS.opus}"`,
   'model_provider = "opper"',
   "",
   "[profiles.opper-sonnet]",
-  'model = "anthropic/claude-sonnet-4.6"',
+  `model = "${DEFAULT_MODELS.sonnet}"`,
   'model_provider = "opper"',
   SENTINEL_CLOSE,
   "",
@@ -76,7 +78,8 @@ async function isConfigured(): Promise<boolean> {
   try {
     const text = readFileSync(cfg, "utf8");
     return (
-      text.includes(SENTINEL_OPEN) && text.includes(`base_url = "${COMPAT_BASE}"`)
+      text.includes(SENTINEL_OPEN) &&
+      text.includes(`base_url = "${OPPER_ANTHROPIC_COMPAT_URL}"`)
     );
   } catch {
     return false;

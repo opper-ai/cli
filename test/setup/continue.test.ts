@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { configureContinue } from "../../src/setup/continue.js";
 import { continueConfigPath } from "../../src/util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../../src/api/compat.js";
+import { OPPER_OPENAI_COMPAT_URL } from "../../src/config/endpoints.js";
 
 describe("configureContinue", () => {
   let home: string;

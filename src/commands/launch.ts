@@ -4,10 +4,9 @@ import { getSlot } from "../auth/config.js";
 import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
+import { OPPER_OPENAI_COMPAT_URL } from "../config/endpoints.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 import type { OpperRouting } from "../agents/types.js";
-
-const DEFAULT_MODEL = "anthropic/claude-opus-4.7";
 
 export interface LaunchOptions {
   agent: string;
@@ -70,7 +69,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   const routing: OpperRouting = {
     baseUrl: OPPER_OPENAI_COMPAT_URL,
     apiKey: slot.apiKey,
-    model: opts.model ?? DEFAULT_MODEL,
+    model: opts.model ?? DEFAULT_MODELS.opus,
     compatShape: "openai",
   };
 

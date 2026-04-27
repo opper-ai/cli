@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { parse, stringify } from "yaml";
 import { assetPath } from "../util/assets.js";
 import { continueConfigPath, type Location } from "../util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
+import { OPPER_OPENAI_COMPAT_URL } from "../config/endpoints.js";
 
 export interface ConfigureContinueOptions {
   location: Location;

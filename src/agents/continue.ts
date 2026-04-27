@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { configureContinue } from "../setup/continue.js";
 import { continueConfigPath } from "../util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
+import { OPPER_OPENAI_COMPAT_URL } from "../config/endpoints.js";
 import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
