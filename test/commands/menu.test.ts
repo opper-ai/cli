@@ -28,6 +28,14 @@ vi.mock("@clack/prompts", async () => {
       const next = answers.shift();
       return next ? next() : SENTINEL_BAIL;
     }),
+    text: vi.fn(async () => {
+      const next = answers.shift();
+      return next ? next() : SENTINEL_BAIL;
+    }),
+    confirm: vi.fn(async () => {
+      const next = answers.shift();
+      return next ? next() : SENTINEL_BAIL;
+    }),
     isCancel: (v: unknown) => typeof v === "symbol",
     cancel: vi.fn(),
   };
@@ -151,24 +159,32 @@ describe("menuCommand", () => {
     expect(skillsListMock).toHaveBeenCalled();
   });
 
-  it("shows Sign in when no slot is stored and invokes login on select", async () => {
+  it("Opper → Account → Sign in invokes loginCommand", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "login");
-    answers.push(() => "quit");
+    answers.push(() => "platform"); // main → Opper
+    answers.push(() => "account");  // Opper → Account
+    answers.push(() => "login");    // Account → Sign in
+    answers.push(() => "back");     // exit Account
+    answers.push(() => "back");     // exit Opper
+    answers.push(() => "quit");     // exit main
 
     await menuCommand({ key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
   });
 
-  it("shows Account entry when a slot exists and invokes whoami", async () => {
+  it("Opper → Account → Show invokes whoamiCommand when a slot exists", async () => {
     await setSlot("default", {
       apiKey: "op_live_x",
       user: { email: "me@example.com", name: "Me" },
     });
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "whoami");
+    answers.push(() => "platform");
+    answers.push(() => "account");
+    answers.push(() => "show");
+    answers.push(() => "back");
+    answers.push(() => "back");
     answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
