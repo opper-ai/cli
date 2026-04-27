@@ -8,47 +8,33 @@ Manage Opper functions from the command line.
 # Basic: opper call <name> <instructions> <input>
 opper call extract_entities "Extract named entities" "Tim Cook announced Apple's new office in Austin."
 
-# With model override
-opper call --model openai/gpt-4o extract_entities "Extract named entities" "Some text..."
+# With a model override
+opper call --model anthropic/claude-sonnet-4.6 extract_entities "Extract named entities" "Some text..."
 
 # Pipe input from stdin
 cat document.txt | opper call summarize "Summarize this document"
 
-# With debug output
-opper call --debug myfunction "instructions" "input"
+# Stream the response token-by-token
+opper call --stream myfunction "instructions" "input"
 ```
 
-## Listing Functions
+## Listing, inspecting, deleting
 
 ```bash
+# List all functions (optionally filtered by name substring)
 opper functions list
-```
+opper functions list extract
 
-## Function Chat
+# Show details of a function
+opper functions get extract_entities
 
-Interactive multi-turn chat with a function:
-
-```bash
-# Direct message
-opper functions chat myfunction "What can you help me with?"
-
-# Pipe a message
-echo "Explain quantum computing" | opper functions chat myfunction
-```
-
-The chat command maintains conversation context with the function, allowing follow-up questions.
-
-## Tags
-
-Add metadata tags for filtering and cost attribution:
-
-```bash
-opper call --tags customer_id=acme,env=prod myfunction "instructions" "input"
+# Delete a function
+opper functions delete extract_entities
 ```
 
 ## Tips
 
-- Function names should be descriptive and unique (e.g., `extract_entities`, `classify_ticket`)
-- If a function doesn't exist, `call` auto-creates it on the Opper platform
-- Use `--debug` to see the full request/response cycle
-- Pipe long inputs from files rather than passing them as arguments
+- Function names should be descriptive and unique (e.g., `extract_entities`, `classify_ticket`).
+- If a function doesn't exist, `call` auto-creates it on the Opper platform.
+- Use `--debug` (top-level flag) to see the full request/response cycle.
+- Pipe long inputs from files rather than passing them as arguments.
