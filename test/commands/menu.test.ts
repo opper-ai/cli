@@ -79,18 +79,42 @@ describe("menuCommand", () => {
     editorsListMock.mockReset();
   });
 
-  it("launches the chosen adapter", async () => {
+  it("launches the chosen adapter and returns to menu (loops to quit)", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
     launchMock.mockResolvedValue(0);
     answers.push(() => "launch:hermes");
+    answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(launchMock).toHaveBeenCalledWith({ agent: "hermes", key: "default" });
+    expect(launchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loops through multiple actions before quitting", async () => {
+    hermesDetect.mockResolvedValue({ installed: false });
+    answers.push(() => "skills");
+    answers.push(() => "editors");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(skillsListMock).toHaveBeenCalled();
+    expect(editorsListMock).toHaveBeenCalled();
+  });
+
+  it("returns to menu (does not propagate) when an action throws", async () => {
+    hermesDetect.mockResolvedValue({ installed: false });
+    skillsListMock.mockRejectedValueOnce(new Error("boom"));
+    answers.push(() => "skills");
+    answers.push(() => "quit");
+
+    await expect(menuCommand({ key: "default" })).resolves.toBeUndefined();
+    expect(skillsListMock).toHaveBeenCalled();
   });
 
   it("shows Sign in when no slot is stored and invokes login on select", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     answers.push(() => "login");
+    answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
@@ -103,6 +127,7 @@ describe("menuCommand", () => {
     });
     hermesDetect.mockResolvedValue({ installed: false });
     answers.push(() => "whoami");
+    answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(whoamiMock).toHaveBeenCalledWith({ key: "default" });
@@ -111,6 +136,7 @@ describe("menuCommand", () => {
   it("invokes setup on select", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     answers.push(() => "setup");
+    answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(setupMock).toHaveBeenCalledWith({ key: "default" });
