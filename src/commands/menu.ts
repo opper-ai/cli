@@ -1,5 +1,4 @@
 import {
-  intro,
   outro,
   select,
   text,
@@ -43,10 +42,12 @@ import {
   skillsUninstallCommand,
 } from "./skills.js";
 import { brand } from "../ui/colors.js";
+import { printBanner } from "../ui/banner.js";
 import type { AgentAdapter } from "../agents/types.js";
 
 export interface MenuOptions {
   key: string;
+  version?: string;
 }
 
 interface AdapterStatus {
@@ -108,7 +109,7 @@ async function askConfirm(message: string, initial = false): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export async function menuCommand(opts: MenuOptions): Promise<void> {
-  intro(brand.purple("Opper"));
+  printBanner(opts.version);
 
   while (true) {
     const statuses = await probeAdapters();

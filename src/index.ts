@@ -86,7 +86,7 @@ program
       program.outputHelp();
       return;
     }
-    await menuCommand({ key: program.opts().key });
+    await menuCommand({ key: program.opts().key, version: pkg.version });
   });
 
 program.hook("preAction", () => {
