@@ -16,3 +16,7 @@ export function backupsDir(): string {
 export function legacyConfigPath(): string {
   return join(homedir(), ".oppercli");
 }
+
+export function legacyMigrationSentinelPath(): string {
+  return join(opperHome(), ".legacy-migrated");
+}
