@@ -1,12 +1,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { which } from "../util/which.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OpperError } from "../errors.js";
 import type {
-  AgentAdapter,
+  LaunchableAgentAdapter,
   DetectResult,
   OpperRouting,
   SnapshotHandle,
@@ -69,12 +69,32 @@ async function spawn(args: string[]): Promise<number> {
   return result.status ?? -1;
 }
 
-export const opencode: AgentAdapter = {
+async function isConfigured(): Promise<boolean> {
+  const cfg = opencodeConfigPath();
+  if (!existsSync(cfg)) return false;
+  try {
+    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+      provider?: { opper?: unknown };
+    };
+    return parsed.provider?.opper !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+async function configure(): Promise<void> {
+  await configureOpenCode({ location: "global" });
+}
+
+export const opencode: LaunchableAgentAdapter = {
   name: "opencode",
   displayName: "OpenCode",
   binary: "opencode",
   docsUrl: "https://opencode.ai",
+  launchable: true,
   detect,
+  isConfigured,
+  configure,
   install,
   snapshotConfig,
   writeOpperConfig,

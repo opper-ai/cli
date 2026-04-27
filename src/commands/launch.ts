@@ -25,6 +25,13 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       "Run `opper agents list` to see supported agents.",
     );
   }
+  if (!adapter.launchable) {
+    throw new OpperError(
+      "AGENT_NOT_FOUND",
+      `${adapter.displayName} is a configure-only integration and cannot be launched`,
+      `Configure it via the agents menu (\`opper\` → Agents → ${adapter.displayName}).`,
+    );
+  }
 
   let slot = await getSlot(opts.key);
   if (!slot) {

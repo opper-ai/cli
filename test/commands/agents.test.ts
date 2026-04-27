@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 const hermesDetect = vi.fn();
+const hermesIsConfigured = vi.fn().mockResolvedValue(false);
 vi.mock("../../src/agents/registry.js", () => ({
   listAdapters: () => [
     {
@@ -8,7 +9,10 @@ vi.mock("../../src/agents/registry.js", () => ({
       displayName: "Hermes Agent",
       binary: "hermes",
       docsUrl: "https://hermes-agent.nousresearch.com/docs/",
+      launchable: true,
       detect: hermesDetect,
+      isConfigured: hermesIsConfigured,
+      configure: vi.fn(),
       install: vi.fn(),
       snapshotConfig: vi.fn(),
       writeOpperConfig: vi.fn(),

@@ -20,22 +20,26 @@ vi.mock("@clack/prompts", async () => {
 });
 
 const hermesDetect = vi.fn();
+const hermesIsConfigured = vi.fn();
+const hermesConfigure = vi.fn();
+const hermesAdapter = {
+  name: "hermes",
+  displayName: "Hermes Agent",
+  binary: "hermes",
+  docsUrl: "https://example",
+  launchable: true,
+  detect: hermesDetect,
+  isConfigured: hermesIsConfigured,
+  configure: hermesConfigure,
+  install: vi.fn(),
+  snapshotConfig: vi.fn(),
+  writeOpperConfig: vi.fn(),
+  restoreConfig: vi.fn(),
+  spawn: vi.fn(),
+};
 vi.mock("../../src/agents/registry.js", () => ({
-  listAdapters: () => [
-    {
-      name: "hermes",
-      displayName: "Hermes Agent",
-      binary: "hermes",
-      docsUrl: "https://example",
-      detect: hermesDetect,
-      install: vi.fn(),
-      snapshotConfig: vi.fn(),
-      writeOpperConfig: vi.fn(),
-      restoreConfig: vi.fn(),
-      spawn: vi.fn(),
-    },
-  ],
-  getAdapter: (name: string) => (name === "hermes" ? { name: "hermes" } : null),
+  listAdapters: () => [hermesAdapter],
+  getAdapter: (name: string) => (name === "hermes" ? hermesAdapter : null),
 }));
 
 const loginMock = vi.fn();
@@ -70,6 +74,8 @@ describe("menuCommand", () => {
   beforeEach(() => {
     answers.length = 0;
     hermesDetect.mockReset();
+    hermesIsConfigured.mockReset();
+    hermesConfigure.mockReset();
     loginMock.mockReset();
     logoutMock.mockReset();
     whoamiMock.mockReset();
@@ -81,6 +87,7 @@ describe("menuCommand", () => {
 
   it("launches the chosen adapter and returns to menu (loops to quit)", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(true);
     launchMock.mockResolvedValue(0);
     answers.push(() => "launch:hermes");
     answers.push(() => "quit");
@@ -90,19 +97,30 @@ describe("menuCommand", () => {
     expect(launchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not show Launch entry for an unconfigured adapter", async () => {
+    hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(launchMock).not.toHaveBeenCalled();
+  });
+
   it("loops through multiple actions before quitting", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     answers.push(() => "skills");
-    answers.push(() => "editors");
+    answers.push(() => "setup");
     answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(skillsListMock).toHaveBeenCalled();
-    expect(editorsListMock).toHaveBeenCalled();
+    expect(setupMock).toHaveBeenCalled();
   });
 
   it("returns to menu (does not propagate) when an action throws", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     skillsListMock.mockRejectedValueOnce(new Error("boom"));
     answers.push(() => "skills");
     answers.push(() => "quit");
@@ -113,6 +131,7 @@ describe("menuCommand", () => {
 
   it("shows Sign in when no slot is stored and invokes login on select", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     answers.push(() => "login");
     answers.push(() => "quit");
 
@@ -126,6 +145,7 @@ describe("menuCommand", () => {
       user: { email: "me@example.com", name: "Me" },
     });
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     answers.push(() => "whoami");
     answers.push(() => "quit");
 
@@ -135,6 +155,7 @@ describe("menuCommand", () => {
 
   it("invokes setup on select", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     answers.push(() => "setup");
     answers.push(() => "quit");
 
@@ -144,10 +165,37 @@ describe("menuCommand", () => {
 
   it("quits silently on quit", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
     answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(launchMock).not.toHaveBeenCalled();
     expect(loginMock).not.toHaveBeenCalled();
+  });
+
+  it("agents submenu configures an unconfigured agent", async () => {
+    hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => "agents");
+    answers.push(() => "agent:hermes");
+    answers.push(() => "back");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(hermesConfigure).toHaveBeenCalled();
+    expect(launchMock).not.toHaveBeenCalled();
+  });
+
+  it("agents submenu launches an already-configured launchable agent", async () => {
+    hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(true);
+    launchMock.mockResolvedValue(0);
+    answers.push(() => "agents");
+    answers.push(() => "agent:hermes");
+    answers.push(() => "back");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(launchMock).toHaveBeenCalledWith({ agent: "hermes", key: "default" });
   });
 });

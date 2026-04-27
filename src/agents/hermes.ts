@@ -8,7 +8,7 @@ import { run } from "../util/run.js";
 import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
 import { OpperError } from "../errors.js";
 import type {
-  AgentAdapter,
+  LaunchableAgentAdapter,
   DetectResult,
   OpperRouting,
   SnapshotHandle,
@@ -96,12 +96,34 @@ async function spawn(args: string[]): Promise<number> {
   return result.code;
 }
 
-export const hermes: AgentAdapter = {
+async function isConfigured(): Promise<boolean> {
+  // Hermes auto-configures at every launch (snapshot → write → restore),
+  // so "configured" collapses to "installed".
+  const r = await detect();
+  return r.installed;
+}
+
+async function configure(): Promise<void> {
+  const r = await detect();
+  if (!r.installed) {
+    throw new OpperError(
+      "AGENT_NOT_FOUND",
+      "Hermes is not installed",
+      "Run `opper launch hermes --install`, or install manually from https://hermes-agent.nousresearch.com/docs/.",
+    );
+  }
+  // No persistent config to write — launch handles it.
+}
+
+export const hermes: LaunchableAgentAdapter = {
   name: "hermes",
   displayName: "Hermes Agent",
   binary: "hermes",
   docsUrl: "https://hermes-agent.nousresearch.com/docs/",
+  launchable: true,
   detect,
+  isConfigured,
+  configure,
   install,
   snapshotConfig,
   writeOpperConfig,
