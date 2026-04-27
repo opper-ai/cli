@@ -6,13 +6,10 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { OpperError } from "../errors.js";
 import type {
-  LaunchableAgentAdapter,
+  AgentAdapter,
   DetectResult,
   OpperRouting,
-  SnapshotHandle,
 } from "./types.js";
-
-let pendingRouting: OpperRouting | null = null;
 
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
@@ -49,7 +46,7 @@ function stripOpperBlock(text: string): string {
   const startIdx = text.indexOf(SENTINEL_OPEN);
   if (startIdx === -1) return text;
   const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
-  if (endIdx === -1) return text; // malformed — leave alone
+  if (endIdx === -1) return text;
   const before = text.slice(0, startIdx).replace(/\n$/, "");
   const after = text.slice(endIdx + SENTINEL_CLOSE.length).replace(/^\n/, "");
   if (before.length === 0) return after;
@@ -121,25 +118,6 @@ async function unconfigure(): Promise<void> {
   await writeFile(cfg, stripOpperBlock(text), "utf8");
 }
 
-async function snapshotConfig(): Promise<SnapshotHandle> {
-  return {
-    agent: "codex",
-    backupPath: "",
-    timestamp: new Date().toISOString(),
-  };
-}
-
-async function writeOpperConfig(c: OpperRouting): Promise<void> {
-  // Ensure our provider/profile block is in the config (first-launch
-  // ergonomics). configure() is idempotent.
-  await configure();
-  pendingRouting = c;
-}
-
-async function restoreConfig(_h: SnapshotHandle): Promise<void> {
-  pendingRouting = null;
-}
-
 function hasProfileArg(args: string[]): boolean {
   return args.some(
     (a) =>
@@ -150,12 +128,14 @@ function hasProfileArg(args: string[]): boolean {
   );
 }
 
-async function spawn(args: string[]): Promise<number> {
-  const routing = pendingRouting;
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (routing) {
-    env.OPPER_API_KEY = routing.apiKey;
-  }
+async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  // Ensure our provider/profile block is present (first-launch ergonomics).
+  await configure();
+
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPPER_API_KEY: routing.apiKey,
+  };
   const finalArgs = hasProfileArg(args)
     ? args
     : ["--profile", DEFAULT_PROFILE, ...args];
@@ -163,19 +143,14 @@ async function spawn(args: string[]): Promise<number> {
   return result.status ?? -1;
 }
 
-export const codex: LaunchableAgentAdapter = {
+export const codex: AgentAdapter = {
   name: "codex",
   displayName: "Codex",
-  binary: "codex",
   docsUrl: "https://github.com/openai/codex",
-  launchable: true,
   detect,
   isConfigured,
   configure,
   unconfigure,
   install,
-  snapshotConfig,
-  writeOpperConfig,
-  restoreConfig,
   spawn,
 };

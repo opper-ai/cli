@@ -1,4 +1,5 @@
 import { listAdapters } from "../agents/registry.js";
+import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 
 export async function agentsListCommand(): Promise<void> {
@@ -13,7 +14,7 @@ export async function agentsListCommand(): Promise<void> {
     const configState = configured
       ? brand.purple("configured")
       : brand.dim("not configured");
-    const kind = adapter.launchable
+    const kind = isLaunchable(adapter)
       ? brand.dim("[launchable]")
       : brand.dim("[editor]   ");
     console.log(

@@ -44,8 +44,8 @@ describe("codex adapter", () => {
   it("metadata is correct", () => {
     expect(codex.name).toBe("codex");
     expect(codex.displayName).toBe("Codex");
-    expect(codex.binary).toBe("codex");
-    expect(codex.launchable).toBe(true);
+    expect(typeof codex.spawn).toBe("function");
+    expect(typeof codex.install).toBe("function");
   });
 
   it("detect returns installed=false when codex not on PATH", async () => {
@@ -127,20 +127,19 @@ describe("codex adapter", () => {
   });
 
   it("install throws AGENT_NOT_FOUND with the install hint", async () => {
-    await expect(codex.install()).rejects.toMatchObject({
+    await expect(codex.install!()).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });
   });
 
   it("spawn injects OPPER_API_KEY and prepends --profile opper-opus when no profile is set", async () => {
-    await codex.writeOpperConfig({
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    const code = await codex.spawn!(["chat"], {
       baseUrl: "ignored",
       apiKey: "op_live_run",
       model: "anthropic/claude-opus-4.7",
       compatShape: "openai",
     });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    const code = await codex.spawn(["chat"]);
     expect(code).toBe(0);
 
     const call = spawnSyncMock.mock.calls[0]!;
@@ -151,21 +150,25 @@ describe("codex adapter", () => {
   });
 
   it("spawn does not add --profile when the user already passed one", async () => {
-    await codex.writeOpperConfig({
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await codex.spawn!(["--profile", "opper-sonnet", "chat"], {
       baseUrl: "ignored",
       apiKey: "k",
       model: "m",
       compatShape: "openai",
     });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await codex.spawn(["--profile", "opper-sonnet", "chat"]);
     const call = spawnSyncMock.mock.calls[0]!;
     expect(call[1]).toEqual(["--profile", "opper-sonnet", "chat"]);
   });
 
   it("spawn propagates non-zero exit codes", async () => {
     spawnSyncMock.mockReturnValue({ status: 2 });
-    const code = await codex.spawn([]);
+    const code = await codex.spawn!([], {
+      baseUrl: "ignored",
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
     expect(code).toBe(2);
   });
 });

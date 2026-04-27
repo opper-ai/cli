@@ -11,53 +11,71 @@ export interface OpperRouting {
   compatShape: "openai" | "anthropic" | "responses";
 }
 
-export interface SnapshotHandle {
-  agent: string;
-  backupPath: string;
-  timestamp: string;
-}
-
 export interface ConfigureOptions {
   /** API key for adapters that bake the key into their config (e.g. Continue.dev). */
   apiKey?: string;
 }
 
-interface BaseAgentAdapter {
+/**
+ * One unified contract for everything we route through Opper — launchable
+ * CLI agents (Hermes, OpenCode, Claude Code, Codex), editor integrations
+ * (Continue.dev), or anything else.
+ *
+ * Capabilities are signalled by the *presence* of optional methods:
+ *   - `spawn` present → the agent can be launched (`opper launch <name>`).
+ *   - `install` present → the adapter knows how to install the binary.
+ *   - everything else (configure, unconfigure, isConfigured) is required so
+ *     we can ask any adapter "are you set up?" and "set yourself up".
+ *
+ * Adapters that mutate the agent's persistent config at launch (Hermes)
+ * own the snapshot / restore dance internally inside `spawn`; they do not
+ * leak that machinery into the launch orchestrator.
+ */
+export interface AgentAdapter {
   name: string;
   displayName: string;
   docsUrl: string;
 
   detect(): Promise<DetectResult>;
+
   /**
    * Returns true iff this agent is set up to use Opper. For agents that
-   * auto-configure at launch (Hermes), this collapses to "installed". For
-   * agents with persistent config (OpenCode, Continue.dev), this means the
-   * Opper provider/models are present in the on-disk config.
+   * apply the routing at launch time (Hermes, env-var-based ones) this
+   * collapses to "installed". For agents with persistent config the file
+   * must contain the Opper provider/models.
    */
   isConfigured(): Promise<boolean>;
+
   /** Idempotent setup of the Opper integration. */
   configure(opts: ConfigureOptions): Promise<void>;
+
   /**
    * Idempotent removal of the Opper integration. Should leave the agent's
    * own config and binary alone — only the Opper bits go away.
    */
   unconfigure(): Promise<void>;
+
+  /** Optional: run the upstream agent's installer. Throws when not supported. */
+  install?(): Promise<void>;
+
+  /**
+   * Optional: launch the agent with the given routing applied. Adapters
+   * decide *how* to apply routing (env vars, in-process config rewrite,
+   * etc.) and own any snapshot / restore needed for non-permanent
+   * mutations.
+   *
+   * Adapters without this method are configure-only (e.g. editor
+   * integrations).
+   */
+  spawn?(args: string[], routing: OpperRouting): Promise<number>;
 }
 
-/** Agents you launch from the terminal (`opper launch <name>`). */
-export interface LaunchableAgentAdapter extends BaseAgentAdapter {
-  launchable: true;
-  binary: string;
-  install(): Promise<void>;
-  snapshotConfig(): Promise<SnapshotHandle>;
-  writeOpperConfig(c: OpperRouting): Promise<void>;
-  restoreConfig(h: SnapshotHandle): Promise<void>;
-  spawn(args: string[]): Promise<number>;
-}
+/** Narrowed shape — useful at call sites that have already gated on `spawn`. */
+export type LaunchableAgentAdapter = AgentAdapter & {
+  spawn: NonNullable<AgentAdapter["spawn"]>;
+};
 
-/** Editor / IDE integrations — configured once, used through the editor. */
-export interface ConfigOnlyAgentAdapter extends BaseAgentAdapter {
-  launchable: false;
+/** Type guard — adapter is launchable iff it provides a `spawn` method. */
+export function isLaunchable(a: AgentAdapter): a is LaunchableAgentAdapter {
+  return typeof a.spawn === "function";
 }
-
-export type AgentAdapter = LaunchableAgentAdapter | ConfigOnlyAgentAdapter;

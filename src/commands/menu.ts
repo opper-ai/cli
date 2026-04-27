@@ -43,6 +43,7 @@ import {
 } from "./skills.js";
 import { brand } from "../ui/colors.js";
 import { printBanner } from "../ui/banner.js";
+import { isLaunchable } from "../agents/types.js";
 import type { AgentAdapter } from "../agents/types.js";
 
 export interface MenuOptions {
@@ -118,7 +119,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
 
     // Quick-launch shortcuts: only configured launchable agents.
     for (const s of statuses) {
-      if (!s.adapter.launchable) continue;
+      if (!isLaunchable(s.adapter)) continue;
       if (!s.installed || !s.configured) continue;
       options.push({
         value: `launch:${s.adapter.name}`,
@@ -235,7 +236,7 @@ async function agentsMenu(opts: MenuOptions): Promise<void> {
     const options: Array<{ value: string; label: string; hint: string }> = [];
 
     for (const s of statuses) {
-      const icon = s.adapter.launchable ? "🚀" : "📝";
+      const icon = isLaunchable(s.adapter) ? "🚀" : "📝";
       let stateLabel: string;
       if (!s.installed) stateLabel = brand.dim("(not installed)");
       else if (!s.configured) stateLabel = brand.dim("(not configured)");
@@ -289,7 +290,7 @@ async function agentMenu(
         hint: adapter.docsUrl,
       });
     } else {
-      if (adapter.launchable && configured) {
+      if (isLaunchable(adapter) && configured) {
         options.push({
           value: "launch",
           label: "Launch",

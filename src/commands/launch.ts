@@ -1,4 +1,5 @@
 import { getAdapter } from "../agents/registry.js";
+import { isLaunchable } from "../agents/types.js";
 import { getSlot } from "../auth/config.js";
 import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
@@ -25,7 +26,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       "Run `opper agents list` to see supported agents.",
     );
   }
-  if (!adapter.launchable) {
+  if (!isLaunchable(adapter)) {
     throw new OpperError(
       "AGENT_NOT_FOUND",
       `${adapter.displayName} is a configure-only integration and cannot be launched`,
@@ -55,6 +56,13 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
         `Run \`opper launch ${adapter.name} --install\` to install it, or visit ${adapter.docsUrl}.`,
       );
     }
+    if (!adapter.install) {
+      throw new OpperError(
+        "AGENT_NOT_FOUND",
+        `${adapter.displayName} has no scripted installer`,
+        `Install manually from ${adapter.docsUrl}.`,
+      );
+    }
     console.log(brand.dim(`Installing ${adapter.displayName}…`));
     await adapter.install();
   }
@@ -66,42 +74,5 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     compatShape: "openai",
   };
 
-  const handle = await adapter.snapshotConfig();
-  console.log(brand.dim(`Snapshot saved: ${handle.backupPath}`));
-
-  const restore = async () => {
-    try {
-      await adapter.restoreConfig(handle);
-    } catch (err) {
-      console.error(
-        `\nFailed to restore ${adapter.displayName} config. Recover manually with:`,
-      );
-      console.error(`  cp "${handle.backupPath}" "<your live config path>"`);
-      throw err;
-    }
-  };
-
-  await adapter.writeOpperConfig(routing);
-
-  // No custom signal handlers: the child inherits the terminal via
-  // stdio: "inherit", so SIGINT/SIGTERM go to it directly. When the child
-  // exits, adapter.spawn() returns and we always run restore() in finally.
-  let exitCode: number;
-  let spawnError: unknown;
-  try {
-    exitCode = await adapter.spawn(opts.passthrough ?? []);
-  } catch (err) {
-    spawnError = err;
-    throw err;
-  } finally {
-    try {
-      await restore();
-    } catch (restoreErr) {
-      // If spawn itself errored, preserve that error. The restore failure
-      // was already logged by the restore() wrapper with recovery hints.
-      if (!spawnError) throw restoreErr;
-    }
-  }
-
-  return exitCode!;
+  return adapter.spawn(opts.passthrough ?? [], routing);
 }

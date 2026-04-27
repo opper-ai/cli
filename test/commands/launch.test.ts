@@ -5,21 +5,20 @@ import { setSlot } from "../../src/auth/config.js";
 const adapter = {
   name: "hermes",
   displayName: "Hermes Agent",
-  binary: "hermes",
   docsUrl: "https://example",
-  launchable: true,
   detect: vi.fn(),
   isConfigured: vi.fn(),
   configure: vi.fn(),
+  unconfigure: vi.fn(),
   install: vi.fn(),
-  snapshotConfig: vi.fn(),
-  writeOpperConfig: vi.fn(),
-  restoreConfig: vi.fn(),
   spawn: vi.fn(),
 };
 
+const getAdapterMock = vi.fn((name: string) =>
+  name === "hermes" ? adapter : null,
+);
 vi.mock("../../src/agents/registry.js", () => ({
-  getAdapter: (name: string) => (name === "hermes" ? adapter : null),
+  getAdapter: getAdapterMock,
   listAdapters: () => [adapter],
 }));
 
@@ -33,10 +32,10 @@ useTempOpperHome();
 describe("launchCommand", () => {
   beforeEach(() => {
     adapter.detect.mockReset();
+    adapter.isConfigured.mockReset();
+    adapter.configure.mockReset();
+    adapter.unconfigure.mockReset();
     adapter.install.mockReset();
-    adapter.snapshotConfig.mockReset();
-    adapter.writeOpperConfig.mockReset();
-    adapter.restoreConfig.mockReset();
     adapter.spawn.mockReset();
     loginMock.mockReset();
   });
@@ -49,14 +48,7 @@ describe("launchCommand", () => {
 
   it("calls loginCommand when no slot is stored, then continues with the new slot", async () => {
     adapter.detect.mockResolvedValue({ installed: true });
-    adapter.snapshotConfig.mockResolvedValue({
-      agent: "hermes",
-      backupPath: "/tmp/s.yaml",
-      timestamp: "t",
-    });
-    adapter.writeOpperConfig.mockResolvedValue(undefined);
     adapter.spawn.mockResolvedValue(0);
-    adapter.restoreConfig.mockResolvedValue(undefined);
     loginMock.mockImplementation(async () => {
       await setSlot("default", { apiKey: "op_live_fresh" });
     });
@@ -64,13 +56,14 @@ describe("launchCommand", () => {
     const code = await launchCommand({ agent: "hermes", key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
     expect(code).toBe(0);
-    expect(adapter.writeOpperConfig).toHaveBeenCalledWith(
+    expect(adapter.spawn).toHaveBeenCalledWith(
+      [],
       expect.objectContaining({ apiKey: "op_live_fresh" }),
     );
   });
 
   it("still throws AUTH_REQUIRED if login completes without storing a slot", async () => {
-    loginMock.mockResolvedValue(undefined); // no slot stored
+    loginMock.mockResolvedValue(undefined);
     adapter.detect.mockResolvedValue({ installed: true });
     await expect(
       launchCommand({ agent: "hermes", key: "default" }),
@@ -85,17 +78,10 @@ describe("launchCommand", () => {
     ).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 
-  it("installs, snapshots, writes config, spawns, and restores on a happy path", async () => {
+  it("calls adapter.spawn with the routing on a happy path", async () => {
     await setSlot("default", { apiKey: "op_live_happy" });
     adapter.detect.mockResolvedValue({ installed: true });
-    adapter.snapshotConfig.mockResolvedValue({
-      agent: "hermes",
-      backupPath: "/tmp/hermes-X.yaml",
-      timestamp: "2026-04-21T00:00:00Z",
-    });
-    adapter.writeOpperConfig.mockResolvedValue(undefined);
     adapter.spawn.mockResolvedValue(0);
-    adapter.restoreConfig.mockResolvedValue(undefined);
 
     const code = await launchCommand({
       agent: "hermes",
@@ -105,72 +91,49 @@ describe("launchCommand", () => {
     });
 
     expect(code).toBe(0);
-    expect(adapter.snapshotConfig).toHaveBeenCalled();
-    expect(adapter.writeOpperConfig).toHaveBeenCalledWith(
+    expect(adapter.spawn).toHaveBeenCalledWith(
+      ["chat", "hi"],
       expect.objectContaining({
         apiKey: "op_live_happy",
         model: "anthropic/claude-opus-4.7",
         compatShape: "openai",
       }),
     );
-    expect(adapter.spawn).toHaveBeenCalledWith(["chat", "hi"]);
-    expect(adapter.restoreConfig).toHaveBeenCalled();
   });
 
-  it("restores the config even if spawn throws", async () => {
+  it("propagates spawn errors", async () => {
     await setSlot("default", { apiKey: "op_live_x" });
     adapter.detect.mockResolvedValue({ installed: true });
-    adapter.snapshotConfig.mockResolvedValue({
-      agent: "hermes",
-      backupPath: "/tmp/x.yaml",
-      timestamp: "t",
-    });
-    adapter.writeOpperConfig.mockResolvedValue(undefined);
     adapter.spawn.mockRejectedValue(new Error("spawn died"));
-
     await expect(
       launchCommand({ agent: "hermes", key: "default" }),
     ).rejects.toThrow("spawn died");
-    expect(adapter.restoreConfig).toHaveBeenCalled();
   });
 
-  it("restores config when spawn returns a non-zero exit code (e.g. after Ctrl-C)", async () => {
+  it("propagates non-zero exit codes from spawn", async () => {
     await setSlot("default", { apiKey: "op_live_x" });
     adapter.detect.mockResolvedValue({ installed: true });
-    adapter.snapshotConfig.mockResolvedValue({
-      agent: "hermes",
-      backupPath: "/tmp/x.yaml",
-      timestamp: "t",
-    });
-    adapter.writeOpperConfig.mockResolvedValue(undefined);
-    adapter.spawn.mockResolvedValue(-1); // simulates signalled exit
-    adapter.restoreConfig.mockResolvedValue(undefined);
-
+    adapter.spawn.mockResolvedValue(-1);
     const code = await launchCommand({ agent: "hermes", key: "default" });
     expect(code).toBe(-1);
-    expect(adapter.restoreConfig).toHaveBeenCalled();
   });
 
-  it("preserves the spawn error when restore also fails", async () => {
-    await setSlot("default", { apiKey: "op_live_x" });
-    adapter.detect.mockResolvedValue({ installed: true });
-    adapter.snapshotConfig.mockResolvedValue({
-      agent: "hermes",
-      backupPath: "/tmp/x.yaml",
-      timestamp: "t",
-    });
-    adapter.writeOpperConfig.mockResolvedValue(undefined);
-    adapter.spawn.mockRejectedValue(new Error("spawn boom"));
-    adapter.restoreConfig.mockRejectedValue(new Error("restore boom"));
-
-    // Swallow the stderr from restore's recovery hint.
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await expect(
-        launchCommand({ agent: "hermes", key: "default" }),
-      ).rejects.toThrow("spawn boom");
-    } finally {
-      errorSpy.mockRestore();
-    }
+  it("rejects launching a configure-only adapter", async () => {
+    const editorAdapter = {
+      name: "continue",
+      displayName: "Continue.dev",
+      docsUrl: "https://continue.dev",
+      detect: vi.fn().mockResolvedValue({ installed: true }),
+      isConfigured: vi.fn(),
+      configure: vi.fn(),
+      unconfigure: vi.fn(),
+      // no spawn → not launchable
+    };
+    getAdapterMock.mockImplementationOnce((name: string) =>
+      name === "continue" ? (editorAdapter as unknown as typeof adapter) : null,
+    );
+    await expect(
+      launchCommand({ agent: "continue", key: "default" }),
+    ).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 });

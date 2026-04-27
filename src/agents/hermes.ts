@@ -8,10 +8,9 @@ import { run } from "../util/run.js";
 import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
 import { OpperError } from "../errors.js";
 import type {
-  LaunchableAgentAdapter,
+  AgentAdapter,
   DetectResult,
   OpperRouting,
-  SnapshotHandle,
 } from "./types.js";
 
 function hermesConfigPath(): string {
@@ -23,9 +22,12 @@ async function detect(): Promise<DetectResult> {
   if (!path) return { installed: false };
 
   const versionResult = run("hermes", ["--version"]);
-  const parsed = versionResult.code === 0
-    ? versionResult.stdout.trim().split(/\s+/).pop()
-    : undefined;
+  // Pull a semver-shaped token from stdout. Avoids false positives from
+  // help text like "hermes vupdate available".
+  const versionMatch = versionResult.code === 0
+    ? versionResult.stdout.match(/v?(\d+\.\d+\.\d+(?:[-+][\w.]+)?)/)
+    : null;
+  const parsed = versionMatch ? versionMatch[1] : undefined;
 
   return {
     installed: true,
@@ -49,32 +51,38 @@ async function install(): Promise<void> {
   }
 }
 
-async function snapshotConfig(): Promise<SnapshotHandle> {
-  const path = hermesConfigPath();
-  if (!existsSync(path)) {
-    throw new OpperError(
-      "AGENT_CONFIG_CONFLICT",
-      `Hermes config not found at ${path}`,
-      "Run `hermes` once to initialise a config, then try again.",
-    );
-  }
-  const handle = await takeSnapshot("hermes", path);
-  await rotateBackups("hermes", 20);
-  return handle;
+async function isConfigured(): Promise<boolean> {
+  return (await detect()).installed;
 }
 
-async function writeOpperConfig(c: OpperRouting): Promise<void> {
-  const path = hermesConfigPath();
+async function configure(): Promise<void> {
+  if (!(await detect()).installed) {
+    throw new OpperError(
+      "AGENT_NOT_FOUND",
+      "Hermes is not installed",
+      "Run `opper launch hermes --install`, or install manually from https://hermes-agent.nousresearch.com/docs/.",
+    );
+  }
+}
+
+async function unconfigure(): Promise<void> {
+  // Hermes has no persistent Opper bits to remove (launch does
+  // snapshot → write → restore on every run).
+}
+
+async function writeRoutingToConfig(
+  path: string,
+  routing: OpperRouting,
+): Promise<void> {
   const raw = await readFile(path, "utf8");
   const parsed = (parse(raw) as Record<string, unknown>) ?? {};
   // Hermes recognises "openai" / "anthropic" providers. The Opper "responses"
-  // compat shape isn't a Hermes provider — callers today only pass "openai";
-  // if that changes, add a guard here.
+  // compat shape isn't a Hermes provider — callers today only pass "openai".
   parsed.model = {
-    provider: c.compatShape === "openai" ? "openai" : c.compatShape,
-    model: c.model,
-    base_url: c.baseUrl,
-    api_key: c.apiKey,
+    provider: routing.compatShape === "openai" ? "openai" : routing.compatShape,
+    model: routing.model,
+    base_url: routing.baseUrl,
+    api_key: routing.apiKey,
   };
   const tmp = `${path}.tmp.${process.pid}`;
   await writeFile(tmp, stringify(parsed), "utf8");
@@ -87,52 +95,50 @@ async function writeOpperConfig(c: OpperRouting): Promise<void> {
   }
 }
 
-async function restoreConfig(h: SnapshotHandle): Promise<void> {
-  await restoreSnapshot(h, hermesConfigPath());
-}
-
-async function spawn(args: string[]): Promise<number> {
-  const result = run("hermes", args, { inherit: true });
-  return result.code;
-}
-
-async function isConfigured(): Promise<boolean> {
-  // Hermes auto-configures at every launch (snapshot → write → restore),
-  // so "configured" collapses to "installed".
-  const r = await detect();
-  return r.installed;
-}
-
-async function configure(): Promise<void> {
-  const r = await detect();
-  if (!r.installed) {
+async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  const path = hermesConfigPath();
+  if (!existsSync(path)) {
     throw new OpperError(
-      "AGENT_NOT_FOUND",
-      "Hermes is not installed",
-      "Run `opper launch hermes --install`, or install manually from https://hermes-agent.nousresearch.com/docs/.",
+      "AGENT_CONFIG_CONFLICT",
+      `Hermes config not found at ${path}`,
+      "Run `hermes` once to initialise a config, then try again.",
     );
   }
-  // No persistent config to write — launch handles it.
+
+  const handle = await takeSnapshot("hermes", path);
+  await rotateBackups("hermes", 20);
+
+  let spawnError: unknown;
+  let exitCode: number;
+  try {
+    await writeRoutingToConfig(path, routing);
+    const result = run("hermes", args, { inherit: true });
+    exitCode = result.code;
+  } catch (err) {
+    spawnError = err;
+    throw err;
+  } finally {
+    try {
+      await restoreSnapshot(handle, path);
+    } catch (restoreErr) {
+      console.error(
+        `\nFailed to restore Hermes config. Recover manually with:\n  cp "${handle.backupPath}" "${path}"`,
+      );
+      if (!spawnError) throw restoreErr;
+    }
+  }
+
+  return exitCode!;
 }
 
-async function unconfigure(): Promise<void> {
-  // Hermes has no persistent Opper bits to remove (launch does
-  // snapshot → write → restore on every run). Nothing to do.
-}
-
-export const hermes: LaunchableAgentAdapter = {
+export const hermes: AgentAdapter = {
   name: "hermes",
   displayName: "Hermes Agent",
-  binary: "hermes",
   docsUrl: "https://hermes-agent.nousresearch.com/docs/",
-  launchable: true,
   detect,
   isConfigured,
   configure,
   unconfigure,
   install,
-  snapshotConfig,
-  writeOpperConfig,
-  restoreConfig,
   spawn,
 };

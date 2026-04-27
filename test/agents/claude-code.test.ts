@@ -13,6 +13,13 @@ vi.mock("node:child_process", async () => {
 
 const { claudeCode } = await import("../../src/agents/claude-code.js");
 
+const ROUTING = {
+  baseUrl: "ignored-by-this-adapter",
+  apiKey: "op_live_run",
+  model: "anthropic/claude-sonnet-4.6",
+  compatShape: "openai" as const,
+};
+
 describe("claude-code adapter", () => {
   beforeEach(() => {
     whichMock.mockReset();
@@ -22,8 +29,7 @@ describe("claude-code adapter", () => {
   it("metadata is correct", () => {
     expect(claudeCode.name).toBe("claude-code");
     expect(claudeCode.displayName).toBe("Claude Code");
-    expect(claudeCode.binary).toBe("claude");
-    expect(claudeCode.launchable).toBe(true);
+    expect(typeof claudeCode.spawn).toBe("function");
     expect(claudeCode.docsUrl).toMatch(/^https:\/\//);
   });
 
@@ -54,20 +60,14 @@ describe("claude-code adapter", () => {
   });
 
   it("install throws with the install hint", async () => {
-    await expect(claudeCode.install()).rejects.toMatchObject({
+    await expect(claudeCode.install!()).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });
   });
 
-  it("writeOpperConfig + spawn injects ANTHROPIC_* env vars", async () => {
-    await claudeCode.writeOpperConfig({
-      baseUrl: "ignored-by-this-adapter",
-      apiKey: "op_live_run",
-      model: "anthropic/claude-sonnet-4.6",
-      compatShape: "openai",
-    });
+  it("spawn injects ANTHROPIC_* env vars from the routing", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
-    const code = await claudeCode.spawn(["chat"]);
+    const code = await claudeCode.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
 
     const call = spawnSyncMock.mock.calls[0]!;
@@ -83,7 +83,7 @@ describe("claude-code adapter", () => {
 
   it("spawn propagates non-zero exit codes", async () => {
     spawnSyncMock.mockReturnValue({ status: 2 });
-    const code = await claudeCode.spawn([]);
+    const code = await claudeCode.spawn!([], ROUTING);
     expect(code).toBe(2);
   });
 });

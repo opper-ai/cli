@@ -6,7 +6,7 @@ import { continueConfigPath } from "../util/editor-paths.js";
 import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
 import { OpperError } from "../errors.js";
 import type {
-  ConfigOnlyAgentAdapter,
+  AgentAdapter,
   ConfigureOptions,
   DetectResult,
 } from "./types.js";
@@ -69,11 +69,10 @@ async function unconfigure(): Promise<void> {
   await writeFile(cfg, stringify(parsed), "utf8");
 }
 
-export const continueDev: ConfigOnlyAgentAdapter = {
+export const continueDev: AgentAdapter = {
   name: "continue",
   displayName: "Continue.dev",
   docsUrl: "https://continue.dev",
-  launchable: false,
   detect,
   isConfigured,
   configure,

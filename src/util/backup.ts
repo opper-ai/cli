@@ -1,7 +1,12 @@
 import { copyFile, mkdir, rm, readdir } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { backupsDir } from "../auth/paths.js";
-import type { SnapshotHandle } from "../agents/types.js";
+
+export interface SnapshotHandle {
+  agent: string;
+  backupPath: string;
+  timestamp: string;
+}
 
 function isoStamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
