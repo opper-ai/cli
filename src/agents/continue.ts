@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { parse } from "yaml";
+import { writeFile } from "node:fs/promises";
+import { parse, stringify } from "yaml";
 import { configureContinue } from "../setup/continue.js";
 import { continueConfigPath } from "../util/editor-paths.js";
 import { OPPER_OPENAI_COMPAT_URL } from "../api/compat.js";
@@ -50,6 +51,24 @@ async function configure(opts: ConfigureOptions): Promise<void> {
   });
 }
 
+async function unconfigure(): Promise<void> {
+  const cfg = continueConfigPath("global");
+  if (!existsSync(cfg)) return;
+  let parsed: { models?: Array<Record<string, unknown>>; [k: string]: unknown } | null;
+  try {
+    parsed = parse(readFileSync(cfg, "utf8")) as typeof parsed;
+  } catch {
+    return;
+  }
+  if (!parsed || !Array.isArray(parsed.models)) return;
+  const filtered = parsed.models.filter(
+    (m) => (m as { apiBase?: unknown }).apiBase !== OPPER_OPENAI_COMPAT_URL,
+  );
+  if (filtered.length === parsed.models.length) return;
+  parsed.models = filtered;
+  await writeFile(cfg, stringify(parsed), "utf8");
+}
+
 export const continueDev: ConfigOnlyAgentAdapter = {
   name: "continue",
   displayName: "Continue.dev",
@@ -58,4 +77,5 @@ export const continueDev: ConfigOnlyAgentAdapter = {
   detect,
   isConfigured,
   configure,
+  unconfigure,
 };

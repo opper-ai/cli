@@ -71,3 +71,13 @@ export async function listInstalledSkills(): Promise<string[]> {
     (SKILL_NAMES as readonly string[]).includes(e),
   );
 }
+
+export async function uninstallSkills(): Promise<void> {
+  const dest = installDir();
+  for (const name of SKILL_NAMES) {
+    const path = join(dest, name);
+    if (existsSync(path)) {
+      await rm(path, { recursive: true, force: true });
+    }
+  }
+}

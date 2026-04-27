@@ -1,4 +1,9 @@
-import { isSkillsInstalled, installSkills, updateSkills } from "../setup/skills.js";
+import {
+  isSkillsInstalled,
+  installSkills,
+  updateSkills,
+  uninstallSkills,
+} from "../setup/skills.js";
 import { brand } from "../ui/colors.js";
 
 export async function skillsInstallCommand(): Promise<void> {
@@ -15,6 +20,15 @@ export async function skillsInstallCommand(): Promise<void> {
 export async function skillsUpdateCommand(): Promise<void> {
   await updateSkills();
   console.log(brand.purple("✓ Opper skills updated."));
+}
+
+export async function skillsUninstallCommand(): Promise<void> {
+  if (!isSkillsInstalled()) {
+    console.log("Opper skills are not installed — nothing to do.");
+    return;
+  }
+  await uninstallSkills();
+  console.log(brand.purple("✓ Opper skills uninstalled."));
 }
 
 export async function skillsListCommand(): Promise<void> {

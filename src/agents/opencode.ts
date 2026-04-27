@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OpperError } from "../errors.js";
@@ -86,6 +87,27 @@ async function configure(): Promise<void> {
   await configureOpenCode({ location: "global" });
 }
 
+async function unconfigure(): Promise<void> {
+  const cfg = opencodeConfigPath();
+  if (!existsSync(cfg)) return;
+  let parsed: { provider?: Record<string, unknown>; [k: string]: unknown };
+  try {
+    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+  } catch {
+    return; // unparseable — leave alone
+  }
+  if (!parsed.provider || parsed.provider.opper === undefined) return;
+
+  const { opper: _opper, ...restProviders } = parsed.provider;
+  void _opper;
+  if (Object.keys(restProviders).length === 0) {
+    delete parsed.provider;
+  } else {
+    parsed.provider = restProviders;
+  }
+  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+}
+
 export const opencode: LaunchableAgentAdapter = {
   name: "opencode",
   displayName: "OpenCode",
@@ -95,6 +117,7 @@ export const opencode: LaunchableAgentAdapter = {
   detect,
   isConfigured,
   configure,
+  unconfigure,
   install,
   snapshotConfig,
   writeOpperConfig,

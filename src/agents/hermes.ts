@@ -115,6 +115,11 @@ async function configure(): Promise<void> {
   // No persistent config to write — launch handles it.
 }
 
+async function unconfigure(): Promise<void> {
+  // Hermes has no persistent Opper bits to remove (launch does
+  // snapshot → write → restore on every run). Nothing to do.
+}
+
 export const hermes: LaunchableAgentAdapter = {
   name: "hermes",
   displayName: "Hermes Agent",
@@ -124,6 +129,7 @@ export const hermes: LaunchableAgentAdapter = {
   detect,
   isConfigured,
   configure,
+  unconfigure,
   install,
   snapshotConfig,
   writeOpperConfig,

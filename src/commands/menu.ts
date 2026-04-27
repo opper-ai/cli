@@ -6,8 +6,12 @@ import { loginCommand } from "./login.js";
 import { logoutCommand } from "./logout.js";
 import { whoamiCommand } from "./whoami.js";
 import { launchCommand } from "./launch.js";
-import { setupCommand } from "./setup.js";
-import { skillsListCommand } from "./skills.js";
+import {
+  skillsInstallCommand,
+  skillsUpdateCommand,
+  skillsListCommand,
+  skillsUninstallCommand,
+} from "./skills.js";
 import { brand } from "../ui/colors.js";
 import type { AgentAdapter } from "../agents/types.js";
 
@@ -60,10 +64,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
 
     const options: Array<{ value: string; label: string; hint: string }> = [];
 
-    // Launch entries: only for launchable adapters that are installed AND
-    // configured. Hermes counts as configured iff installed (auto-config at
-    // launch). OpenCode counts as configured iff its config has the Opper
-    // provider block.
+    // Quick-launch shortcuts: only configured launchable agents.
     for (const s of statuses) {
       if (!s.adapter.launchable) continue;
       if (!s.installed || !s.configured) continue;
@@ -77,17 +78,12 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     options.push({
       value: "agents",
       label: "Agents",
-      hint: "Configure agents and editor integrations",
-    });
-    options.push({
-      value: "setup",
-      label: "Run setup wizard",
-      hint: "Skills, editors, and more",
+      hint: "Manage launchable agents and editor integrations",
     });
     options.push({
       value: "skills",
-      label: "Skills status",
-      hint: "Show whether Opper skills are installed",
+      label: "Skills",
+      hint: "Install / update / uninstall Opper skills",
     });
 
     if (slot) {
@@ -137,11 +133,8 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
         case "agents":
           await agentsMenu(opts);
           break;
-        case "setup":
-          await setupCommand({ key: opts.key });
-          break;
         case "skills":
-          await skillsListCommand();
+          await skillsMenu();
           break;
         case "login":
           await loginCommand({ key: opts.key });
@@ -161,35 +154,67 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Skills submenu
+// ---------------------------------------------------------------------------
+
+async function skillsMenu(): Promise<void> {
+  while (true) {
+    const choice = (await select({
+      message: "Skills",
+      options: [
+        { value: "status", label: "Status", hint: "Show install state" },
+        { value: "install", label: "Install", hint: "Copy bundled skills into ~/.claude/skills/" },
+        { value: "update", label: "Update", hint: "Re-copy bundled skills (overwrite)" },
+        { value: "uninstall", label: "Uninstall", hint: "Remove Opper skills from ~/.claude/skills/" },
+        { value: "back", label: brand.dim("← Back"), hint: "" },
+      ],
+    })) as string | symbol;
+
+    if (isCancel(choice) || choice === "back") return;
+    if (typeof choice !== "string") continue;
+
+    try {
+      switch (choice) {
+        case "status":
+          await skillsListCommand();
+          break;
+        case "install":
+          await skillsInstallCommand();
+          break;
+        case "update":
+          await skillsUpdateCommand();
+          break;
+        case "uninstall":
+          await skillsUninstallCommand();
+          break;
+      }
+    } catch (err) {
+      reportError(err);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Agents submenu (and per-agent action submenu)
+// ---------------------------------------------------------------------------
+
 async function agentsMenu(opts: MenuOptions): Promise<void> {
   while (true) {
-    const [slot, statuses] = await Promise.all([
-      getSlot(opts.key),
-      probeAdapters(),
-    ]);
-
+    const statuses = await probeAdapters();
     const options: Array<{ value: string; label: string; hint: string }> = [];
 
     for (const s of statuses) {
-      const labelBase = `${s.adapter.launchable ? "🚀" : "📝"} ${s.adapter.displayName}`;
+      const icon = s.adapter.launchable ? "🚀" : "📝";
       let stateLabel: string;
-      let hint: string;
-      if (!s.installed) {
-        stateLabel = brand.dim("(not installed)");
-        hint = `See ${s.adapter.docsUrl} to install`;
-      } else if (!s.configured) {
-        stateLabel = brand.dim("(not configured)");
-        hint = "Press enter to configure";
-      } else {
-        stateLabel = brand.purple("(configured)");
-        hint = s.adapter.launchable
-          ? "Press enter to launch"
-          : "Press enter to reconfigure";
-      }
+      if (!s.installed) stateLabel = brand.dim("(not installed)");
+      else if (!s.configured) stateLabel = brand.dim("(not configured)");
+      else stateLabel = brand.purple("(configured)");
+
       options.push({
         value: `agent:${s.adapter.name}`,
-        label: `${labelBase} ${stateLabel}`,
-        hint,
+        label: `${icon} ${s.adapter.displayName} ${stateLabel}`,
+        hint: s.adapter.docsUrl,
       });
     }
 
@@ -202,46 +227,102 @@ async function agentsMenu(opts: MenuOptions): Promise<void> {
 
     if (isCancel(choice) || choice === "back") return;
     if (typeof choice !== "string") continue;
-
     if (!choice.startsWith("agent:")) continue;
+
     const name = choice.slice("agent:".length);
     const status = statuses.find((s) => s.adapter.name === name);
     if (!status) continue;
 
     try {
-      await handleAgentSelection(status, slot?.apiKey, opts);
+      await agentMenu(status, opts);
     } catch (err) {
       reportError(err);
     }
   }
 }
 
-async function handleAgentSelection(
-  status: AdapterStatus,
-  apiKey: string | undefined,
+async function agentMenu(
+  initial: AdapterStatus,
   opts: MenuOptions,
 ): Promise<void> {
-  const { adapter, installed, configured } = status;
+  let current = initial;
 
-  if (!installed) {
-    log.info(`${adapter.displayName} is not installed.`);
-    log.info(`See ${adapter.docsUrl} for install instructions.`);
-    return;
-  }
+  while (true) {
+    const { adapter, installed, configured } = current;
 
-  if (!configured) {
-    log.info(`Configuring ${adapter.displayName}…`);
-    await adapter.configure({ ...(apiKey ? { apiKey } : {}) });
-    log.success(`${adapter.displayName} configured.`);
-    return;
-  }
+    const options: Array<{ value: string; label: string; hint: string }> = [];
 
-  // Already installed & configured.
-  if (adapter.launchable) {
-    await launchCommand({ agent: adapter.name, key: opts.key });
-  } else {
-    log.info(`Reconfiguring ${adapter.displayName}…`);
-    await adapter.configure({ ...(apiKey ? { apiKey } : {}) });
-    log.success(`${adapter.displayName} reconfigured.`);
+    if (!installed) {
+      options.push({
+        value: "docs",
+        label: "Show install instructions",
+        hint: adapter.docsUrl,
+      });
+    } else {
+      if (adapter.launchable && configured) {
+        options.push({
+          value: "launch",
+          label: "Launch",
+          hint: "Route inference through Opper",
+        });
+      }
+      options.push({
+        value: "configure",
+        label: configured ? "Reconfigure" : "Configure",
+        hint: configured
+          ? "Re-write the Opper integration into the agent's config"
+          : "Set up the Opper integration",
+      });
+      if (configured) {
+        options.push({
+          value: "uninstall",
+          label: "Remove Opper integration",
+          hint: "Strip Opper-specific config from the agent (binary stays)",
+        });
+      }
+    }
+
+    options.push({ value: "back", label: brand.dim("← Back"), hint: "" });
+
+    const choice = (await select({
+      message: `${adapter.displayName}${
+        installed ? (configured ? " — configured" : " — not configured") : " — not installed"
+      }`,
+      options,
+    })) as string | symbol;
+
+    if (isCancel(choice) || choice === "back") return;
+    if (typeof choice !== "string") continue;
+
+    try {
+      switch (choice) {
+        case "launch":
+          // launchCommand handles login auto-trigger and the snapshot/restore flow.
+          await launchCommand({ agent: adapter.name, key: opts.key });
+          break;
+        case "configure": {
+          const slot = await getSlot(opts.key);
+          await adapter.configure({
+            ...(slot?.apiKey ? { apiKey: slot.apiKey } : {}),
+          });
+          log.success(`${adapter.displayName} configured.`);
+          break;
+        }
+        case "uninstall":
+          await adapter.unconfigure();
+          log.success(`${adapter.displayName} integration removed.`);
+          break;
+        case "docs":
+          log.info(`Install ${adapter.displayName}: ${adapter.docsUrl}`);
+          break;
+      }
+    } catch (err) {
+      reportError(err);
+    }
+
+    // Re-probe so the menu reflects new state on the next iteration.
+    const fresh = await probeAdapters();
+    const found = fresh.find((s) => s.adapter.name === adapter.name);
+    if (found) current = found;
   }
 }

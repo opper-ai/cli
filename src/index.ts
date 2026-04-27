@@ -12,6 +12,7 @@ import {
   skillsInstallCommand,
   skillsUpdateCommand,
   skillsListCommand,
+  skillsUninstallCommand,
 } from "./commands/skills.js";
 import {
   editorsListCommand,
@@ -138,7 +139,7 @@ const skills = program.command("skills").description("Manage Opper skills");
 
 skills
   .command("install")
-  .description("Install Opper skills via `npx skills add opper-ai/opper-skills`")
+  .description("Install bundled Opper skills into ~/.claude/skills/")
   .action(skillsInstallCommand);
 
 skills
@@ -150,6 +151,11 @@ skills
   .command("list")
   .description("Show whether Opper skills are installed")
   .action(skillsListCommand);
+
+skills
+  .command("uninstall")
+  .description("Remove Opper skills from ~/.claude/skills/")
+  .action(skillsUninstallCommand);
 
 const editors = program
   .command("editors")

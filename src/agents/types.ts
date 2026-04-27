@@ -37,6 +37,11 @@ interface BaseAgentAdapter {
   isConfigured(): Promise<boolean>;
   /** Idempotent setup of the Opper integration. */
   configure(opts: ConfigureOptions): Promise<void>;
+  /**
+   * Idempotent removal of the Opper integration. Should leave the agent's
+   * own config and binary alone — only the Opper bits go away.
+   */
+  unconfigure(): Promise<void>;
 }
 
 /** Agents you launch from the terminal (`opper launch <name>`). */

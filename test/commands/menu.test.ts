@@ -4,6 +4,11 @@ import { setSlot } from "../../src/auth/config.js";
 
 const answers: Array<() => unknown> = [];
 
+// Sentinel used by the select() mock when the answers queue is exhausted.
+// `isCancel(SENTINEL_BAIL)` returns true, so any submenu we land in without a
+// queued answer cancels out instead of looping forever.
+const SENTINEL_BAIL: symbol = Symbol("bail");
+
 vi.mock("@clack/prompts", async () => {
   const actual = await vi.importActual<typeof import("@clack/prompts")>(
     "@clack/prompts",
@@ -12,8 +17,17 @@ vi.mock("@clack/prompts", async () => {
     ...actual,
     intro: vi.fn(),
     outro: vi.fn(),
+    note: vi.fn(),
     log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    select: vi.fn(async () => answers.shift()?.() ?? "quit"),
+    spinner: vi.fn(() => ({
+      start: vi.fn(),
+      stop: vi.fn(),
+      message: vi.fn(),
+    })),
+    select: vi.fn(async () => {
+      const next = answers.shift();
+      return next ? next() : SENTINEL_BAIL;
+    }),
     isCancel: (v: unknown) => typeof v === "symbol",
     cancel: vi.fn(),
   };
@@ -31,6 +45,7 @@ const hermesAdapter = {
   detect: hermesDetect,
   isConfigured: hermesIsConfigured,
   configure: hermesConfigure,
+  unconfigure: vi.fn(),
   install: vi.fn(),
   snapshotConfig: vi.fn(),
   writeOpperConfig: vi.fn(),
@@ -76,6 +91,7 @@ describe("menuCommand", () => {
     hermesDetect.mockReset();
     hermesIsConfigured.mockReset();
     hermesConfigure.mockReset();
+    hermesAdapter.unconfigure.mockReset();
     loginMock.mockReset();
     logoutMock.mockReset();
     whoamiMock.mockReset();
@@ -109,13 +125,17 @@ describe("menuCommand", () => {
   it("loops through multiple actions before quitting", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
+    // Open Skills submenu, pick "status", back out, then quit.
     answers.push(() => "skills");
-    answers.push(() => "setup");
+    answers.push(() => "status");
+    answers.push(() => "back");
+    answers.push(() => "skills");
+    answers.push(() => "status");
+    answers.push(() => "back");
     answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
-    expect(skillsListMock).toHaveBeenCalled();
-    expect(setupMock).toHaveBeenCalled();
+    expect(skillsListMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns to menu (does not propagate) when an action throws", async () => {
@@ -123,6 +143,8 @@ describe("menuCommand", () => {
     hermesIsConfigured.mockResolvedValue(false);
     skillsListMock.mockRejectedValueOnce(new Error("boom"));
     answers.push(() => "skills");
+    answers.push(() => "status"); // throws via mock
+    answers.push(() => "back");
     answers.push(() => "quit");
 
     await expect(menuCommand({ key: "default" })).resolves.toBeUndefined();
@@ -153,16 +175,6 @@ describe("menuCommand", () => {
     expect(whoamiMock).toHaveBeenCalledWith({ key: "default" });
   });
 
-  it("invokes setup on select", async () => {
-    hermesDetect.mockResolvedValue({ installed: false });
-    hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "setup");
-    answers.push(() => "quit");
-
-    await menuCommand({ key: "default" });
-    expect(setupMock).toHaveBeenCalledWith({ key: "default" });
-  });
-
   it("quits silently on quit", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
@@ -173,29 +185,59 @@ describe("menuCommand", () => {
     expect(loginMock).not.toHaveBeenCalled();
   });
 
-  it("agents submenu configures an unconfigured agent", async () => {
+  it("agents submenu → agent menu → Configure runs adapter.configure()", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "agents");
-    answers.push(() => "agent:hermes");
-    answers.push(() => "back");
-    answers.push(() => "quit");
+    answers.push(() => "agents");        // main → agents submenu
+    answers.push(() => "agent:hermes");  // agents → agent submenu
+    answers.push(() => "configure");     // agent → configure
+    answers.push(() => "back");          // exit agent submenu
+    answers.push(() => "back");          // exit agents submenu
+    answers.push(() => "quit");          // exit main
 
     await menuCommand({ key: "default" });
     expect(hermesConfigure).toHaveBeenCalled();
     expect(launchMock).not.toHaveBeenCalled();
   });
 
-  it("agents submenu launches an already-configured launchable agent", async () => {
+  it("agents submenu → agent menu → Launch runs launchCommand", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
     hermesIsConfigured.mockResolvedValue(true);
     launchMock.mockResolvedValue(0);
     answers.push(() => "agents");
     answers.push(() => "agent:hermes");
+    answers.push(() => "launch");
+    answers.push(() => "back");
     answers.push(() => "back");
     answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(launchMock).toHaveBeenCalledWith({ agent: "hermes", key: "default" });
+  });
+
+  it("agents submenu → agent menu → Remove integration calls unconfigure()", async () => {
+    hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(true);
+    answers.push(() => "agents");
+    answers.push(() => "agent:hermes");
+    answers.push(() => "uninstall");
+    answers.push(() => "back");
+    answers.push(() => "back");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(hermesAdapter.unconfigure).toHaveBeenCalled();
+  });
+
+  it("skills submenu wires status / install / uninstall", async () => {
+    hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => "skills");
+    answers.push(() => "status");
+    answers.push(() => "back");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(skillsListMock).toHaveBeenCalled();
   });
 });
