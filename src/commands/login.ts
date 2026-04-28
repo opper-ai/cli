@@ -4,6 +4,7 @@ import { getSlot, setSlot } from "../auth/config.js";
 import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
+import { openBrowser } from "../util/open-browser.js";
 
 export interface LoginOptions {
   key: string;
@@ -42,9 +43,10 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       onPrompt(p) {
         const url = p.verificationUriComplete ?? p.verificationUri;
         note(
-          `Open ${brand.purple(url)}\nand enter code ${brand.water(p.userCode)}`,
+          `Opening ${brand.purple(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.water(p.userCode)}`,
           "Authorize the CLI",
         );
+        openBrowser(url);
         s.start("Waiting for browser approval");
         promptShown = true;
       },
