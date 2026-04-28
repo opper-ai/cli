@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { parse } from "yaml";
 import { configureContinue } from "../../src/setup/continue.js";
 import { continueConfigPath } from "../../src/util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../../src/config/endpoints.js";
+import { OPPER_COMPAT_URL } from "../../src/config/endpoints.js";
 
 describe("configureContinue", () => {
   let home: string;
@@ -33,7 +33,7 @@ describe("configureContinue", () => {
     const parsed = parse(content) as { models: Array<Record<string, unknown>> };
     expect(parsed.models.length).toBeGreaterThan(0);
     expect(parsed.models.every((m) => m.apiKey === "op_live_test")).toBe(true);
-    expect(parsed.models.every((m) => m.apiBase === OPPER_OPENAI_COMPAT_URL)).toBe(true);
+    expect(parsed.models.every((m) => m.apiBase === OPPER_COMPAT_URL)).toBe(true);
   });
 
   it("appends to existing non-Opper config", async () => {
@@ -53,7 +53,7 @@ describe("configureContinue", () => {
       models: Array<Record<string, unknown>>;
     };
     expect(parsed.models.some((m) => m.name === "local-llm")).toBe(true);
-    expect(parsed.models.some((m) => m.apiBase === OPPER_OPENAI_COMPAT_URL)).toBe(true);
+    expect(parsed.models.some((m) => m.apiBase === OPPER_COMPAT_URL)).toBe(true);
   });
 
   it("refuses to append duplicate Opper models unless overwrite=true", async () => {
@@ -75,7 +75,7 @@ describe("configureContinue", () => {
       models: Array<{ apiKey?: string; apiBase?: string }>;
     };
     const opperModels = parsed.models.filter(
-      (m) => m.apiBase === OPPER_OPENAI_COMPAT_URL,
+      (m) => m.apiBase === OPPER_COMPAT_URL,
     );
     expect(opperModels.every((m) => m.apiKey === "op_live_2")).toBe(true);
   });

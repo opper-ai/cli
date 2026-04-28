@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { configureContinue } from "../setup/continue.js";
 import { continueConfigPath } from "../util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
@@ -29,7 +29,7 @@ async function isConfigured(): Promise<boolean> {
     } | null;
     if (!parsed?.models?.length) return false;
     return parsed.models.some(
-      (m) => (m as { apiBase?: unknown }).apiBase === OPPER_OPENAI_COMPAT_URL,
+      (m) => (m as { apiBase?: unknown }).apiBase === OPPER_COMPAT_URL,
     );
   } catch {
     return false;
@@ -62,7 +62,7 @@ async function unconfigure(): Promise<void> {
   }
   if (!parsed || !Array.isArray(parsed.models)) return;
   const filtered = parsed.models.filter(
-    (m) => (m as { apiBase?: unknown }).apiBase !== OPPER_OPENAI_COMPAT_URL,
+    (m) => (m as { apiBase?: unknown }).apiBase !== OPPER_COMPAT_URL,
   );
   if (filtered.length === parsed.models.length) return;
   parsed.models = filtered;

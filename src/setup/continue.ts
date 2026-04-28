@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { parse, stringify } from "yaml";
 import { assetPath } from "../util/assets.js";
 import { continueConfigPath, type Location } from "../util/editor-paths.js";
-import { OPPER_OPENAI_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 
 export interface ConfigureContinueOptions {
   location: Location;
@@ -42,14 +42,14 @@ export async function configureContinue(
 
   const existingModels = Array.isArray(existing.models) ? existing.models : [];
   const hasOpper = existingModels.some(
-    (m) => (m as { apiBase?: unknown }).apiBase === OPPER_OPENAI_COMPAT_URL,
+    (m) => (m as { apiBase?: unknown }).apiBase === OPPER_COMPAT_URL,
   );
   if (hasOpper && !opts.overwrite) {
     return { path, wrote: false, reason: "exists" };
   }
 
   const keptModels = existingModels.filter(
-    (m) => (m as { apiBase?: unknown }).apiBase !== OPPER_OPENAI_COMPAT_URL,
+    (m) => (m as { apiBase?: unknown }).apiBase !== OPPER_COMPAT_URL,
   );
   const opperModels = template.models.map((m) => ({
     ...m,

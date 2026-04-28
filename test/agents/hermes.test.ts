@@ -19,7 +19,7 @@ vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 const { hermes } = await import("../../src/agents/hermes.js");
 
 const ROUTING = {
-  baseUrl: "https://api.opper.ai/v3/openai",
+  baseUrl: "https://api.opper.ai/v3/compat",
   apiKey: "op_live_test",
   model: "anthropic/claude-opus-4.7",
   compatShape: "openai" as const,
@@ -120,7 +120,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     };
     expect(written.model).toEqual({
       provider: "custom",
-      base_url: "https://api.opper.ai/v3/openai",
+      base_url: "https://api.opper.ai/v3/compat",
       default: "anthropic/claude-opus-4.7",
     });
     // api_key intentionally NOT written to disk — it goes via env.
@@ -168,7 +168,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     };
     expect(after.model).toEqual({
       provider: "custom",
-      base_url: "https://api.opper.ai/v3/openai",
+      base_url: "https://api.opper.ai/v3/compat",
       default: "anthropic/claude-opus-4.7",
     });
     expect(after.toolsets).toEqual(["hermes-cli", "web"]);

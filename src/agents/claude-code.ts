@@ -7,12 +7,12 @@ import type {
   OpperRouting,
 } from "./types.js";
 
-import { OPPER_ANTHROPIC_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 
 // Claude Code reads ANTHROPIC_BASE_URL and appends `/v1/messages`. Opper's
-// Anthropic-shaped compat endpoint is rooted at `/v3/compat`, which gives us
-// `/v3/compat/v1/messages` per the v3 OpenAPI spec.
+// compat endpoint at `/v3/compat` accepts the Anthropic Messages shape, so
+// the resolved URL becomes `/v3/compat/v1/messages`.
 
 const INSTALL_HINT =
   "Install via `npm i -g @anthropic-ai/claude-code` or see https://docs.claude.com/en/docs/claude-code/setup";
@@ -52,7 +52,7 @@ async function unconfigure(): Promise<void> {
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ANTHROPIC_BASE_URL: OPPER_ANTHROPIC_COMPAT_URL,
+    ANTHROPIC_BASE_URL: OPPER_COMPAT_URL,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
     ANTHROPIC_DEFAULT_SONNET_MODEL: DEFAULT_MODELS.sonnet,
     ANTHROPIC_DEFAULT_HAIKU_MODEL: DEFAULT_MODELS.haiku,

@@ -11,7 +11,7 @@ import type {
   OpperRouting,
 } from "./types.js";
 
-import { OPPER_ANTHROPIC_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
@@ -25,7 +25,7 @@ const OPPER_BLOCK = [
   "",
   "[model_providers.opper]",
   'name = "Opper"',
-  `base_url = "${OPPER_ANTHROPIC_COMPAT_URL}"`,
+  `base_url = "${OPPER_COMPAT_URL}"`,
   'env_key = "OPPER_API_KEY"',
   'wire_api = "responses"',
   "",
@@ -79,7 +79,7 @@ async function isConfigured(): Promise<boolean> {
     const text = readFileSync(cfg, "utf8");
     return (
       text.includes(SENTINEL_OPEN) &&
-      text.includes(`base_url = "${OPPER_ANTHROPIC_COMPAT_URL}"`)
+      text.includes(`base_url = "${OPPER_COMPAT_URL}"`)
     );
   } catch {
     return false;
