@@ -1,6 +1,6 @@
 {
-  "name": "opper",
-  "version": "0.1.0-pre.0",
+  "name": "@opperai/cli",
+  "version": "0.1.0",
   "description": "The official Opper CLI — authenticate, route agent inference, and manage the Opper platform",
   "type": "module",
   "bin": { "opper": "dist/index.js" },

@@ -11,10 +11,10 @@ Command-line interface for the Opper platform. Call functions, manage knowledge 
 ## Installation
 
 ```bash
-npm install -g opper
+npm install -g @opperai/cli
 ```
 
-After install, verify with `opper --version`.
+After install, verify with `opper --version`. (The package installs an `opper` binary.)
 
 ## Authentication
 

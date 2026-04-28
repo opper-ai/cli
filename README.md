@@ -1,20 +1,22 @@
-# opper
+# @opperai/cli
 
 The official Opper CLI — authenticate, route agent inference, and manage the Opper platform.
 
 ## Quick start
 
 ```bash
-npx opper login
-npx opper whoami
+npx @opperai/cli login
+npx @opperai/cli whoami
 ```
 
 ## Install globally
 
 ```bash
-npm i -g opper
+npm i -g @opperai/cli
 opper --help
 ```
+
+The package installs an `opper` binary, so once globally installed every command is just `opper <…>`.
 
 ## Commands
 
