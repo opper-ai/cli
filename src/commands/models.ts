@@ -77,7 +77,7 @@ export async function modelsCreateCommand(
   }
   const created = await api.post<CustomModel>("/v2/models/custom", body);
   console.log(
-    brand.water(`✓ Registered custom model "${created.name}" (${created.id}).`),
+    brand.accent(`✓ Registered custom model "${created.name}" (${created.id}).`),
   );
   console.log(`${brand.bold("identifier:")} ${created.identifier}`);
 }
@@ -114,5 +114,5 @@ export async function modelsDeleteCommand(
     `/v2/models/custom/by-name/${encodeURIComponent(opts.name)}`,
   );
   await api.del(`/v2/models/custom/${encodeURIComponent(m.id)}`);
-  console.log(brand.water(`✓ Deleted custom model "${opts.name}".`));
+  console.log(brand.accent(`✓ Deleted custom model "${opts.name}".`));
 }

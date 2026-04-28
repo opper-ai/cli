@@ -24,12 +24,12 @@ export async function skillsInstallCommand(names?: string[]): Promise<void> {
     return;
   }
   const result = await installSkills(names);
-  console.log(brand.water(`✓ Installed${suffix(result)}.`));
+  console.log(brand.accent(`✓ Installed${suffix(result)}.`));
 }
 
 export async function skillsUpdateCommand(names?: string[]): Promise<void> {
   const result = await updateSkills(names);
-  console.log(brand.water(`✓ Updated${suffix(result)}.`));
+  console.log(brand.accent(`✓ Updated${suffix(result)}.`));
 }
 
 export async function skillsUninstallCommand(names?: string[]): Promise<void> {
@@ -38,7 +38,7 @@ export async function skillsUninstallCommand(names?: string[]): Promise<void> {
     return;
   }
   const result = await uninstallSkills(names);
-  console.log(brand.water(`✓ Uninstalled${suffix(result)}.`));
+  console.log(brand.accent(`✓ Uninstalled${suffix(result)}.`));
 }
 
 export async function skillsListCommand(): Promise<void> {
@@ -70,7 +70,7 @@ export async function skillsListCommand(): Promise<void> {
     const cells = status.map((s) => {
       const installed = s.installed.includes(skill);
       return installed
-        ? brand.water("installed".padEnd(colWidth))
+        ? brand.accent("installed".padEnd(colWidth))
         : brand.dim("—".padEnd(colWidth));
     });
     console.log([skill.padEnd(nameWidth), ...cells].join("  "));

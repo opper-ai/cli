@@ -32,7 +32,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     }
   }
 
-  intro(brand.purple("Sign in to Opper"));
+  intro(brand.accent("Sign in to Opper"));
 
   const s = spinner();
   let promptShown = false;
@@ -43,7 +43,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       onPrompt(p) {
         const url = p.verificationUriComplete ?? p.verificationUri;
         note(
-          `Opening ${brand.water(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.water(p.userCode)}`,
+          `Opening ${brand.accent(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.accent(p.userCode)}`,
           "Authorize the CLI",
         );
         openBrowser(url);
@@ -56,7 +56,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     const who = slot.user ? slot.user.email : opts.key;
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);
-    outro(brand.purple("✓"));
+    outro(brand.accent("✓"));
   } catch (err) {
     if (promptShown) s.stop("Sign-in failed");
     if (isCancel(err)) {

@@ -32,7 +32,7 @@ export async function editorsListCommand(): Promise<void> {
   for (const adapter of editors) {
     const configured = await adapter.isConfigured();
     const status = configured
-      ? brand.water("configured")
+      ? brand.accent("configured")
       : brand.dim("not configured");
     console.log(
       `${adapter.displayName.padEnd(14)} ${status}  ${brand.dim(adapter.docsUrl)}`,
@@ -53,7 +53,7 @@ export async function editorsOpenCodeCommand(
     );
     return;
   }
-  console.log(brand.water(`✓ Wrote OpenCode config to ${result.path}.`));
+  console.log(brand.accent(`✓ Wrote OpenCode config to ${result.path}.`));
 }
 
 export async function editorsContinueCommand(
@@ -79,5 +79,5 @@ export async function editorsContinueCommand(
     );
     return;
   }
-  console.log(brand.water(`✓ Wrote Continue.dev config to ${result.path}.`));
+  console.log(brand.accent(`✓ Wrote Continue.dev config to ${result.path}.`));
 }

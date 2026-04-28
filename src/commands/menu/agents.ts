@@ -15,14 +15,13 @@ export async function agentsMenu(opts: MenuOptions): Promise<void> {
   while (true) {
     const statuses = await probeAdapters();
     const options = statuses.map((s) => {
-      const icon = isLaunchable(s.adapter) ? "🚀" : "📝";
       let stateLabel: string;
       if (!s.installed) stateLabel = brand.dim("(not installed)");
       else if (!s.configured) stateLabel = brand.dim("(not configured)");
-      else stateLabel = brand.water("(configured)");
+      else stateLabel = brand.accent("(configured)");
       return {
         value: `agent:${s.adapter.name}`,
-        label: `${icon} ${s.adapter.displayName} ${stateLabel}`,
+        label: `${s.adapter.displayName} ${stateLabel}`,
         hint: s.adapter.docsUrl,
       };
     });

@@ -23,7 +23,7 @@ export async function logoutCommand(opts: LogoutOptions): Promise<void> {
       return;
     }
     await writeConfig({ ...cfg, keys: {}, defaultKey: "default" });
-    console.log(brand.water("✓ Logged out of all slots."));
+    console.log(brand.accent("✓ Logged out of all slots."));
     return;
   }
 
@@ -32,5 +32,5 @@ export async function logoutCommand(opts: LogoutOptions): Promise<void> {
     return;
   }
   await deleteSlot(opts.key);
-  console.log(brand.water(`✓ Logged out of slot "${opts.key}".`));
+  console.log(brand.accent(`✓ Logged out of slot "${opts.key}".`));
 }

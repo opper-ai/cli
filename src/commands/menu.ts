@@ -29,16 +29,23 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
       getSlot(opts.key),
     ]);
 
-    const options: Array<{ value: string; label: string; hint?: string }> = [];
+    const options: Array<{
+      value: string;
+      label: string;
+      hint?: string;
+    }> = [];
 
-    // Quick-launch shortcuts: only configured launchable agents.
-    for (const s of statuses) {
-      if (!isLaunchable(s.adapter)) continue;
-      if (!s.installed || !s.configured) continue;
+    // Quick-launch shortcuts for any agent already wired through Opper.
+    // Prefix with ▸ and brighten the name so they pop visually as
+    // "configured-agent shortcuts" without needing a separator row.
+    const launchable = statuses.filter(
+      (s) => isLaunchable(s.adapter) && s.installed && s.configured,
+    );
+    for (const s of launchable) {
       options.push({
         value: `launch:${s.adapter.name}`,
-        label: `Launch ${s.adapter.displayName}`,
-        hint: "Route inference through Opper",
+        label: `▸ ${s.adapter.displayName}`,
+        hint: "configured agent — launches with Opper as its model provider",
       });
     }
 
@@ -80,7 +87,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     }
     if (typeof choice !== "string") continue;
     if (choice === "quit") {
-      outro(brand.purple("Bye."));
+      outro(brand.accent("Bye."));
       return;
     }
 

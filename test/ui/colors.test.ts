@@ -15,14 +15,14 @@ describe("brand colors", () => {
   });
 
   it("wraps text in ANSI escape codes by default", () => {
-    const s = brand.purple("hi");
-    expect(s).toMatch(/\x1b\[38;2;60;60;175m/);
+    const s = brand.accent("hi");
+    expect(s).toMatch(/\x1b\[38;2;245;191;165m/);
     expect(s).toContain("hi");
     expect(s).toMatch(/\x1b\[0m$/);
   });
 
   it("returns plain text when NO_COLOR is set", () => {
     process.env.NO_COLOR = "1";
-    expect(brand.purple("hi")).toBe("hi");
+    expect(brand.accent("hi")).toBe("hi");
   });
 });

@@ -85,5 +85,5 @@ export async function tracesDeleteCommand(
   const ctx = await resolveApiContext(opts.key);
   const api = new OpperApi(ctx);
   await api.del(`/v3/traces/${encodeURIComponent(opts.id)}`);
-  console.log(brand.water(`✓ Deleted trace "${opts.id}".`));
+  console.log(brand.accent(`✓ Deleted trace "${opts.id}".`));
 }

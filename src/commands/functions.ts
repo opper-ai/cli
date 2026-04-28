@@ -70,5 +70,5 @@ export async function functionsDeleteCommand(
   const ctx = await resolveApiContext(opts.key);
   const api = new OpperApi(ctx);
   await api.del(`/v3/functions/${encodeURIComponent(opts.name)}`);
-  console.log(brand.water(`✓ Deleted function "${opts.name}".`));
+  console.log(brand.accent(`✓ Deleted function "${opts.name}".`));
 }

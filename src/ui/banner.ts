@@ -13,16 +13,17 @@ const LOGO = [
   " ╚═════╝ ╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝",
 ];
 
-const TAGLINE = "  the unified Opper CLI";
+const TAGLINE = "the unified Opper CLI";
+const INDENT = "    ";
 
 export function printBanner(version?: string): void {
   if (!process.stdout.isTTY) return;
   process.stdout.write("\n");
   for (const line of LOGO) {
     process.stdout.write(
-      gradient(line, COTTON_CANDY.start, COTTON_CANDY.end) + "\n",
+      INDENT + gradient(line, COTTON_CANDY.start, COTTON_CANDY.end) + "\n",
     );
   }
   const versionSuffix = version ? `  ${brand.dim(`v${version}`)}` : "";
-  process.stdout.write(brand.water(TAGLINE) + versionSuffix + "\n\n");
+  process.stdout.write(INDENT + brand.accent(TAGLINE) + versionSuffix + "\n\n");
 }
