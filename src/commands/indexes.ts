@@ -90,7 +90,7 @@ export async function indexesCreateCommand(
   const body: Record<string, unknown> = { name: opts.name };
   if (opts.embeddingModel) body.embedding_model = opts.embeddingModel;
   const created = await api.post<GetResponse>("/v2/knowledge", body);
-  console.log(brand.purple(`✓ Created index "${created.name}" (${created.id}).`));
+  console.log(brand.water(`✓ Created index "${created.name}" (${created.id}).`));
 }
 
 export async function indexesDeleteCommand(
@@ -102,7 +102,7 @@ export async function indexesDeleteCommand(
     `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
   );
   await api.del(`/v2/knowledge/${encodeURIComponent(kb.id)}`);
-  console.log(brand.purple(`✓ Deleted index "${opts.name}".`));
+  console.log(brand.water(`✓ Deleted index "${opts.name}".`));
 }
 
 export interface IndexesQueryOptions {
@@ -180,5 +180,5 @@ export async function indexesAddCommand(
     }
   }
   await api.post(`/v2/knowledge/${encodeURIComponent(kb.id)}/add`, body);
-  console.log(brand.purple(`✓ Added document to "${opts.name}".`));
+  console.log(brand.water(`✓ Added document to "${opts.name}".`));
 }

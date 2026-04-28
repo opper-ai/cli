@@ -65,10 +65,10 @@ export async function agentsListCommand(): Promise<void> {
 
   for (const r of rows) {
     const state = r.installed
-      ? brand.purple(stateLabel(r).padEnd(w.state))
+      ? brand.water(stateLabel(r).padEnd(w.state))
       : brand.dim(stateLabel(r).padEnd(w.state));
     const config = r.configured
-      ? brand.purple(configLabel(r).padEnd(w.config))
+      ? brand.water(configLabel(r).padEnd(w.config))
       : brand.dim(configLabel(r).padEnd(w.config));
     const command = r.installed && r.configured
       ? launchLabel(r)

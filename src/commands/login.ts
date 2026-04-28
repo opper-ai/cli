@@ -43,7 +43,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       onPrompt(p) {
         const url = p.verificationUriComplete ?? p.verificationUri;
         note(
-          `Opening ${brand.purple(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.water(p.userCode)}`,
+          `Opening ${brand.water(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.water(p.userCode)}`,
           "Authorize the CLI",
         );
         openBrowser(url);

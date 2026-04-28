@@ -19,7 +19,7 @@ export async function agentsMenu(opts: MenuOptions): Promise<void> {
       let stateLabel: string;
       if (!s.installed) stateLabel = brand.dim("(not installed)");
       else if (!s.configured) stateLabel = brand.dim("(not configured)");
-      else stateLabel = brand.purple("(configured)");
+      else stateLabel = brand.water("(configured)");
       return {
         value: `agent:${s.adapter.name}`,
         label: `${icon} ${s.adapter.displayName} ${stateLabel}`,

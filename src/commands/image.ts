@@ -72,5 +72,5 @@ export async function imageGenerateCommand(
   const target = opts.output ?? join(process.cwd(), timestampName());
   const bytes = Buffer.from(b64, "base64");
   await writeFile(target, bytes);
-  console.log(brand.purple(`✓ Saved image to ${target}`));
+  console.log(brand.water(`✓ Saved image to ${target}`));
 }

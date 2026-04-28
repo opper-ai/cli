@@ -33,7 +33,7 @@ export async function configAddCommand(opts: ConfigAddOptions): Promise<void> {
     source: "manual",
     obtainedAt: new Date().toISOString(),
   });
-  console.log(brand.purple(`✓ Stored API key for slot "${opts.name}".`));
+  console.log(brand.water(`✓ Stored API key for slot "${opts.name}".`));
 }
 
 export async function configListCommand(): Promise<void> {
@@ -43,7 +43,7 @@ export async function configListCommand(): Promise<void> {
     return;
   }
   for (const [name, slot] of Object.entries(cfg.keys)) {
-    const marker = name === cfg.defaultKey ? brand.purple("*") : " ";
+    const marker = name === cfg.defaultKey ? brand.water("*") : " ";
     console.log(`${marker} ${name.padEnd(14)} ${fingerprint(slot.apiKey)}`);
   }
 }
@@ -64,5 +64,5 @@ export async function configRemoveCommand(
   opts: ConfigRemoveOptions,
 ): Promise<void> {
   await deleteSlot(opts.name);
-  console.log(brand.purple(`✓ Removed slot "${opts.name}".`));
+  console.log(brand.water(`✓ Removed slot "${opts.name}".`));
 }
