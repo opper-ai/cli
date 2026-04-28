@@ -34,16 +34,52 @@ const GROUPS: HelpGroup[] = [
       "image",
     ],
   },
+  {
+    title: "Misc",
+    commands: ["version"],
+  },
 ];
 
+/**
+ * Replace commander's flat `Commands:` block with a per-domain grouped one.
+ * Each command's term and description are rendered the same way commander
+ * would render them, so columns line up with the rest of the help output.
+ */
 export function addGroupedHelpText(program: Command): void {
-  const titleWidth = Math.max(...GROUPS.map((g) => g.title.length));
-  const lines = GROUPS.map((g) => {
-    const padding = " ".repeat(titleWidth - g.title.length + 2);
-    return `  ${g.title}${padding}${g.commands.join(", ")}`;
-  });
-  program.addHelpText(
-    "after",
-    `\nCommand groups:\n${lines.join("\n")}\n\nRun \`opper <command> --help\` for details on any command.`,
+  // Suppress the default flat command list — we render a grouped one below.
+  program.configureHelp({ visibleCommands: () => [] });
+
+  program.addHelpText("after", () => renderGroupedCommands(program));
+}
+
+function renderGroupedCommands(program: Command): string {
+  const helper = program.createHelp();
+  const byName = new Map<string, Command>();
+  for (const cmd of program.commands) byName.set(cmd.name(), cmd);
+
+  const visibleCmds = GROUPS.flatMap((g) =>
+    g.commands.map((n) => byName.get(n)).filter((c): c is Command => !!c),
   );
+  if (visibleCmds.length === 0) return "";
+
+  const termWidth = Math.max(
+    ...visibleCmds.map((c) => helper.subcommandTerm(c).length),
+  );
+
+  const lines: string[] = ["", "Commands:"];
+  for (const group of GROUPS) {
+    const cmds = group.commands
+      .map((n) => byName.get(n))
+      .filter((c): c is Command => !!c);
+    if (cmds.length === 0) continue;
+
+    lines.push("");
+    lines.push(`  ${group.title}`);
+    for (const cmd of cmds) {
+      const term = helper.subcommandTerm(cmd).padEnd(termWidth);
+      const desc = helper.subcommandDescription(cmd);
+      lines.push(`    ${term}  ${desc}`);
+    }
+  }
+  return lines.join("\n");
 }
