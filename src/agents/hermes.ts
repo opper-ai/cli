@@ -76,13 +76,16 @@ async function writeRoutingToConfig(
 ): Promise<void> {
   const raw = await readFile(path, "utf8");
   const parsed = (parse(raw) as Record<string, unknown>) ?? {};
-  // Hermes recognises "openai" / "anthropic" providers. The Opper "responses"
-  // compat shape isn't a Hermes provider — callers today only pass "openai".
+  // Hermes' provider field is a fixed enum (openrouter, anthropic, nous-portal,
+  // …) — none of those are Opper. The "custom" provider drives an
+  // OpenAI-shaped HTTP client at an arbitrary base_url, which is what we
+  // need. Field names (`default` for the model id, not `model`) match what
+  // Hermes' "Custom endpoint" wizard writes.
   parsed.model = {
-    provider: routing.compatShape === "openai" ? "openai" : routing.compatShape,
-    model: routing.model,
+    provider: "custom",
     base_url: routing.baseUrl,
     api_key: routing.apiKey,
+    default: routing.model,
   };
   const tmp = `${path}.tmp.${process.pid}`;
   await writeFile(tmp, stringify(parsed), "utf8");

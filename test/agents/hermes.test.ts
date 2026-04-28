@@ -147,10 +147,10 @@ describe("hermes adapter — spawn (snapshot/write/run/restore)", () => {
     // During the run, hermes saw the rewritten model block plus the
     // untouched tools block.
     expect(observed!.model).toEqual({
-      provider: "openai",
-      model: "anthropic/claude-opus-4.7",
+      provider: "custom",
       base_url: "https://api.opper.ai/v3/openai",
       api_key: "op_live_test",
+      default: "anthropic/claude-opus-4.7",
     });
     expect(observed!.tools).toEqual({ enabled: ["search", "shell"] });
 
