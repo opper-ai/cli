@@ -1,11 +1,10 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, rename, chmod, rm } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
-import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
+import { opperHome } from "../auth/paths.js";
 import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
@@ -13,8 +12,17 @@ import type {
   OpperRouting,
 } from "./types.js";
 
+/**
+ * Opper-managed HERMES_HOME root. Each `opper launch hermes` runs against
+ * this isolated directory: the user's main `~/.hermes/` is never read or
+ * mutated. Skills, sessions, and caches persist across launches inside it.
+ */
+function hermesHome(): string {
+  return join(opperHome(), "hermes-home");
+}
+
 function hermesConfigPath(): string {
-  return join(homedir(), ".hermes", "config.yaml");
+  return join(hermesHome(), "config.yaml");
 }
 
 async function detect(): Promise<DetectResult> {
@@ -66,72 +74,49 @@ async function configure(): Promise<void> {
 }
 
 async function unconfigure(): Promise<void> {
-  // Hermes has no persistent Opper bits to remove (launch does
-  // snapshot → write → restore on every run).
+  // Nothing persistent in the user's environment — the Opper-managed
+  // HERMES_HOME is only touched at launch time.
 }
 
-async function writeRoutingToConfig(
-  path: string,
-  routing: OpperRouting,
-): Promise<void> {
-  const raw = await readFile(path, "utf8");
-  const parsed = (parse(raw) as Record<string, unknown>) ?? {};
-  // Hermes' provider field is a fixed enum (openrouter, anthropic, nous-portal,
-  // …) — none of those are Opper. The "custom" provider drives an
-  // OpenAI-shaped HTTP client at an arbitrary base_url, which is what we
-  // need. Field names (`default` for the model id, not `model`) match what
-  // Hermes' "Custom endpoint" wizard writes.
-  parsed.model = {
+/**
+ * Writes the minimum config Hermes needs to talk to Opper. Hermes (since
+ * v0.5+) refuses to honour `OPENAI_BASE_URL` from the environment — the
+ * base URL must live in config.yaml — so we bake it into our isolated
+ * HERMES_HOME before each launch. The api key is passed via OPENAI_API_KEY
+ * env at spawn time so the secret never lands on disk.
+ */
+async function writeOpperConfig(routing: OpperRouting): Promise<void> {
+  const home = hermesHome();
+  await mkdir(home, { recursive: true });
+
+  const path = hermesConfigPath();
+  // Preserve any non-model settings the user might have customised in this
+  // Opper-managed home (toolsets, agent preferences, …). Only the model
+  // block is owned by us.
+  const existing: Record<string, unknown> = existsSync(path)
+    ? ((parse(await readFile(path, "utf8")) as Record<string, unknown>) ?? {})
+    : {};
+  existing.model = {
     provider: "custom",
     base_url: routing.baseUrl,
-    api_key: routing.apiKey,
     default: routing.model,
   };
-  const tmp = `${path}.tmp.${process.pid}`;
-  await writeFile(tmp, stringify(parsed), "utf8");
-  try {
-    await chmod(tmp, 0o600);
-    await rename(tmp, path);
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
+
+  await writeFile(path, stringify(existing), { mode: 0o600 });
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  const path = hermesConfigPath();
-  if (!existsSync(path)) {
-    throw new OpperError(
-      "AGENT_CONFIG_CONFLICT",
-      `Hermes config not found at ${path}`,
-      "Run `hermes` once to initialise a config, then try again.",
-    );
-  }
+  await writeOpperConfig(routing);
 
-  const handle = await takeSnapshot("hermes", path);
-  await rotateBackups("hermes", 20);
-
-  let spawnError: unknown;
-  let exitCode: number;
-  try {
-    await writeRoutingToConfig(path, routing);
-    const result = run("hermes", args, { inherit: true });
-    exitCode = result.code;
-  } catch (err) {
-    spawnError = err;
-    throw err;
-  } finally {
-    try {
-      await restoreSnapshot(handle, path);
-    } catch (restoreErr) {
-      console.error(
-        `\nFailed to restore Hermes config. Recover manually with:\n  cp "${handle.backupPath}" "${path}"`,
-      );
-      if (!spawnError) throw restoreErr;
-    }
-  }
-
-  return exitCode!;
+  const result = run("hermes", args, {
+    inherit: true,
+    env: {
+      ...process.env,
+      HERMES_HOME: hermesHome(),
+      OPENAI_API_KEY: routing.apiKey,
+    },
+  });
+  return result.code;
 }
 
 export const hermes: AgentAdapter = {
