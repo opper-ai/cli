@@ -2,8 +2,12 @@ import { describe, it, expect, vi } from "vitest";
 
 const mocks = {
   isSkillsInstalled: vi.fn(),
-  installSkills: vi.fn(),
-  updateSkills: vi.fn(),
+  installSkills: vi.fn().mockResolvedValue(["claude"]),
+  updateSkills: vi.fn().mockResolvedValue(["claude"]),
+  uninstallSkills: vi.fn().mockResolvedValue(["claude"]),
+  installedTargets: vi.fn().mockReturnValue([
+    { target: "claude", dir: "/tmp/.claude/skills", installed: true },
+  ]),
 };
 
 vi.mock("../../src/setup/skills.js", () => mocks);
