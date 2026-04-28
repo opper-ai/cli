@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import updateNotifier from "update-notifier";
 import { OpperError, EXIT_CODES } from "./errors.js";
 import { printError } from "./ui/print.js";
 import { menuCommand } from "./commands/menu.js";
@@ -17,7 +18,15 @@ import { addGroupedHelpText } from "./cli/help.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
   readFileSync(resolve(__dirname, "..", "package.json"), "utf8"),
-) as { version: string };
+) as { name: string; version: string };
+
+// Once-a-day background check against npm. Notifies on the *next* run after
+// a new version is found. Auto-skips in CI and honours NO_UPDATE_NOTIFIER /
+// --no-update-notifier upstream.
+updateNotifier({
+  pkg: { name: pkg.name, version: pkg.version },
+  updateCheckInterval: 1000 * 60 * 60 * 24,
+}).notify({ defer: true });
 
 const program = new Command();
 
