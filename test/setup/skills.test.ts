@@ -55,7 +55,23 @@ describe("skills (Claude target only)", () => {
 
   it("installSkills returns the targets it installed to", async () => {
     const result = await installSkills();
-    expect(result).toEqual(["claude"]);
+    expect(result.targets).toEqual(["claude"]);
+    expect(result.skills.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it("installSkills accepts a subset of skill names", async () => {
+    const result = await installSkills(["opper-cli", "opper-api"]);
+    expect(result.skills.sort()).toEqual(["opper-api", "opper-cli"]);
+    expect(existsSync(join(claudeHome, "opper-cli", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(claudeHome, "opper-api", "SKILL.md"))).toBe(true);
+    // The non-selected skills are not installed.
+    expect(existsSync(join(claudeHome, "opper-node-sdk"))).toBe(false);
+  });
+
+  it("installSkills rejects unknown skill names", async () => {
+    await expect(installSkills(["nonsense"])).rejects.toMatchObject({
+      code: "API_ERROR",
+    });
   });
 
   it("isSkillsInstalled returns true after install", async () => {
@@ -114,8 +130,8 @@ describe("skills (Codex target)", () => {
   });
 
   it("installs to both claude and codex when codex home exists", async () => {
-    const targets = await installSkills();
-    expect(targets.sort()).toEqual(["claude", "codex"]);
+    const result = await installSkills();
+    expect(result.targets.sort()).toEqual(["claude", "codex"]);
 
     expect(existsSync(join(claudeHome, "opper-cli", "SKILL.md"))).toBe(true);
     expect(existsSync(join(codexHome, "skills", "opper-cli", "SKILL.md"))).toBe(true);
@@ -157,13 +173,28 @@ describe("skills (Codex target)", () => {
     expect(cfg).not.toContain("# >>> opper-cli-skills >>>");
   });
 
-  it("installedTargets reports both targets when codex is live", async () => {
+  it("installedTargets reports per-skill state across each target", async () => {
     const before = installedTargets();
     expect(before.map((t) => t.target).sort()).toEqual(["claude", "codex"]);
-    expect(before.every((t) => !t.installed)).toBe(true);
+    expect(before.every((t) => t.installed.length === 0)).toBe(true);
 
     await installSkills();
     const after = installedTargets();
-    expect(after.every((t) => t.installed)).toBe(true);
+    for (const status of after) {
+      expect(status.installed).toContain("opper-cli");
+      expect(status.installed.length).toBeGreaterThanOrEqual(6);
+    }
+  });
+
+  it("uninstallSkills removes only the named subset and re-syncs the codex registry", async () => {
+    await installSkills();
+    await uninstallSkills(["opper-api"]);
+
+    expect(existsSync(join(codexHome, "skills", "opper-api"))).toBe(false);
+    expect(existsSync(join(codexHome, "skills", "opper-cli"))).toBe(true);
+
+    const cfg = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(cfg).not.toContain("opper-api/SKILL.md");
+    expect(cfg).toContain("opper-cli/SKILL.md");
   });
 });

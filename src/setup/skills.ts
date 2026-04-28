@@ -1,5 +1,5 @@
-import { cp, mkdir, rm, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { cp, mkdir, rm } from "node:fs/promises";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,16 +10,6 @@ import {
   registerCodexSkills,
   unregisterCodexSkills,
 } from "./codex-skills.js";
-
-// Skills bundled with this CLI. Mirrors `<cli>/data/skills/<name>/`.
-const SKILL_NAMES = [
-  "opper-api",
-  "opper-cli",
-  "opper-node-agents",
-  "opper-node-sdk",
-  "opper-python-agents",
-  "opper-python-sdk",
-] as const;
 
 export type SkillTargetName = "claude" | "codex";
 
@@ -34,7 +24,12 @@ interface SkillTarget {
    * once, so we don't materialise `~/.codex/` from nothing.
    */
   isLive(): boolean;
-  /** Optional: register/unregister skills inside the target's own config. */
+  /**
+   * Optional: rewrite the target's own config so the on-disk skills are
+   * actually enabled. Called with the full list of currently-installed
+   * Opper skill names after every mutation, so the registry never drifts
+   * out of sync with the filesystem.
+   */
   register?(skillNames: readonly string[]): Promise<void>;
   unregister?(): Promise<void>;
 }
@@ -45,6 +40,22 @@ function bundledSkillsDir(): string {
   // two levels deep from the repo root.
   const here = dirname(fileURLToPath(import.meta.url));
   return join(here, "..", "..", "data", "skills");
+}
+
+/** All skill folders shipped inside `data/skills/`. Discovered, not hard-coded. */
+export function bundledSkills(): string[] {
+  const dir = bundledSkillsDir();
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => {
+      try {
+        return statSync(join(dir, name)).isDirectory()
+          && existsSync(join(dir, name, "SKILL.md"));
+      } catch {
+        return false;
+      }
+    })
+    .sort();
 }
 
 function claudeSkillsDir(): string {
@@ -72,50 +83,68 @@ function liveTargets(): SkillTarget[] {
   return [CLAUDE_TARGET, CODEX_TARGET].filter((t) => t.isLive());
 }
 
+/** Names of bundled skills currently present in the given target dir. */
+function installedSkillsIn(target: SkillTarget, bundled: readonly string[]): string[] {
+  const dir = target.dir();
+  if (!existsSync(dir)) return [];
+  return bundled.filter((name) => existsSync(join(dir, name, "SKILL.md")));
+}
+
 export function isSkillsInstalled(): boolean {
+  const bundled = bundledSkills();
   for (const target of liveTargets()) {
-    const dir = target.dir();
-    if (!existsSync(dir)) continue;
-    if (SKILL_NAMES.some((name) => existsSync(join(dir, name)))) return true;
+    if (installedSkillsIn(target, bundled).length > 0) return true;
   }
   return false;
 }
 
-/**
- * One entry per live target so callers can report exactly where the
- * skills landed (or didn't).
- */
-export function installedTargets(): Array<{
+export interface TargetStatus {
   target: SkillTargetName;
   dir: string;
-  installed: boolean;
-}> {
-  return liveTargets().map((target) => {
-    const dir = target.dir();
-    const installed =
-      existsSync(dir) &&
-      SKILL_NAMES.some((name) => existsSync(join(dir, name)));
-    return { target: target.name, dir, installed };
-  });
+  installed: string[];
 }
 
-async function installToTarget(target: SkillTarget): Promise<void> {
-  const src = bundledSkillsDir();
-  const dest = target.dir();
-  await mkdir(dest, { recursive: true });
+/** One entry per live target, listing the bundled skills present in each. */
+export function installedTargets(): TargetStatus[] {
+  const bundled = bundledSkills();
+  return liveTargets().map((target) => ({
+    target: target.name,
+    dir: target.dir(),
+    installed: installedSkillsIn(target, bundled),
+  }));
+}
 
-  for (const name of SKILL_NAMES) {
-    const srcPath = join(src, name);
-    if (!existsSync(srcPath)) continue;
-    const destPath = join(dest, name);
-    await rm(destPath, { recursive: true, force: true });
-    await cp(srcPath, destPath, { recursive: true });
+function validateNames(names: readonly string[], bundled: readonly string[]): void {
+  const unknown = names.filter((n) => !bundled.includes(n));
+  if (unknown.length > 0) {
+    throw new OpperError(
+      "API_ERROR",
+      `Unknown skill(s): ${unknown.join(", ")}`,
+      `Available: ${bundled.join(", ")}`,
+    );
   }
-
-  if (target.register) await target.register(SKILL_NAMES);
 }
 
-export async function installSkills(): Promise<SkillTargetName[]> {
+async function syncRegistry(target: SkillTarget, bundled: readonly string[]): Promise<void> {
+  if (!target.register) return;
+  const installed = installedSkillsIn(target, bundled);
+  if (installed.length === 0) {
+    if (target.unregister) await target.unregister();
+  } else {
+    await target.register(installed);
+  }
+}
+
+export interface SkillsResult {
+  targets: SkillTargetName[];
+  skills: string[];
+}
+
+/**
+ * Install a subset (or all) of the bundled skills into every live target.
+ * Pass `names` to pick specific skills; omit to install everything.
+ */
+export async function installSkills(names?: readonly string[]): Promise<SkillsResult> {
   const src = bundledSkillsDir();
   if (!existsSync(src)) {
     throw new OpperError(
@@ -125,39 +154,80 @@ export async function installSkills(): Promise<SkillTargetName[]> {
     );
   }
 
+  const bundled = bundledSkills();
+  if (bundled.length === 0) {
+    throw new OpperError(
+      "API_ERROR",
+      "No bundled skills found",
+      "Reinstall the CLI from npm.",
+    );
+  }
+
+  const toInstall = names && names.length > 0 ? [...names] : bundled;
+  validateNames(toInstall, bundled);
+
   const targets = liveTargets();
-  for (const target of targets) await installToTarget(target);
-  return targets.map((t) => t.name);
+  for (const target of targets) {
+    const dest = target.dir();
+    await mkdir(dest, { recursive: true });
+
+    for (const name of toInstall) {
+      const srcPath = join(src, name);
+      const destPath = join(dest, name);
+      await rm(destPath, { recursive: true, force: true });
+      await cp(srcPath, destPath, { recursive: true });
+    }
+
+    await syncRegistry(target, bundled);
+  }
+
+  return { targets: targets.map((t) => t.name), skills: toInstall };
 }
 
-export async function updateSkills(): Promise<SkillTargetName[]> {
-  // Idempotent copy/overwrite — same as install.
-  return installSkills();
+export async function updateSkills(names?: readonly string[]): Promise<SkillsResult> {
+  // If no names given, refresh everything currently installed (across any
+  // target) — preserving the user's selection when they originally picked
+  // a subset. Falls back to all bundled when nothing is installed yet.
+  if (!names || names.length === 0) {
+    const bundled = bundledSkills();
+    const installedAcross = new Set<string>();
+    for (const target of liveTargets()) {
+      for (const name of installedSkillsIn(target, bundled)) {
+        installedAcross.add(name);
+      }
+    }
+    const refresh = installedAcross.size > 0 ? [...installedAcross] : bundled;
+    return installSkills(refresh);
+  }
+  return installSkills(names);
 }
 
 export async function listInstalledSkills(): Promise<string[]> {
-  // Use the first live target whose directory exists to enumerate.
-  // (Both targets receive the same skill set, so reporting one is enough.)
+  const bundled = bundledSkills();
+  const seen = new Set<string>();
   for (const target of liveTargets()) {
-    const dir = target.dir();
-    if (!existsSync(dir)) continue;
-    const entries = await readdir(dir);
-    return entries.filter((e) => (SKILL_NAMES as readonly string[]).includes(e));
+    for (const name of installedSkillsIn(target, bundled)) seen.add(name);
   }
-  return [];
+  return [...seen].sort();
 }
 
-export async function uninstallSkills(): Promise<SkillTargetName[]> {
+export async function uninstallSkills(names?: readonly string[]): Promise<SkillsResult> {
+  const bundled = bundledSkills();
+  const toRemove = names && names.length > 0
+    ? [...names]
+    : await listInstalledSkills();
+  validateNames(toRemove, bundled);
+
   const targets = liveTargets();
   for (const target of targets) {
     const dir = target.dir();
-    for (const name of SKILL_NAMES) {
+    for (const name of toRemove) {
       const path = join(dir, name);
       if (existsSync(path)) {
         await rm(path, { recursive: true, force: true });
       }
     }
-    if (target.unregister) await target.unregister();
+    await syncRegistry(target, bundled);
   }
-  return targets.map((t) => t.name);
+  return { targets: targets.map((t) => t.name), skills: toRemove };
 }
