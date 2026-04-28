@@ -12,6 +12,7 @@ import registerSkills from "./cli/skills.js";
 import registerEditors from "./cli/editors.js";
 import registerAgents from "./cli/agents.js";
 import registerPlatform from "./cli/platform.js";
+import { addGroupedHelpText } from "./cli/help.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -62,6 +63,8 @@ const registrars: RegisterFn[] = [
   registerPlatform,
 ];
 for (const register of registrars) register(program, ctx);
+
+addGroupedHelpText(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   printError(err);
