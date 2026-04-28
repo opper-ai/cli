@@ -18,7 +18,7 @@ describe("modelsListCommand", () => {
     await setSlot("default", { apiKey: "k" });
     getMock.mockResolvedValue({
       models: [
-        { name: "Claude Opus 4.7", id: "anthropic/claude-opus-4.7", context_window: 200000 },
+        { name: "Claude Opus 4.7", id: "anthropic/claude-opus-4-7", context_window: 200000 },
         { name: "GPT-4o", id: "openai/gpt-4o", context_window: 128000 },
       ],
     });
@@ -26,7 +26,7 @@ describe("modelsListCommand", () => {
     try {
       await modelsListCommand({ key: "default" });
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(out).toContain("anthropic/claude-opus-4.7");
+      expect(out).toContain("anthropic/claude-opus-4-7");
       expect(out).toContain("openai/gpt-4o");
       expect(getMock).toHaveBeenCalledWith("/v3/models");
     } finally {
@@ -38,7 +38,7 @@ describe("modelsListCommand", () => {
     await setSlot("default", { apiKey: "k" });
     getMock.mockResolvedValue({
       models: [
-        { name: "Claude Opus", id: "anthropic/claude-opus-4.7", context_window: 1 },
+        { name: "Claude Opus", id: "anthropic/claude-opus-4-7", context_window: 1 },
         { name: "GPT-4o", id: "openai/gpt-4o", context_window: 1 },
       ],
     });
@@ -46,7 +46,7 @@ describe("modelsListCommand", () => {
     try {
       await modelsListCommand({ key: "default", filter: "claude" });
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(out).toContain("anthropic/claude-opus-4.7");
+      expect(out).toContain("anthropic/claude-opus-4-7");
       expect(out).not.toContain("openai/gpt-4o");
     } finally {
       log.mockRestore();

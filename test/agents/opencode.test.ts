@@ -21,7 +21,7 @@ const { opencode } = await import("../../src/agents/opencode.js");
 const ROUTING = {
   baseUrl: "https://api.opper.ai/v3/compat",
   apiKey: "op_live_run",
-  model: "anthropic/claude-opus-4.7",
+  model: "anthropic/claude-opus-4-7",
   compatShape: "openai" as const,
 };
 

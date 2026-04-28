@@ -9,7 +9,7 @@ Manage Opper functions from the command line.
 opper call extract_entities "Extract named entities" "Tim Cook announced Apple's new office in Austin."
 
 # With a model override
-opper call --model anthropic/claude-sonnet-4.6 extract_entities "Extract named entities" "Some text..."
+opper call --model anthropic/claude-sonnet-4-6 extract_entities "Extract named entities" "Some text..."
 
 # Pipe input from stdin
 cat document.txt | opper call summarize "Summarize this document"

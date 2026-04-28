@@ -52,7 +52,7 @@ Execute an Opper function from the terminal:
 opper call myfunction "respond in kind" "what is 2+2?"
 
 # With a specific model
-opper call --model anthropic/claude-sonnet-4.6 myfunction "summarize this" "long text..."
+opper call --model anthropic/claude-sonnet-4-6 myfunction "summarize this" "long text..."
 
 # Pipe input from stdin
 echo "what is 2+2?" | opper call myfunction "respond in kind"
@@ -112,7 +112,7 @@ opper image generate "logo concept" -o ./out/logo.png
 opper image generate "icon" --base64 > img.b64
 
 # Override the model
-opper image generate "..." -m gcp/imagen-4.0-fast-generate-001-eu
+opper image generate "..." -m vertexai/imagen-4.0-fast-generate-001-eu
 ```
 
 ## Usage Tracking
@@ -137,7 +137,6 @@ Route a local AI editor through Opper:
 ```bash
 opper editors list
 opper editors opencode --overwrite
-opper editors continue --overwrite
 ```
 
 Launch an agent with inference routed through Opper:
@@ -145,7 +144,7 @@ Launch an agent with inference routed through Opper:
 ```bash
 opper agents list
 opper launch hermes
-opper launch claude-code -- --some-flag passed through
+opper launch claude -- --some-flag passed through
 ```
 
 Anything after the agent name is forwarded to the agent's CLI verbatim.
@@ -165,7 +164,7 @@ Anything after the agent name is forwarded to the agent's CLI verbatim.
 
 - **Missing config**: Run `opper login` (or `opper config add default <key>`) before using API-bound commands.
 - **Wrong argument order for `call`**: It's `opper call <function> <instructions> <input>`, not `opper call <instructions> <function> <input>`.
-- **Model identifiers**: Use LiteLLM format (`azure/deployment-name`, `anthropic/claude-sonnet-4.6`), not raw model names.
+- **Model identifiers**: Use LiteLLM format (`azure/deployment-name`, `anthropic/claude-sonnet-4-6`), not raw model names.
 - **`indexes add` content**: Content is a positional argument, not a `--content` flag. Pass `-` to read from stdin.
 
 ## Additional Resources

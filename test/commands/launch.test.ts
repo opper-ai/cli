@@ -86,7 +86,7 @@ describe("launchCommand", () => {
     const code = await launchCommand({
       agent: "hermes",
       key: "default",
-      model: "anthropic/claude-opus-4.7",
+      model: "anthropic/claude-opus-4-7",
       passthrough: ["chat", "hi"],
     });
 
@@ -95,7 +95,7 @@ describe("launchCommand", () => {
       ["chat", "hi"],
       expect.objectContaining({
         apiKey: "op_live_happy",
-        model: "anthropic/claude-opus-4.7",
+        model: "anthropic/claude-opus-4-7",
         compatShape: "openai",
       }),
     );

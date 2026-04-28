@@ -58,11 +58,11 @@ describe("callCommand", () => {
         instructions: "i",
         input: "in",
         key: "default",
-        model: "anthropic/claude-opus-4.7",
+        model: "anthropic/claude-opus-4-7",
       });
       expect(postMock).toHaveBeenCalledWith(
         "/v3/call",
-        expect.objectContaining({ model: "anthropic/claude-opus-4.7" }),
+        expect.objectContaining({ model: "anthropic/claude-opus-4-7" }),
       );
     } finally {
       log.mockRestore();

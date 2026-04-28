@@ -137,7 +137,7 @@ describe("codex adapter", () => {
     const code = await codex.spawn!(["chat"], {
       baseUrl: "ignored",
       apiKey: "op_live_run",
-      model: "anthropic/claude-opus-4.7",
+      model: "anthropic/claude-opus-4-7",
       compatShape: "openai",
     });
     expect(code).toBe(0);
