@@ -38,6 +38,11 @@ vi.mock("../../src/auth/device-flow.js", () => ({
   runDeviceFlow: vi.fn(),
 }));
 
+// Mock the browser auto-open so tests don't actually spawn `open`/`xdg-open`.
+vi.mock("../../src/util/open-browser.js", () => ({
+  openBrowser: vi.fn(),
+}));
+
 const { runDeviceFlow } = await import("../../src/auth/device-flow.js");
 const { loginCommand } = await import("../../src/commands/login.js");
 
