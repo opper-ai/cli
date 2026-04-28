@@ -81,7 +81,6 @@ vi.mock("../../src/commands/skills.js", () => ({
 vi.mock("../../src/commands/editors.js", () => ({
   editorsListCommand: editorsListMock,
   editorsOpenCodeCommand: vi.fn(),
-  editorsContinueCommand: vi.fn(),
 }));
 
 const { menuCommand } = await import("../../src/commands/menu.js");

@@ -12,14 +12,14 @@ export interface OpperRouting {
 }
 
 export interface ConfigureOptions {
-  /** API key for adapters that bake the key into their config (e.g. Continue.dev). */
+  /** API key for adapters that bake the key into their config. */
   apiKey?: string;
 }
 
 /**
  * One unified contract for everything we route through Opper — launchable
- * CLI agents (Hermes, OpenCode, Claude Code, Codex), editor integrations
- * (Continue.dev), or anything else.
+ * CLI agents (Hermes, OpenCode, Claude Code, Codex, Pi) and editor-only
+ * integrations.
  *
  * Capabilities are signalled by the *presence* of optional methods:
  *   - `spawn` present → the agent can be launched (`opper launch <name>`).

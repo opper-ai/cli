@@ -60,6 +60,7 @@ opper launch claude          # Anthropic Messages compat → /v3/compat
 opper launch opencode        # OpenAI Chat Completions compat → /v3/compat
 opper launch codex           # OpenAI Responses compat → /v3/compat
 opper launch hermes          # OpenAI Chat Completions compat → /v3/compat
+opper launch pi              # OpenAI Chat Completions compat → /v3/compat
 ```
 
 | Agent | Slug | How Opper plugs in |
@@ -68,7 +69,7 @@ opper launch hermes          # OpenAI Chat Completions compat → /v3/compat
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
 | Codex | `codex` | sentinel-managed `[model_providers.opper]` + `[profiles.opper-opus]` block in `~/.codex/config.toml` |
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
-| Continue.dev | `continue` | configure-only — adds Opper models to `~/.continue/config.yaml` |
+| Pi | `pi` | `opper` provider entry in `~/.pi/agent/models.json` (added/removed idempotently next to your other providers) |
 
 `opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported).
 

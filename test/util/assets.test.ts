@@ -11,7 +11,7 @@ describe("assetPath", () => {
   });
 
   it("returns a path for an arbitrary asset name", () => {
-    const path = assetPath("continue.yaml");
-    expect(path).toMatch(/continue\.yaml$/);
+    const path = assetPath("anything.json");
+    expect(path).toMatch(/anything\.json$/);
   });
 });

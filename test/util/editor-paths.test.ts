@@ -1,10 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import {
-  opencodeConfigPath,
-  continueConfigPath,
-} from "../../src/util/editor-paths.js";
+import { opencodeConfigPath } from "../../src/util/editor-paths.js";
 
 describe("editor paths", () => {
   let prev: string | undefined;
@@ -29,25 +26,10 @@ describe("editor paths", () => {
     );
   });
 
-  it("continue global defaults to ~/.continue/config.yaml", () => {
-    expect(continueConfigPath("global")).toBe(
-      join(homedir(), ".continue", "config.yaml"),
-    );
-  });
-
-  it("continue local defaults to cwd/.continue/config.yaml", () => {
-    expect(continueConfigPath("local")).toBe(
-      join(process.cwd(), ".continue", "config.yaml"),
-    );
-  });
-
-  it("OPPER_EDITOR_HOME overrides the global home for both editors", () => {
+  it("OPPER_EDITOR_HOME overrides the global home", () => {
     process.env.OPPER_EDITOR_HOME = "/tmp/fake";
     expect(opencodeConfigPath("global")).toBe(
       "/tmp/fake/.config/opencode/opencode.json",
-    );
-    expect(continueConfigPath("global")).toBe(
-      "/tmp/fake/.continue/config.yaml",
     );
   });
 });

@@ -1,37 +1,29 @@
 import { describe, it, expect, vi } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
-import { setSlot } from "../../src/auth/config.js";
 
 const mocks = {
   configureOpenCode: vi.fn(),
-  configureContinue: vi.fn(),
 };
 
 vi.mock("../../src/setup/opencode.js", () => ({
   configureOpenCode: mocks.configureOpenCode,
 }));
-vi.mock("../../src/setup/continue.js", () => ({
-  configureContinue: mocks.configureContinue,
-}));
 
-const {
-  editorsListCommand,
-  editorsOpenCodeCommand,
-  editorsContinueCommand,
-} = await import("../../src/commands/editors.js");
+const { editorsListCommand, editorsOpenCodeCommand } = await import(
+  "../../src/commands/editors.js"
+);
 
 useTempOpperHome();
 
 describe("editors commands", () => {
-  it("list prints non-launchable adapters from the registry", async () => {
+  it("list prints a placeholder message when no editor-only adapters are registered", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await editorsListCommand();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      // Continue.dev is the only registered configure-only adapter today;
-      // OpenCode is launchable so it shows up via `opper agents list` instead.
-      expect(out).toContain("Continue.dev");
-      expect(out).not.toContain("OpenCode");
+      // OpenCode is launchable so it shows up under `opper agents list`,
+      // and Continue.dev was removed — list should report empty.
+      expect(out.toLowerCase()).toContain("no editor integrations");
     } finally {
       log.mockRestore();
     }
@@ -51,48 +43,20 @@ describe("editors commands", () => {
     }
   });
 
-  it("continue requires an authenticated slot for the API key", async () => {
-    await expect(
-      editorsContinueCommand({ location: "global", overwrite: false, key: "default" }),
-    ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
-  });
-
-  it("continue passes the slot apiKey to configureContinue", async () => {
-    await setSlot("default", { apiKey: "op_live_xyz" });
-    mocks.configureContinue.mockResolvedValue({
-      path: "/tmp/cfg.yaml",
+  it("opencode forwards --overwrite", async () => {
+    mocks.configureOpenCode.mockResolvedValue({
+      path: "/tmp/opencode.json",
       wrote: true,
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      await editorsContinueCommand({ location: "global", overwrite: false, key: "default" });
-      expect(mocks.configureContinue).toHaveBeenCalledWith({
+      await editorsOpenCodeCommand({ location: "global", overwrite: true });
+      expect(mocks.configureOpenCode).toHaveBeenCalledWith({
         location: "global",
-        apiKey: "op_live_xyz",
+        overwrite: true,
       });
     } finally {
       log.mockRestore();
-    }
-  });
-
-  it("continue falls back to OPPER_API_KEY env when no slot is stored", async () => {
-    const prev = process.env.OPPER_API_KEY;
-    process.env.OPPER_API_KEY = "op_live_env";
-    try {
-      mocks.configureContinue.mockResolvedValue({ path: "/tmp/cfg.yaml", wrote: true });
-      const log = vi.spyOn(console, "log").mockImplementation(() => {});
-      try {
-        await editorsContinueCommand({ location: "global", overwrite: false, key: "default" });
-        expect(mocks.configureContinue).toHaveBeenCalledWith({
-          location: "global",
-          apiKey: "op_live_env",
-        });
-      } finally {
-        log.mockRestore();
-      }
-    } finally {
-      if (prev === undefined) delete process.env.OPPER_API_KEY;
-      else process.env.OPPER_API_KEY = prev;
     }
   });
 });

@@ -74,7 +74,7 @@ opper call --stream myfunction "instructions" "input"
 | `image` | Generate images from a prompt |
 | `config` | Manage stored API keys (add, list, get, remove) |
 | `login` / `logout` / `whoami` | Authenticate and inspect the active slot |
-| `editors` | Configure Opper as a provider in OpenCode and Continue.dev |
+| `editors` | Configure Opper as a provider in supported AI code editors (OpenCode) |
 | `agents` / `launch` | Route supported AI agents (e.g. Hermes, Claude Code, Codex) through Opper |
 | `skills` | Install, update, list, uninstall bundled Opper skills |
 | `version` | Print the CLI version |

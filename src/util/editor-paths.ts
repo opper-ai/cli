@@ -12,9 +12,3 @@ export function opencodeConfigPath(location: Location): string {
     ? join(home(), ".config", "opencode", "opencode.json")
     : join(process.cwd(), "opencode.json");
 }
-
-export function continueConfigPath(location: Location): string {
-  return location === "global"
-    ? join(home(), ".continue", "config.yaml")
-    : join(process.cwd(), ".continue", "config.yaml");
-}

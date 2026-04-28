@@ -1,21 +1,12 @@
 import { configureOpenCode } from "../setup/opencode.js";
-import { configureContinue } from "../setup/continue.js";
 import { listAdapters } from "../agents/registry.js";
 import { isLaunchable } from "../agents/types.js";
-import { getSlot } from "../auth/config.js";
-import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import type { Location } from "../util/editor-paths.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
-}
-
-export interface EditorsContinueOptions {
-  location: Location;
-  overwrite: boolean;
-  key: string;
 }
 
 /**
@@ -54,30 +45,4 @@ export async function editorsOpenCodeCommand(
     return;
   }
   console.log(brand.accent(`✓ Wrote OpenCode config to ${result.path}.`));
-}
-
-export async function editorsContinueCommand(
-  opts: EditorsContinueOptions,
-): Promise<void> {
-  const slot = await getSlot(opts.key);
-  const apiKey = slot?.apiKey ?? process.env.OPPER_API_KEY;
-  if (!apiKey) {
-    throw new OpperError(
-      "AUTH_REQUIRED",
-      `No API key stored for slot "${opts.key}"`,
-      "Run `opper login`, or set OPPER_API_KEY in the environment.",
-    );
-  }
-  const result = await configureContinue({
-    location: opts.location,
-    apiKey,
-    ...(opts.overwrite ? { overwrite: true } : {}),
-  });
-  if (!result.wrote && result.reason === "exists") {
-    console.log(
-      `Continue.dev config at ${result.path} already has Opper models. Pass --overwrite to replace them.`,
-    );
-    return;
-  }
-  console.log(brand.accent(`✓ Wrote Continue.dev config to ${result.path}.`));
 }

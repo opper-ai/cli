@@ -120,9 +120,9 @@ describe("launchCommand", () => {
 
   it("rejects launching a configure-only adapter", async () => {
     const editorAdapter = {
-      name: "continue",
-      displayName: "Continue.dev",
-      docsUrl: "https://continue.dev",
+      name: "editor-only",
+      displayName: "Editor Only",
+      docsUrl: "https://example.com",
       detect: vi.fn().mockResolvedValue({ installed: true }),
       isConfigured: vi.fn(),
       configure: vi.fn(),
@@ -130,10 +130,10 @@ describe("launchCommand", () => {
       // no spawn → not launchable
     };
     getAdapterMock.mockImplementationOnce((name: string) =>
-      name === "continue" ? (editorAdapter as unknown as typeof adapter) : null,
+      name === "editor-only" ? (editorAdapter as unknown as typeof adapter) : null,
     );
     await expect(
-      launchCommand({ agent: "continue", key: "default" }),
+      launchCommand({ agent: "editor-only", key: "default" }),
     ).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 });

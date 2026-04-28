@@ -18,9 +18,7 @@ export interface ConfigureOpenCodeResult {
 
 // NOTE: OpenCode's template uses `{env:OPPER_API_KEY}` placeholders so the
 // editor resolves the key from the environment at read time — no post-write
-// mutation. Continue.dev's template, by contrast, gets its `apiKey` injected
-// in-place by `configureContinue`. The two strategies are deliberate; don't
-// unify without cross-checking both editors' behaviour.
+// mutation. The launch flow exports OPPER_API_KEY before spawning OpenCode.
 export async function configureOpenCode(
   opts: ConfigureOpenCodeOptions,
 ): Promise<ConfigureOpenCodeResult> {
