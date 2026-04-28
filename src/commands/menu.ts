@@ -39,13 +39,6 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     }
 
     options.push({
-      value: "account",
-      label: "Account",
-      hint: slot
-        ? `Signed in as ${slot.user?.email ?? opts.key}`
-        : "Sign in to Opper",
-    });
-    options.push({
       value: "agents",
       label: "Agents",
       hint: "Manage launchable agents and editor integrations",
@@ -59,6 +52,13 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
       value: "platform",
       label: "Opper",
       hint: "Functions, models, indexes, traces, usage",
+    });
+    options.push({
+      value: "account",
+      label: "Account",
+      hint: slot
+        ? `Signed in as ${slot.user?.email ?? opts.key}`
+        : "Sign in to Opper",
     });
     options.push({ value: "quit", label: "Quit" });
 
