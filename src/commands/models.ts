@@ -8,12 +8,24 @@ export interface ModelsListOptions {
   filter?: string;
 }
 
+export interface OpperModel {
+  id: string;
+  name?: string;
+  context_window?: number;
+}
+
 interface ModelsResponse {
-  models: Array<{
-    id: string;
-    name?: string;
-    context_window?: number;
-  }>;
+  models: OpperModel[];
+}
+
+/**
+ * Fetch the full Opper model catalog. Useful for interactive pickers.
+ */
+export async function fetchModels(key: string): Promise<OpperModel[]> {
+  const ctx = await resolveApiContext(key);
+  const api = new OpperApi(ctx);
+  const resp = await api.get<ModelsResponse>("/v3/models?limit=500");
+  return resp.models;
 }
 
 export async function modelsListCommand(opts: ModelsListOptions): Promise<void> {
