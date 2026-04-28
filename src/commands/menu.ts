@@ -11,6 +11,8 @@ import {
 import { skillsMenu } from "./menu/skills.js";
 import { agentsMenu } from "./menu/agents.js";
 import { platformMenu } from "./menu/platform.js";
+import { accountMenu } from "./menu/account.js";
+import { getSlot } from "../auth/config.js";
 
 export type { MenuOptions } from "./menu/shared.js";
 
@@ -18,7 +20,10 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
   printBanner(opts.version);
 
   while (true) {
-    const statuses = await probeAdapters();
+    const [statuses, slot] = await Promise.all([
+      probeAdapters(),
+      getSlot(opts.key),
+    ]);
 
     const options: Array<{ value: string; label: string; hint?: string }> = [];
 
@@ -34,6 +39,13 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     }
 
     options.push({
+      value: "account",
+      label: "Account",
+      hint: slot
+        ? `Signed in as ${slot.user?.email ?? opts.key}`
+        : "Sign in to Opper",
+    });
+    options.push({
       value: "agents",
       label: "Agents",
       hint: "Manage launchable agents and editor integrations",
@@ -46,7 +58,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     options.push({
       value: "platform",
       label: "Opper",
-      hint: "Account, functions, models, indexes, traces, usage",
+      hint: "Functions, models, indexes, traces, usage",
     });
     options.push({ value: "quit", label: "Quit" });
 
@@ -75,6 +87,9 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
         continue;
       }
       switch (choice) {
+        case "account":
+          await accountMenu(opts);
+          break;
         case "agents":
           await agentsMenu(opts);
           break;

@@ -154,31 +154,27 @@ describe("menuCommand", () => {
     expect(skillsListMock).toHaveBeenCalled();
   });
 
-  it("Opper → Account → Sign in invokes loginCommand", async () => {
+  it("Account → Sign in invokes loginCommand", async () => {
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "platform"); // main → Opper
-    answers.push(() => "account");  // Opper → Account
-    answers.push(() => "login");    // Account → Sign in
-    answers.push(() => "back");     // exit Account
-    answers.push(() => "back");     // exit Opper
-    answers.push(() => "quit");     // exit main
+    answers.push(() => "account"); // main → Account
+    answers.push(() => "login");   // Account → Sign in
+    answers.push(() => "back");    // exit Account
+    answers.push(() => "quit");    // exit main
 
     await menuCommand({ key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
   });
 
-  it("Opper → Account → Show invokes whoamiCommand when a slot exists", async () => {
+  it("Account → Show invokes whoamiCommand when a slot exists", async () => {
     await setSlot("default", {
       apiKey: "op_live_x",
       user: { email: "me@example.com", name: "Me" },
     });
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "platform");
     answers.push(() => "account");
     answers.push(() => "show");
-    answers.push(() => "back");
     answers.push(() => "back");
     answers.push(() => "quit");
 
