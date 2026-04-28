@@ -63,7 +63,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
 }
 
 export const claudeCode: AgentAdapter = {
-  name: "claude-code",
+  name: "claude",
   displayName: "Claude Code",
   docsUrl: "https://docs.claude.com/en/docs/claude-code/setup",
   detect,

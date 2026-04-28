@@ -27,7 +27,7 @@ describe("claude-code adapter", () => {
   });
 
   it("metadata is correct", () => {
-    expect(claudeCode.name).toBe("claude-code");
+    expect(claudeCode.name).toBe("claude");
     expect(claudeCode.displayName).toBe("Claude Code");
     expect(typeof claudeCode.spawn).toBe("function");
     expect(claudeCode.docsUrl).toMatch(/^https:\/\//);
