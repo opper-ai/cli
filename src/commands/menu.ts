@@ -13,11 +13,13 @@ import { agentsMenu } from "./menu/agents.js";
 import { platformMenu } from "./menu/platform.js";
 import { accountMenu } from "./menu/account.js";
 import { getSlot } from "../auth/config.js";
+import { detectLegacyOpperCli } from "../util/legacy-cli.js";
 
 export type { MenuOptions } from "./menu/shared.js";
 
 export async function menuCommand(opts: MenuOptions): Promise<void> {
   printBanner(opts.version);
+  warnOnLegacyCli();
 
   while (true) {
     const [statuses, slot] = await Promise.all([
@@ -106,4 +108,15 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
       reportError(err);
     }
   }
+}
+
+function warnOnLegacyCli(): void {
+  const legacy = detectLegacyOpperCli();
+  if (!legacy) return;
+  const detail = legacy.shadowsUs
+    ? `is shadowing this CLI on PATH at ${legacy.path}.`
+    : `is also installed at ${legacy.path}.`;
+  log.warn(
+    `Legacy Homebrew opper CLI ${detail}\n  Uninstall it with: brew uninstall opper`,
+  );
 }
