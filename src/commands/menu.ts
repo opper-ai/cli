@@ -1,6 +1,7 @@
-import { select, outro, isCancel, cancel, log } from "@clack/prompts";
+import { select, confirm, outro, isCancel, cancel, log } from "@clack/prompts";
 import { isLaunchable } from "../agents/types.js";
 import { launchCommand } from "./launch.js";
+import { loginCommand } from "./login.js";
 import { brand } from "../ui/colors.js";
 import { printBanner } from "../ui/banner.js";
 import {
@@ -20,6 +21,7 @@ export type { MenuOptions } from "./menu/shared.js";
 export async function menuCommand(opts: MenuOptions): Promise<void> {
   printBanner(opts.version);
   warnOnLegacyCli();
+  await maybePromptSignIn(opts);
 
   while (true) {
     const [statuses, slot] = await Promise.all([
@@ -119,4 +121,26 @@ function warnOnLegacyCli(): void {
   log.warn(
     `Legacy Homebrew opper CLI ${detail}\n  Uninstall it with: brew uninstall opper`,
   );
+}
+
+/**
+ * Prompt for sign-in on the very first run when no slot exists. Declined or
+ * cancelled prompts fall through to the menu so users can still browse
+ * skills/agents without authenticating.
+ */
+async function maybePromptSignIn(opts: MenuOptions): Promise<void> {
+  const slot = await getSlot(opts.key);
+  if (slot) return;
+
+  const wantsLogin = await confirm({
+    message: "You're not signed in to Opper. Sign in now?",
+    initialValue: true,
+  });
+  if (isCancel(wantsLogin) || wantsLogin !== true) return;
+
+  try {
+    await loginCommand({ key: opts.key });
+  } catch (err) {
+    reportError(err);
+  }
 }

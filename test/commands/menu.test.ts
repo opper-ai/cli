@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
-import { setSlot } from "../../src/auth/config.js";
+import { setSlot, deleteSlot } from "../../src/auth/config.js";
 
 const answers: Array<() => unknown> = [];
 
@@ -89,7 +89,7 @@ const { menuCommand } = await import("../../src/commands/menu.js");
 useTempOpperHome();
 
 describe("menuCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     answers.length = 0;
     hermesDetect.mockReset();
     hermesIsConfigured.mockReset();
@@ -102,6 +102,9 @@ describe("menuCommand", () => {
     setupMock.mockReset();
     skillsListMock.mockReset();
     editorsListMock.mockReset();
+    // Default to "already signed in" so the new menu sign-in prompt doesn't
+    // consume answers in tests that aren't specifically about auth.
+    await setSlot("default", { apiKey: "op_test", source: "manual" });
   });
 
   it("launches the chosen adapter and returns to menu (loops to quit)", async () => {
@@ -155,15 +158,41 @@ describe("menuCommand", () => {
   });
 
   it("Account → Sign in invokes loginCommand", async () => {
+    // Clear the default slot so the Account submenu shows "Sign in".
+    await deleteSlot("default");
     hermesDetect.mockResolvedValue({ installed: false });
     hermesIsConfigured.mockResolvedValue(false);
-    answers.push(() => "account"); // main → Account
-    answers.push(() => "login");   // Account → Sign in
-    answers.push(() => "back");    // exit Account
-    answers.push(() => "quit");    // exit main
+    // Decline the upfront "Sign in now?" prompt to fall through to the menu.
+    answers.push(() => false);
+    answers.push(() => "account");
+    answers.push(() => "login");
+    answers.push(() => "back");
+    answers.push(() => "quit");
 
     await menuCommand({ key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+  });
+
+  it("prompts for sign-in on first run when no slot exists, runs login on yes", async () => {
+    await deleteSlot("default");
+    hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => true);    // accept the upfront prompt
+    answers.push(() => "quit");  // exit main menu after login completes
+
+    await menuCommand({ key: "default" });
+    expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+  });
+
+  it("does not prompt for sign-in when a slot already exists", async () => {
+    // beforeEach has populated a default slot; the upfront prompt should
+    // not fire and loginMock should never be called.
+    hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(loginMock).not.toHaveBeenCalled();
   });
 
   it("Account → Show invokes whoamiCommand when a slot exists", async () => {
