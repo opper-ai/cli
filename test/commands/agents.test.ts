@@ -22,19 +22,22 @@ vi.mock("../../src/agents/registry.js", () => ({
 const { agentsListCommand } = await import("../../src/commands/agents.js");
 
 describe("agentsListCommand", () => {
-  it("prints each adapter with installed status", async () => {
+  it("prints each adapter with installed status, slug, and launch command", async () => {
     hermesDetect.mockResolvedValue({
       installed: true,
       version: "1.0.0",
       configPath: "/home/user/.hermes/config.yaml",
     });
+    hermesIsConfigured.mockResolvedValue(true);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await agentsListCommand();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(out).toContain("Hermes Agent");
-      expect(out).toContain("1.0.0");
+      expect(out).toContain("hermes"); // slug column
+      expect(out).toContain("Hermes Agent"); // display name
+      expect(out).toContain("1.0.0"); // version inline
       expect(out.toLowerCase()).toContain("installed");
+      expect(out).toContain("opper launch hermes"); // launch command shown per row
     } finally {
       log.mockRestore();
     }
