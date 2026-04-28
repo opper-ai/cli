@@ -11,6 +11,10 @@ const GROUPS: HelpGroup[] = [
     commands: ["login", "logout", "whoami", "config"],
   },
   {
+    title: "Help",
+    commands: ["ask"],
+  },
+  {
     title: "Skills",
     commands: ["skills"],
   },

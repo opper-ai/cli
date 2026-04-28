@@ -13,6 +13,7 @@ import registerSkills from "./cli/skills.js";
 import registerEditors from "./cli/editors.js";
 import registerAgents from "./cli/agents.js";
 import registerPlatform from "./cli/platform.js";
+import registerAsk from "./cli/ask.js";
 import { addGroupedHelpText } from "./cli/help.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,6 +67,7 @@ const ctx: CliContext = {
 
 const registrars: RegisterFn[] = [
   registerAuth,
+  registerAsk,
   registerSkills,
   registerEditors,
   registerAgents,
