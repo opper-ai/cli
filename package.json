@@ -5,7 +5,7 @@
   "type": "module",
   "bin": { "opper": "dist/index.js" },
   "files": ["dist", "data", "README.md", "LICENSE"],
-  "engines": { "node": ">=20.10" },
+  "engines": { "node": ">=20.12" },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",

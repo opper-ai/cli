@@ -1,12 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = resolve(here, "..", "..", "dist", "index.js");
+const built = existsSync(bin);
 
-describe("--no-color", () => {
+describe.skipIf(!built)("--no-color (built binary)", () => {
   afterEach(() => {
     delete process.env.NO_COLOR;
   });
