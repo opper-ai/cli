@@ -32,7 +32,7 @@ opper agents list      # see which agents you can launch
 opper launch claude    # route Claude Code through Opper
 ```
 
-Run `opper` with no arguments for an interactive menu (Account · Agents · Skills · Opper). The menu also offers quick-launch shortcuts for any agent that's already installed and configured.
+Run `opper` with no arguments for an interactive menu (Account · Ask · Agents · Skills · Opper). The menu also offers quick-launch shortcuts for any agent that's already installed and configured.
 
 ## Authentication
 
@@ -52,7 +52,7 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 
 ## Agents
 
-`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI.
+`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. After the session, the CLI prints a summary with duration, model, and a traces link.
 
 ```bash
 opper agents list            # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
@@ -78,31 +78,40 @@ opper launch claude --resume
 
 `opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported).
 
-## Skills
+The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default.
 
-Bundled "skills" are markdown SKILL.md docs that drop into `~/.claude/skills/` and `~/.codex/skills/`. The Codex install also wires each skill into a managed `[[skills.config]]` sentinel block in `~/.codex/config.toml`.
+## Ask — built-in support agent
+
+`opper ask "<question>"` runs an Opper agent grounded on the locally-installed Opper skills (see below). Useful for "how do I…" questions about the platform, SDKs, or the CLI itself.
 
 ```bash
-opper skills list                                # per-skill matrix across targets
-opper skills install                             # install all bundled skills
-opper skills install opper-cli opper-python-sdk  # install a subset
-opper skills update                              # refresh installed skills
-opper skills uninstall opper-api                 # remove specific skills
+opper ask "how do I create an index?"
+opper ask --model anthropic/claude-opus-4-7 "compare the v2 and v3 APIs"
 ```
 
-The interactive menu offers a multi-select picker for install / uninstall.
+The answer streams in, then prints a token / request count. Requires Opper skills to be installed first (`opper skills install`).
+
+## Skills
+
+Opper skills are markdown documentation packs the CLI uses for grounding `opper ask` and that you can install for any compatible code agent. The CLI delegates to the upstream `skills` tool, which fetches from [opper-ai/opper-skills](https://github.com/opper-ai/opper-skills) and symlinks into your agents' skill paths (`~/.claude/skills/`, etc.).
+
+```bash
+opper skills install     # `npx skills add opper-ai/opper-skills` — interactive picker
+opper skills update      # refetch the latest from the source repo
+opper skills list        # per-target install matrix
+opper skills uninstall   # remove + clean up legacy bundled-copy installs
+```
 
 ## Editor integrations
 
 ```bash
 opper editors list
-opper editors opencode  [--global|--local] [--overwrite]   # also exposed as `opper launch opencode`
-opper editors continue  [--global|--local] [--overwrite]
+opper editors opencode [--global|--local] [--overwrite]   # also exposed as `opper launch opencode`
 ```
 
 ## Platform
 
-Direct access to the v3 platform endpoints:
+Direct access to the platform endpoints:
 
 | Command | Description |
 |---------|-------------|
@@ -119,6 +128,105 @@ Direct access to the v3 platform endpoints:
 | `opper traces get <id>` / `delete <id>` | Inspect / remove a trace. |
 | `opper usage list [--from-date] [--to-date] [--granularity] [--fields] [--group-by] [--out csv]` | Token / cost analytics. |
 | `opper image generate <prompt> [-o <file>] [--base64] [-m <model>]` | Generate an image. |
+
+## Recipes
+
+### Calling a function from the shell or stdin
+
+```bash
+# Inline arguments
+opper call myfunction "respond in kind" "what is 2+2?"
+
+# Stream the response token-by-token
+opper call --stream myfunction "respond in kind" "what is 2+2?"
+
+# Pipe input from stdin (any text)
+echo "what is 2+2?" | opper call myfunction "respond in kind"
+
+# Pipe structured JSON in
+echo '{"name":"Johnny","age":41}' | opper call myfunction "only print age"
+
+# Override the model for one call
+opper call --model anthropic/claude-sonnet-4-6 myfunction "summarise" "long text…"
+```
+
+### Registering a custom model
+
+Bring your own model deployment under any provider Opper supports — Azure, AWS, GCP, custom OpenAI-compatible endpoints, etc. Pass any provider-specific config through `--extra` as a JSON object.
+
+```bash
+# Azure OpenAI deployment
+opper models create my-gpt4 azure/my-gpt4-deployment my-api-key \
+  --extra '{"api_base": "https://my-gpt4-endpoint.openai.azure.com/", "api_version": "2024-06-01"}'
+
+# Inspect / delete
+opper models get my-gpt4
+opper models delete my-gpt4
+```
+
+### Indexing and querying a knowledge base
+
+```bash
+# Create an index
+opper indexes create support-docs
+
+# Add documents (inline or from stdin)
+opper indexes add support-docs "How to reset your password: …" --key reset-password
+cat refunds.md | opper indexes add support-docs - --key refunds --metadata '{"category":"billing"}'
+
+# Search
+opper indexes query support-docs "how do I get a refund?" --top-k 5
+opper indexes query support-docs "billing question" --filters '{"category":"billing"}'
+```
+
+### Cost / usage by tag
+
+If your application tags calls with arbitrary metadata (e.g. `customer_id`), `opper usage list` can group cost / count / tokens by that tag. Tagging happens at call time via the SDK:
+
+```python
+# Python SDK
+result, _ = await opper.call(
+    name="respond",
+    input="What is the capital of Sweden?",
+    tags={"customer_id": "acme"},
+)
+```
+
+```bash
+# Then attribute spend per tag
+opper usage list --from-date=2026-04-01 --to-date=2026-04-30 \
+  --fields=total_tokens,cost --group-by=customer_id
+
+# Pipe to CSV for billing systems
+opper usage list --from-date=2026-04-01 --group-by=customer_id --out=csv > april.csv
+```
+
+### Generating an image
+
+```bash
+# Save to image_<ts>.png in cwd
+opper image generate "a serene mountain lake at dawn"
+
+# Specific output, specific model
+opper image generate "logo concept" -o ./out/logo.png \
+  -m vertexai/imagen-4.0-fast-generate-001-eu
+
+# Print raw base64 (for piping)
+opper image generate "icon" --base64 | base64 -d > icon.png
+```
+
+### Routing an agent through Opper for a one-shot job
+
+```bash
+# Pi in non-interactive mode for cron / CI
+opper launch pi -p "summarise the latest PR title and body"
+
+# Claude Code with a specific model and resumed session
+opper launch claude --model anthropic/claude-opus-4-7 --resume
+
+# Codex with Sonnet for a single ask
+opper launch codex --model anthropic/claude-sonnet-4-6 -- "implement this feature"
+```
 
 ## Global flags
 
