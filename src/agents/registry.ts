@@ -4,6 +4,7 @@ import { claudeCode } from "./claude-code.js";
 import { codex } from "./codex.js";
 import { hermes } from "./hermes.js";
 import { pi } from "./pi.js";
+import { openclaw } from "./openclaw.js";
 
 const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   opencode,
@@ -11,6 +12,7 @@ const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   codex,
   hermes,
   pi,
+  openclaw,
 ];
 
 export function listAdapters(): ReadonlyArray<AgentAdapter> {
