@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Agent, SilentLogger, setDefaultLogger } from "@opperai/agents";
 import { z } from "zod";
 import { spinner } from "@clack/prompts";
@@ -8,6 +7,7 @@ import { resolveApiContext } from "../api/resolve.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
+import { installedTargets } from "../setup/skills.js";
 
 export interface AskOptions {
   question: string;
@@ -34,33 +34,37 @@ https://github.com/opper-ai/cli rather than guessing.
 Keep answers tight: examples first, prose second. Use fenced code blocks
 for shell commands and source snippets. Don't restate the question.`;
 
-function bundledSkillsDir(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  return join(here, "..", "..", "data", "skills");
-}
-
 /**
- * Load every bundled SKILL.md (and adjacent reference docs) as context for
- * the agent. Each skill becomes a labelled section.
+ * Load every Opper skill the user has installed (via `opper skills install`)
+ * as context for the agent. Each skill becomes a labelled section. We
+ * dedup across the Claude/Codex targets — they're the same content, just
+ * different install paths.
  */
 function loadSkillCorpus(): string {
-  const root = bundledSkillsDir();
-  if (!existsSync(root)) return "";
-
+  const seen = new Set<string>();
   const sections: string[] = [];
-  for (const skill of readdirSync(root).sort()) {
-    const skillDir = join(root, skill);
-    const skillFile = join(skillDir, "SKILL.md");
-    if (!existsSync(skillFile)) continue;
 
-    sections.push(`\n## Skill: ${skill}\n\n${readFileSync(skillFile, "utf8")}`);
+  for (const target of installedTargets()) {
+    const root = target.dir;
+    if (!existsSync(root)) continue;
 
-    const refsDir = join(skillDir, "references");
-    if (existsSync(refsDir)) {
-      for (const ref of readdirSync(refsDir).sort()) {
-        if (!ref.endsWith(".md")) continue;
-        const body = readFileSync(join(refsDir, ref), "utf8");
-        sections.push(`\n### Reference: ${skill}/${ref}\n\n${body}`);
+    for (const skill of target.installed) {
+      if (seen.has(skill)) continue;
+      seen.add(skill);
+
+      const skillDir = join(root, skill);
+      const skillFile = join(skillDir, "SKILL.md");
+      if (!existsSync(skillFile)) continue;
+
+      sections.push(`\n## Skill: ${skill}\n\n${readFileSync(skillFile, "utf8")}`);
+
+      const refsDir = join(skillDir, "references");
+      if (existsSync(refsDir)) {
+        for (const ref of readdirSync(refsDir).sort()) {
+          if (!ref.endsWith(".md")) continue;
+          const body = readFileSync(join(refsDir, ref), "utf8");
+          sections.push(`\n### Reference: ${skill}/${ref}\n\n${body}`);
+        }
       }
     }
   }
@@ -83,9 +87,14 @@ export async function askCommand(opts: AskOptions): Promise<void> {
   setDefaultLogger(new SilentLogger());
 
   const corpus = loadSkillCorpus();
-  const instructions = corpus
-    ? `${SYSTEM_PROMPT}\n\n# Bundled Opper documentation\n${corpus}`
-    : SYSTEM_PROMPT;
+  if (!corpus) {
+    throw new OpperError(
+      "API_ERROR",
+      "Opper skills aren't installed",
+      "Run `opper skills install` to fetch them from opper-ai/opper-skills, then try again.",
+    );
+  }
+  const instructions = `${SYSTEM_PROMPT}\n\n# Opper documentation\n${corpus}`;
 
   // Only override baseUrl when the user has set a non-default. The opperai
   // SDK defaults to https://api.opper.ai/v2; passing our bare-host

@@ -4,78 +4,75 @@ import {
   updateSkills,
   uninstallSkills,
   installedTargets,
-  bundledSkills,
-  type SkillsResult,
 } from "../setup/skills.js";
 import { brand } from "../ui/colors.js";
 
-function suffix(result: SkillsResult): string {
-  const parts: string[] = [];
-  if (result.skills.length > 0) parts.push(result.skills.join(", "));
-  if (result.targets.length > 0) parts.push(`→ ${result.targets.join(", ")}`);
-  return parts.length ? ` (${parts.join("; ")})` : "";
-}
-
-export async function skillsInstallCommand(names?: string[]): Promise<void> {
-  if (!names?.length && isSkillsInstalled()) {
+export async function skillsInstallCommand(): Promise<void> {
+  if (isSkillsInstalled()) {
     console.log(
-      `Opper skills already installed. Use ${brand.bold("opper skills update")} to refresh, or pass skill names to add specific ones.`,
+      `Opper skills already installed. Use ${brand.bold("opper skills update")} to refresh.`,
     );
     return;
   }
-  const result = await installSkills(names);
-  console.log(brand.accent(`✓ Installed${suffix(result)}.`));
+  const result = await installSkills();
+  console.log(brand.accent(`✓ Installed Opper skills from ${result.source}.`));
 }
 
-export async function skillsUpdateCommand(names?: string[]): Promise<void> {
-  const result = await updateSkills(names);
-  console.log(brand.accent(`✓ Updated${suffix(result)}.`));
+export async function skillsUpdateCommand(): Promise<void> {
+  const result = await updateSkills();
+  console.log(brand.accent(`✓ Updated Opper skills from ${result.source}.`));
 }
 
-export async function skillsUninstallCommand(names?: string[]): Promise<void> {
+export async function skillsUninstallCommand(): Promise<void> {
   if (!isSkillsInstalled()) {
     console.log("Opper skills are not installed — nothing to do.");
     return;
   }
-  const result = await uninstallSkills(names);
-  console.log(brand.accent(`✓ Uninstalled${suffix(result)}.`));
+  const result = await uninstallSkills();
+  console.log(brand.accent(`✓ Removed Opper skills (${result.source}).`));
 }
 
 export async function skillsListCommand(): Promise<void> {
   const status = installedTargets();
-  const bundled = bundledSkills();
-
   if (status.length === 0) {
-    console.log(
-      `${brand.dim("No targets detected — install Claude or Codex first.")}`,
-    );
+    console.log(brand.dim("No targets detected — install Claude or Codex first."));
     return;
   }
 
-  // Per-skill matrix across targets so it's obvious where each one lives.
-  const targetNames = status.map((s) => s.target);
-  const nameWidth = Math.max("SKILL".length, ...bundled.map((n) => n.length));
+  // Union of every Opper skill present on any target → matrix rows.
+  const allSkills = [
+    ...new Set(status.flatMap((s) => s.installed)),
+  ].sort();
+
+  if (allSkills.length === 0) {
+    console.log(
+      `${brand.dim("No Opper skills installed.")} Run ${brand.bold("opper skills install")}.`,
+    );
+    for (const s of status) {
+      console.log(`  ${s.target.padEnd(8)} ${brand.dim(s.dir)}`);
+    }
+    return;
+  }
+
+  const nameWidth = Math.max("SKILL".length, ...allSkills.map((n) => n.length));
   const colWidth = 12;
 
   console.log(
     brand.dim(
       [
         "SKILL".padEnd(nameWidth),
-        ...targetNames.map((t) => t.toUpperCase().padEnd(colWidth)),
+        ...status.map((s) => s.target.toUpperCase().padEnd(colWidth)),
       ].join("  "),
     ),
   );
-
-  for (const skill of bundled) {
-    const cells = status.map((s) => {
-      const installed = s.installed.includes(skill);
-      return installed
+  for (const skill of allSkills) {
+    const cells = status.map((s) =>
+      s.installed.includes(skill)
         ? brand.accent("installed".padEnd(colWidth))
-        : brand.dim("—".padEnd(colWidth));
-    });
+        : brand.dim("—".padEnd(colWidth)),
+    );
     console.log([skill.padEnd(nameWidth), ...cells].join("  "));
   }
-
   console.log(
     `\n${brand.dim("Dirs:")} ${status.map((s) => `${s.target}=${s.dir}`).join(", ")}`,
   );

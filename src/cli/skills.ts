@@ -7,23 +7,19 @@ import {
 import type { RegisterFn } from "./types.js";
 
 const register: RegisterFn = (program) => {
-  const skills = program.command("skills").description("Manage Opper skills");
+  const skills = program
+    .command("skills")
+    .description("Manage Opper skills (delegates to `npx skills`)");
 
   skills
     .command("install")
-    .description("Install bundled Opper skills (all if none specified)")
-    .argument("[names...]", "skill names to install (default: all bundled)")
-    .action(async (names: string[]) => {
-      await skillsInstallCommand(names);
-    });
+    .description("Install Opper skills from opper-ai/opper-skills")
+    .action(skillsInstallCommand);
 
   skills
     .command("update")
-    .description("Update installed Opper skills (or specific ones by name)")
-    .argument("[names...]", "skill names to update (default: all installed)")
-    .action(async (names: string[]) => {
-      await skillsUpdateCommand(names);
-    });
+    .description("Update Opper skills to the latest from opper-ai/opper-skills")
+    .action(skillsUpdateCommand);
 
   skills
     .command("list")
@@ -32,11 +28,8 @@ const register: RegisterFn = (program) => {
 
   skills
     .command("uninstall")
-    .description("Remove Opper skills (all installed if none specified)")
-    .argument("[names...]", "skill names to remove (default: all installed)")
-    .action(async (names: string[]) => {
-      await skillsUninstallCommand(names);
-    });
+    .description("Remove Opper skills installed from opper-ai/opper-skills")
+    .action(skillsUninstallCommand);
 };
 
 export default register;
