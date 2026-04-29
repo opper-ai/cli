@@ -137,11 +137,27 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   await setOpperProvider(routing.apiKey, routing.model);
 
   // OpenClaw is a gateway/daemon, not an interactive REPL. Default to
-  // `gateway run` (foreground). Any extra args the user passes are
-  // forwarded as-is so they can pick a different subcommand
-  // (e.g. `agent --message "…"` for a one-shot turn).
-  const finalArgs = args.length > 0 ? args : ["gateway", "run"];
+  // `gateway start` — installs/starts the background service via
+  // launchd/systemd, returns quickly, and the gateway keeps serving
+  // chat channels in the background. This matches what Ollama does
+  // when launching OpenClaw from its own menu.
+  //
+  // Pass-through args take over from the default so users can run a
+  // different OpenClaw entry point through Opper too:
+  //   opper launch openclaw -- agent --local -m "summarise ..."
+  //   opper launch openclaw -- gateway run     # foreground if you
+  //                                            # really want it
+  const finalArgs = args.length > 0 ? args : ["gateway", "start"];
   const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
+
+  if (args.length === 0 && result.status === 0) {
+    console.log(
+      "\nOpenClaw gateway started in the background.\n" +
+        "  Stop it with:  openclaw gateway stop\n" +
+        "  Status:        openclaw gateway status\n" +
+        "  Logs:          openclaw logs\n",
+    );
+  }
   return result.status ?? -1;
 }
 
