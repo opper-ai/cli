@@ -14,7 +14,13 @@ const register: RegisterFn = (program, ctx) => {
 
   program
     .command("launch")
-    .description("Launch an AI agent with its inference routed through Opper")
+    .description(
+      "Launch an AI agent with its inference routed through Opper. " +
+        "Anything after the agent name (flags or args) is forwarded to " +
+        "the agent's CLI verbatim, e.g.\n" +
+        "  opper launch pi -p \"summarise this\"\n" +
+        "  opper launch claude --resume",
+    )
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
     .option("--install", "install the agent if missing", false)

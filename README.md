@@ -61,6 +61,11 @@ opper launch opencode        # OpenAI Chat Completions compat → /v3/compat
 opper launch codex           # OpenAI Responses compat → /v3/compat
 opper launch hermes          # OpenAI Chat Completions compat → /v3/compat
 opper launch pi              # OpenAI Chat Completions compat → /v3/compat
+
+# Anything after the agent name is forwarded to its CLI — handy for
+# scripting / cron with non-interactive flags.
+opper launch pi -p "summarise this PR"
+opper launch claude --resume
 ```
 
 | Agent | Slug | How Opper plugs in |
