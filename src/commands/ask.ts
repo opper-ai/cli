@@ -78,9 +78,8 @@ export async function askCommand(opts: AskOptions): Promise<void> {
 
   const ctx = await resolveApiContext(opts.key);
 
-  // Suppress the agent SDK's noisy default logger — it dumps full HTTP
-  // error objects to the console when span tracing 404s on the platform,
-  // which clutters the user's terminal even though the run succeeds.
+  // Suppress the agent SDK's noisy default logger — span tracing 404s on
+  // the platform side spam the terminal even when the run succeeds.
   setDefaultLogger(new SilentLogger());
 
   const corpus = loadSkillCorpus();
@@ -94,35 +93,57 @@ export async function askCommand(opts: AskOptions): Promise<void> {
   const isCustomBaseUrl =
     ctx.baseUrl !== undefined && ctx.baseUrl !== "https://api.opper.ai";
 
+  const s = spinner();
+  s.start("Thinking");
+  // Track how much of the answer field we've already written so we can
+  // emit only the new tail on each chunk. Streaming structured output
+  // gives us per-field running buffers via `fieldBuffers`.
+  let printed = 0;
+
   const agent = new Agent<string, z.infer<typeof OutputSchema>>({
     name: "OpperAsk",
     instructions,
     tools: [],
     model: opts.model ?? DEFAULT_MODELS.sonnet,
     outputSchema: OutputSchema,
+    enableStreaming: true,
+    onStreamChunk: ({ chunkData }) => {
+      // Single-iteration tool-less agents stream the answer field under
+      // callType "think" with jsonPath "finalResult.answer" — the SDK
+      // tags the structured-output destination, not the agent phase.
+      if (chunkData.jsonPath !== "finalResult.answer") return;
+      const delta = chunkData.delta;
+      if (typeof delta !== "string" || delta.length === 0) return;
+      if (printed === 0) {
+        s.stop("");
+        process.stdout.write("\n");
+      }
+      process.stdout.write(delta);
+      printed += delta.length;
+    },
     opperConfig: {
       apiKey: ctx.apiKey,
       baseUrl: isCustomBaseUrl ? ctx.baseUrl : undefined,
     },
   });
 
-  const s = spinner();
-  s.start("Thinking");
-  let result: z.infer<typeof OutputSchema>;
   let usage: { totalTokens: number; requests: number };
   try {
     const r = await agent.run(opts.question);
-    result = r.result;
     usage = { totalTokens: r.usage.totalTokens, requests: r.usage.requests };
+    if (printed === 0) {
+      // Streaming chunks didn't fire — fall back to printing the resolved
+      // answer once.
+      s.stop("Done");
+      process.stdout.write(`\n${r.result.answer}\n`);
+    }
   } catch (err) {
     s.stop("Failed");
     throw err;
   }
-  s.stop("Done");
 
-  process.stdout.write(`\n${result.answer}\n`);
   process.stdout.write(
-    `\n${brand.dim(
+    `\n\n${brand.dim(
       `(${usage.totalTokens} tokens · ${usage.requests} request${
         usage.requests === 1 ? "" : "s"
       })`,

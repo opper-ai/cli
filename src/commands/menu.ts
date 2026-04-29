@@ -1,7 +1,8 @@
-import { select, confirm, outro, isCancel, cancel, log } from "@clack/prompts";
+import { select, confirm, text, outro, isCancel, cancel, log } from "@clack/prompts";
 import { isLaunchable } from "../agents/types.js";
 import { launchCommand } from "./launch.js";
 import { loginCommand } from "./login.js";
+import { askCommand } from "./ask.js";
 import { brand } from "../ui/colors.js";
 import { printBanner } from "../ui/banner.js";
 import {
@@ -49,6 +50,11 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
       });
     }
 
+    options.push({
+      value: "ask",
+      label: "Ask",
+      hint: "Ask the Opper support agent (grounded on bundled docs)",
+    });
     options.push({
       value: "agents",
       label: "Agents",
@@ -98,6 +104,9 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
         continue;
       }
       switch (choice) {
+        case "ask":
+          await askPrompt(opts);
+          break;
         case "account":
           await accountMenu(opts);
           break;
@@ -128,6 +137,22 @@ function warnOnLegacyCli(): void {
   log.warn(
     `Legacy Homebrew opper CLI ${detail}\n  Uninstall it with: brew uninstall opper`,
   );
+}
+
+/**
+ * Inline "Ask the Opper support agent" wrapper for the menu — same
+ * underlying askCommand the CLI uses, but with a clack text prompt for
+ * the question.
+ */
+async function askPrompt(opts: MenuOptions): Promise<void> {
+  const question = await text({
+    message: "Ask the Opper support agent",
+    placeholder: "e.g. how do I create an index?",
+    validate: (v) =>
+      (v ?? "").trim().length === 0 ? "Question cannot be empty" : undefined,
+  });
+  if (isCancel(question) || typeof question !== "string") return;
+  await askCommand({ question, key: opts.key });
 }
 
 /**
