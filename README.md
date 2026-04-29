@@ -109,7 +109,7 @@ Direct access to the v3 platform endpoints:
 | `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
 | `opper functions list [filter]` / `get <name>` / `delete <name>` | Manage functions. |
 | `opper models list [filter]` | List available models (built-in + custom). |
-| `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom LiteLLM-compatible model. |
+| `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
 | `opper models get <name>` / `delete <name>` | Inspect / remove a custom model. |
 | `opper indexes list [--limit] [--offset]` | List knowledge-base indexes. |
 | `opper indexes get <name>` / `create <name> [--embedding-model <id>]` / `delete <name>` | Manage indexes. |

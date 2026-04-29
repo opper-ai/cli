@@ -85,9 +85,9 @@ const register: RegisterFn = (program, ctx) => {
 
   models
     .command("create")
-    .description("Register a custom model (LiteLLM-compatible)")
+    .description("Register a custom model")
     .argument("<name>", "friendly name")
-    .argument("<identifier>", "LiteLLM identifier (e.g. azure/gpt-4o)")
+    .argument("<identifier>", "model identifier (e.g. azure/gpt-4o)")
     .argument("<apiKey>", "API key for the upstream provider")
     .option("--extra <json>", "JSON provider-specific config")
     .action(async (
