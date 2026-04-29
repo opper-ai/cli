@@ -75,13 +75,6 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     compatShape: "openai",
   };
 
-  // Up-front pointer: prints before the agent takes over the terminal.
-  // Visible regardless of how the agent exits.
-  console.log(
-    `${brand.dim("Launching")} ${adapter.displayName} ${brand.dim(`(${routing.model})`)}\n` +
-      `${brand.dim("Traces:")} https://platform.opper.ai/traces\n`,
-  );
-
   // The child agent shares our controlling terminal — Ctrl+C / hangup
   // signals get delivered to the whole foreground process group, us
   // included. Without these no-op handlers the parent dies before
