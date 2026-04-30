@@ -16,7 +16,7 @@ const { claudeCode } = await import("../../src/agents/claude-code.js");
 const ROUTING = {
   baseUrl: "ignored-by-this-adapter",
   apiKey: "op_live_run",
-  model: "anthropic/claude-sonnet-4-6",
+  model: "claude-sonnet-4-6",
   compatShape: "openai" as const,
 };
 
@@ -76,14 +76,14 @@ describe("claude-code adapter", () => {
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.ANTHROPIC_BASE_URL).toBe("https://api.opper.ai/v3/compat");
     expect(init.env.ANTHROPIC_AUTH_TOKEN).toBe("op_live_run");
-    expect(init.env.ANTHROPIC_MODEL).toBe("anthropic/claude-sonnet-4-6");
+    expect(init.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
     // Tier-specific defaults remap Anthropic's tier picker to Opper IDs;
     // *_NAME companions mark them clearly as Opper-routed in the menu.
-    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("anthropic/claude-opus-4-7");
+    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7");
     expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toMatch(/Opper/i);
-    expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("anthropic/claude-sonnet-4-6");
+    expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-4-6");
     expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toMatch(/Opper/i);
-    expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("anthropic/claude-haiku-4-5");
+    expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
     expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toMatch(/Opper/i);
   });
 
