@@ -3,9 +3,13 @@ name: Release to NPM
 on:
   push:
     branches: [main]
-    paths: ['package.json']
   workflow_dispatch:
     inputs:
+      bump:
+        description: 'Version bump'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
       dry_run:
         description: 'Dry run (build but do not publish)'
         type: boolean
@@ -15,54 +19,65 @@ permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
+    # Skip the bot's own release commit (avoid loops) and any commit that opts out via [skip release].
+    # head_commit.message is only used in `if:` (evaluated by Actions, not shell-interpolated).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        !startsWith(github.event.head_commit.message, 'release:') &&
+        !contains(github.event.head_commit.message, '[skip release]')
+      )
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      - name: Check version change
-        id: version
+      - name: Configure git
         run: |
-          CURR=$(node -p "require('./package.json').version")
-          PREV=$(git show HEAD~1:package.json 2>/dev/null | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).version" 2>/dev/null || echo "0.0.0")
-          echo "current=$CURR" >> "$GITHUB_OUTPUT"
-          echo "previous=$PREV" >> "$GITHUB_OUTPUT"
-          if [ "$CURR" != "$PREV" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
       - name: Install
-        if: steps.version.outputs.changed == 'true'
         run: npm ci
 
       - name: Typecheck + build + test
-        if: steps.version.outputs.changed == 'true'
         run: |
           npm run typecheck
           npm run build
           npm test
 
+      - name: Bump version
+        id: version
+        env:
+          BUMP: ${{ github.event.inputs.bump || 'patch' }}
+        run: |
+          TAG=$(npm version "$BUMP" -m "release: %s")
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - name: Publish
-        if: steps.version.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
+        if: github.event.inputs.dry_run != 'true'
         run: npm publish --access public
 
-      - name: Create release
-        if: steps.version.outputs.changed == 'true' && github.event.inputs.dry_run != 'true'
+      - name: Push commit, tag, and create release
+        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.version.outputs.current }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          git tag "v$VERSION"
-          git push origin "v$VERSION"
-          gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          git push origin HEAD --follow-tags
+          gh release create "$TAG" --title "$TAG" --generate-notes

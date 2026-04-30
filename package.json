@@ -40,7 +40,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/opper-ai/cli"
+    "url": "git+https://github.com/opper-ai/cli.git"
   },
   "license": "MIT",
   "keywords": [
