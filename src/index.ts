@@ -3,7 +3,6 @@ import { Command } from "commander";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import updateNotifier from "update-notifier";
 import { OpperError, EXIT_CODES } from "./errors.js";
 import { printError } from "./ui/print.js";
 import { menuCommand } from "./commands/menu.js";
@@ -15,19 +14,21 @@ import registerAgents from "./cli/agents.js";
 import registerPlatform from "./cli/platform.js";
 import registerAsk from "./cli/ask.js";
 import { addGroupedHelpText } from "./cli/help.js";
+import { checkForUpdate } from "./util/update-check.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
   readFileSync(resolve(__dirname, "..", "package.json"), "utf8"),
 ) as { name: string; version: string };
 
-// Once-a-day background check against npm. Notifies on the *next* run after
-// a new version is found. Auto-skips in CI and honours NO_UPDATE_NOTIFIER /
-// --no-update-notifier upstream.
-updateNotifier({
-  pkg: { name: pkg.name, version: pkg.version },
-  updateCheckInterval: 1000 * 60 * 60 * 24,
-}).notify({ defer: true });
+// Inline npm version check with a 1h cache. Awaited so the cache write and
+// the `process.once('exit')` registration both happen before Commander gets
+// a chance to `process.exit()` (which it does for `--version` / `--help`)
+// and tear down the pending fetch. Worst case: ~1s once per hour on cache
+// refresh; sub-ms on warm cache. Non-TTY / CI / NO_UPDATE_NOTIFIER short-
+// circuit the check entirely. Ctrl+C / SIGTERM skip the notice (the `exit`
+// event doesn't fire on signals) but a future run picks it up from cache.
+await checkForUpdate({ name: pkg.name, version: pkg.version });
 
 const program = new Command();
 
