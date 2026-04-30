@@ -29,13 +29,11 @@
     "@opperai/login": "^0.4.0",
     "commander": "^12.1.0",
     "kleur": "^4.1.5",
-    "update-notifier": "^7.3.1",
     "yaml": "^2.8.2",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "@types/update-notifier": "^6.0.8",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
