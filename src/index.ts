@@ -21,13 +21,14 @@ const pkg = JSON.parse(
   readFileSync(resolve(__dirname, "..", "package.json"), "utf8"),
 ) as { name: string; version: string };
 
-// Inline npm version check with a 1h cache. Fire-and-forget so `--version`
-// and `--help` aren't gated on the network: the open fetch socket keeps Node
-// alive long enough for the deferred notice to register. Non-TTY / CI /
-// NO_UPDATE_NOTIFIER short-circuit the check entirely.
-// Note: the notice is registered via process.on('exit'), which doesn't fire
-// on Ctrl+C — those runs skip the notice and refresh the cache instead.
-void checkForUpdate({ name: pkg.name, version: pkg.version });
+// Inline npm version check with a 1h cache. Awaited so the cache write and
+// the `process.once('exit')` registration both happen before Commander gets
+// a chance to `process.exit()` (which it does for `--version` / `--help`)
+// and tear down the pending fetch. Worst case: ~1s once per hour on cache
+// refresh; sub-ms on warm cache. Non-TTY / CI / NO_UPDATE_NOTIFIER short-
+// circuit the check entirely. Ctrl+C / SIGTERM skip the notice (the `exit`
+// event doesn't fire on signals) but a future run picks it up from cache.
+await checkForUpdate({ name: pkg.name, version: pkg.version });
 
 const program = new Command();
 
