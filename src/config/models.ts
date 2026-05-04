@@ -7,9 +7,9 @@
  * Bumping a model here updates every consumer in one go.
  */
 export const DEFAULT_MODELS = {
-  opus: "claude-opus-4-7",
-  sonnet: "claude-sonnet-4-6",
-  haiku: "claude-haiku-4-5",
+  opus: "anthropic/claude-opus-4-7",
+  sonnet: "anthropic/claude-sonnet-4-6",
+  haiku: "anthropic/claude-haiku-4-5",
   /** Image generation default (Imagen via Opper). */
   image: "vertexai/imagen-4.0-fast-generate-001-eu",
 } as const;
