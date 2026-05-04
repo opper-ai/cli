@@ -77,14 +77,14 @@ describe("claude-code adapter", () => {
     expect(init.env.ANTHROPIC_BASE_URL).toBe("https://api.opper.ai/v3/compat");
     expect(init.env.ANTHROPIC_AUTH_TOKEN).toBe("op_live_run");
     expect(init.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
-    // Tier-specific defaults remap Anthropic's tier picker to Opper IDs;
-    // *_NAME companions mark them clearly as Opper-routed in the menu.
-    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-4-7");
-    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME).toMatch(/Opper/i);
-    expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-4-6");
-    expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toMatch(/Opper/i);
-    expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
-    expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME).toMatch(/Opper/i);
+    // Stops Claude Code from pinging api.anthropic.com directly when
+    // routing is supposed to be Opper-only.
+    expect(init.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
+    // The /model picker now pulls entries from /v3/compat/v1/models — we
+    // should NOT be setting the legacy tier-override env vars.
+    expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+    expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
   });
 
   it("spawn propagates non-zero exit codes", async () => {

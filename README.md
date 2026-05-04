@@ -86,7 +86,7 @@ The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Laun
 
 ```bash
 opper ask "how do I create an index?"
-opper ask --model claude-opus-4-7 "compare the v2 and v3 APIs"
+opper ask --model anthropic/claude-opus-4-7 "compare the v2 and v3 APIs"
 ```
 
 The answer streams in, then prints a token / request count. Requires Opper skills to be installed first (`opper skills install`).
@@ -147,7 +147,7 @@ echo "what is 2+2?" | opper call myfunction "respond in kind"
 echo '{"name":"Johnny","age":41}' | opper call myfunction "only print age"
 
 # Override the model for one call
-opper call --model claude-sonnet-4-6 myfunction "summarise" "long text…"
+opper call --model anthropic/claude-sonnet-4-6 myfunction "summarise" "long text…"
 ```
 
 ### Registering a custom model
@@ -222,10 +222,10 @@ opper image generate "icon" --base64 | base64 -d > icon.png
 opper launch pi -p "summarise the latest PR title and body"
 
 # Claude Code with a specific model and resumed session
-opper launch claude --model claude-opus-4-7 --resume
+opper launch claude --model anthropic/claude-opus-4-7 --resume
 
 # Codex with Sonnet for a single ask
-opper launch codex --model claude-sonnet-4-6 -- "implement this feature"
+opper launch codex --model anthropic/claude-sonnet-4-6 -- "implement this feature"
 ```
 
 ## Global flags

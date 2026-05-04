@@ -43,7 +43,7 @@ const register: RegisterFn = (program, ctx) => {
     .argument("<name>", "function name")
     .argument("<instructions>", "instructions / system prompt")
     .argument("[input]", "input (or piped via stdin)")
-    .option("--model <id>", "model identifier (e.g. claude-opus-4-7)")
+    .option("--model <id>", "model identifier (e.g. anthropic/claude-opus-4-7)")
     .option("--stream", "stream the response token-by-token", false)
     .action(async (
       name: string,
