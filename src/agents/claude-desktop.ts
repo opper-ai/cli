@@ -4,6 +4,7 @@ import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 import { run } from "../util/run.js";
 import type {
   AgentAdapter,
@@ -225,14 +226,26 @@ async function writeMetaWithOpperEntry(path: string): Promise<void> {
   await writeJson(path, meta);
 }
 
-async function writeGatewayProfile(path: string, apiKey: string): Promise<void> {
+async function writeGatewayProfile(
+  path: string,
+  apiKey: string,
+  primaryModel: string,
+): Promise<void> {
   const cfg = await readJsonAllowMissing(path);
   cfg.inferenceProvider = "gateway";
   cfg.inferenceGatewayBaseUrl = OPPER_COMPAT_URL;
   cfg.inferenceGatewayApiKey = apiKey;
   cfg.inferenceGatewayAuthScheme = "bearer";
   cfg.disableDeploymentModeChooser = true;
-  delete cfg.inferenceModels;
+  // First entry is the picker default. Dedupe in case primaryModel
+  // equals one of the catalog defaults.
+  const names = Array.from(new Set([
+    primaryModel,
+    DEFAULT_MODELS.opus,
+    DEFAULT_MODELS.sonnet,
+    DEFAULT_MODELS.haiku,
+  ]));
+  cfg.inferenceModels = names.map((name) => ({ name }));
   await writeJson(path, cfg);
 }
 
@@ -258,6 +271,18 @@ async function isConfigured(): Promise<boolean> {
   return true;
 }
 
+async function applyOpperProfile(apiKey: string, primaryModel: string): Promise<void> {
+  const targets = targetPaths();
+  for (const path of targets.normalConfigs) {
+    await writeDeploymentMode(path, "3p");
+  }
+  for (const target of targets.thirdPartyProfiles) {
+    await writeDeploymentMode(target.desktopConfig, "3p");
+    await writeMetaWithOpperEntry(target.meta);
+    await writeGatewayProfile(target.profile, apiKey, primaryModel);
+  }
+}
+
 async function configure(opts: ConfigureOptions): Promise<void> {
   if (!opts.apiKey) {
     throw new OpperError(
@@ -266,15 +291,7 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  const targets = targetPaths();
-  for (const path of targets.normalConfigs) {
-    await writeDeploymentMode(path, "3p");
-  }
-  for (const target of targets.thirdPartyProfiles) {
-    await writeDeploymentMode(target.desktopConfig, "3p");
-    await writeMetaWithOpperEntry(target.meta);
-    await writeGatewayProfile(target.profile, opts.apiKey);
-  }
+  await applyOpperProfile(opts.apiKey, DEFAULT_MODELS.opus);
 }
 
 async function clearOpperEntryFromMeta(path: string): Promise<void> {
@@ -423,7 +440,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
       "claude-desktop does not accept passthrough arguments.",
     );
   }
-  await configure({ apiKey: routing.apiKey });
+  await applyOpperProfile(routing.apiKey, routing.model);
 
   if (isClaudeRunning()) {
     quitClaude();

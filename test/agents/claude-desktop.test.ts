@@ -249,6 +249,46 @@ describe("claude-desktop adapter — configure", () => {
     );
     expect(opperEntries).toHaveLength(1);
   });
+
+  it("writes inferenceModels with DEFAULT_MODELS.opus first when configured via configure()", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profile = readJSON(
+      join(
+        home,
+        "Library",
+        "Application Support",
+        "Claude-3p",
+        "configLibrary",
+        "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+      ),
+    );
+    expect(profile.inferenceModels).toBeInstanceOf(Array);
+    expect(profile.inferenceModels[0]).toMatchObject({ name: "anthropic/claude-opus-4-7" });
+    // List should also include sonnet and haiku for picker convenience.
+    const names = (profile.inferenceModels as Array<{name: string}>).map(m => m.name);
+    expect(names).toContain("anthropic/claude-sonnet-4-6");
+    expect(names).toContain("anthropic/claude-haiku-4-5");
+  });
+
+  it("idempotent — running twice produces the same inferenceModels list with no duplicates", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profile = readJSON(
+      join(
+        home,
+        "Library",
+        "Application Support",
+        "Claude-3p",
+        "configLibrary",
+        "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+      ),
+    );
+    expect(profile.inferenceModels).toBeInstanceOf(Array);
+    // No duplicate names.
+    const names = (profile.inferenceModels as Array<{name: string}>).map(m => m.name);
+    const unique = new Set(names);
+    expect(unique.size).toBe(names.length);
+  });
 });
 
 describe("claude-desktop adapter — unconfigure", () => {
@@ -448,6 +488,31 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
       code: "AGENT_CONFIG_CONFLICT",
       hint: expect.stringContaining("Privacy & Security"),
     });
+  });
+
+  it("spawn writes routing.model as the picker default in inferenceModels", async () => {
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") return ok(""); // not running
+      return ok();
+    });
+    const customRouting = {
+      baseUrl: "https://api.opper.ai/v3/compat",
+      apiKey: "op_test_key",
+      model: "anthropic/claude-sonnet-4-6",
+      compatShape: "openai" as const,
+    };
+    await claudeDesktop.spawn!([], customRouting);
+
+    const profilePath = join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude-3p",
+      "configLibrary",
+      "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+    );
+    const profile = JSON.parse(readFileSyncReal(profilePath, "utf8"));
+    expect(profile.inferenceModels[0]).toMatchObject({ name: "anthropic/claude-sonnet-4-6" });
   });
 
   it("errors when Claude fails to quit within the timeout", async () => {
