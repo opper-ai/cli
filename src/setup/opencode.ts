@@ -19,26 +19,52 @@ export interface ConfigureOpenCodeResult {
 // NOTE: OpenCode's template uses `{env:OPPER_API_KEY}` placeholders so the
 // editor resolves the key from the environment at read time — no post-write
 // mutation. The launch flow exports OPPER_API_KEY before spawning OpenCode.
+//
+// When the user already has an opencode.json (their own model defaults, theme,
+// other providers, agents, keybinds), we graft just our `provider.opper` block
+// into it instead of replacing the whole file. Wholesale overwriting wiped
+// user customisations on first launch.
 export async function configureOpenCode(
   opts: ConfigureOpenCodeOptions,
 ): Promise<ConfigureOpenCodeResult> {
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
+  const templateConfig = JSON.parse(template) as {
+    provider: { opper: unknown };
+  };
 
-  if (existsSync(path) && !opts.overwrite) {
+  await mkdir(dirname(path), { recursive: true });
+
+  if (existsSync(path)) {
+    let existing: Record<string, unknown> | null = null;
     try {
-      const parsed = JSON.parse(await readFile(path, "utf8")) as {
-        provider?: { opper?: unknown };
-      };
-      if (parsed.provider?.opper !== undefined) {
+      existing = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+    } catch {
+      // unparseable — fall through and replace with template
+    }
+
+    if (existing && typeof existing === "object") {
+      const providers =
+        existing.provider && typeof existing.provider === "object"
+          ? (existing.provider as Record<string, unknown>)
+          : {};
+
+      if (providers.opper !== undefined && !opts.overwrite) {
         return { path, wrote: false, reason: "exists" };
       }
-    } catch {
-      // unparseable existing config — safe to overwrite
+
+      const merged = {
+        ...existing,
+        provider: { ...providers, opper: templateConfig.provider.opper },
+      };
+      await writeFile(path, JSON.stringify(merged, null, 2), "utf8");
+      return { path, wrote: true };
     }
   }
 
-  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, template, "utf8");
   return { path, wrote: true };
 }

@@ -65,4 +65,91 @@ describe("configureOpenCode", () => {
     const result = await configureOpenCode({ location: "global" });
     expect(result.wrote).toBe(true);
   });
+
+  it("grafts the Opper provider into an existing config that has no provider key", async () => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(
+      target,
+      JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        theme: "tokyonight",
+        model: "anthropic/claude-sonnet-4-5",
+      }),
+      "utf8",
+    );
+
+    const result = await configureOpenCode({ location: "global" });
+    expect(result.wrote).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(target, "utf8"));
+    expect(parsed.theme).toBe("tokyonight");
+    expect(parsed.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(parsed.provider.opper.options.baseURL).toBe(
+      "https://api.opper.ai/v3/compat",
+    );
+  });
+
+  it("grafts the Opper provider into an existing config without dropping unrelated keys", async () => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(
+      target,
+      JSON.stringify({
+        $schema: "https://opencode.ai/config.json",
+        theme: "tokyonight",
+        model: "anthropic/claude-sonnet-4-5",
+        provider: {
+          openrouter: { npm: "@openrouter/ai-sdk-provider", name: "OpenRouter" },
+        },
+        agent: { build: { mode: "primary" } },
+      }),
+      "utf8",
+    );
+
+    const result = await configureOpenCode({ location: "global" });
+    expect(result.wrote).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(target, "utf8"));
+    expect(parsed.theme).toBe("tokyonight");
+    expect(parsed.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(parsed.provider.openrouter).toBeDefined();
+    expect(parsed.provider.opper).toBeDefined();
+    expect(parsed.provider.opper.options.baseURL).toBe(
+      "https://api.opper.ai/v3/compat",
+    );
+    expect(parsed.agent.build.mode).toBe("primary");
+  });
+
+  it("replaces only the Opper provider when overwrite=true is set on a populated config", async () => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    writeFileSync(
+      target,
+      JSON.stringify({
+        theme: "tokyonight",
+        model: "anthropic/claude-sonnet-4-5",
+        provider: {
+          openrouter: { npm: "@openrouter/ai-sdk-provider" },
+          opper: { stale: true },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await configureOpenCode({
+      location: "global",
+      overwrite: true,
+    });
+    expect(result.wrote).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(target, "utf8"));
+    expect(parsed.theme).toBe("tokyonight");
+    expect(parsed.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(parsed.provider.openrouter).toBeDefined();
+    expect(parsed.provider.opper.stale).toBeUndefined();
+    expect(parsed.provider.opper.options.baseURL).toBe(
+      "https://api.opper.ai/v3/compat",
+    );
+  });
 });
