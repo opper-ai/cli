@@ -82,3 +82,17 @@ describe("claude-desktop adapter — detect", () => {
     }
   });
 });
+
+describe("claude-desktop adapter — paths (via isConfigured)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+  });
+
+  it("returns false when no config files exist (fresh tree)", async () => {
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+});
