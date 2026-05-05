@@ -1,10 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFileSync as readFileSyncReal } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { platformMock, homedirMock, existsSyncMock } = vi.hoisted(() => {
+const { platformMock, homedirMock, existsSyncMock, runMock } = vi.hoisted(() => {
   // Capture the real existsSync before any mocking happens
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { existsSync: realExistsSync } = require("node:fs") as typeof import("node:fs");
@@ -13,6 +13,7 @@ const { platformMock, homedirMock, existsSyncMock } = vi.hoisted(() => {
     platformMock: vi.fn<[], NodeJS.Platform>(() => "darwin"),
     homedirMock: vi.fn<[], string>(() => "/nonexistent"),
     existsSyncMock,
+    runMock: vi.fn(),
   };
 });
 
@@ -25,6 +26,8 @@ vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return { ...actual, existsSync: existsSyncMock };
 });
+
+vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const { claudeDesktop } = await import("../../src/agents/claude-desktop.js");
 
@@ -321,6 +324,8 @@ describe("claude-desktop adapter — install / spawn arg guards", () => {
   beforeEach(() => {
     platformMock.mockReturnValue("darwin");
     homedirMock.mockReturnValue(makeTempHome());
+    runMock.mockReset();
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
   });
 
   it("install throws AGENT_NOT_FOUND with the manual-install hint", async () => {
@@ -340,5 +345,102 @@ describe("claude-desktop adapter — install / spawn arg guards", () => {
     await expect(claudeDesktop.spawn!(["foo"], ROUTING)).rejects.toMatchObject({
       message: expect.stringContaining("does not accept"),
     });
+  });
+});
+
+import type { RunResult } from "../../src/util/run.js";
+
+function ok(stdout = ""): RunResult {
+  return { code: 0, stdout, stderr: "" };
+}
+
+const ROUTING = {
+  baseUrl: "https://api.opper.ai/v3/compat",
+  apiKey: "op_test_key",
+  model: "claude-opus-4-7",
+  compatShape: "openai" as const,
+};
+
+describe("claude-desktop adapter — spawn (macOS)", () => {
+  let home: string;
+
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+    runMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens Claude when not already running", async () => {
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") return ok(""); // not running -> empty stdout
+      return ok();
+    });
+    const code = await claudeDesktop.spawn!([], ROUTING);
+    expect(code).toBe(0);
+
+    // First call: detect running. Second call: open -a Claude.
+    expect(runMock).toHaveBeenCalledWith(
+      "pgrep",
+      ["-f", "Claude.app/Contents/MacOS/Claude"],
+    );
+    expect(runMock).toHaveBeenCalledWith("open", ["-a", "Claude"]);
+    // Should not have called osascript when not running.
+    const osascriptCalls = runMock.mock.calls.filter((c: string[]) => c[0] === "osascript");
+    expect(osascriptCalls).toHaveLength(0);
+  });
+
+  it("quits then reopens Claude when running, polling until exit", async () => {
+    let pgrepCalls = 0;
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") {
+        pgrepCalls += 1;
+        // First two pgrep calls: running. Third: gone.
+        return pgrepCalls < 3 ? ok("12345\n") : ok("");
+      }
+      return ok();
+    });
+    const code = await claudeDesktop.spawn!([], ROUTING);
+    expect(code).toBe(0);
+
+    expect(runMock).toHaveBeenCalledWith("osascript", [
+      "-e",
+      'tell application "Claude" to quit',
+    ]);
+    expect(runMock).toHaveBeenCalledWith("open", ["-a", "Claude"]);
+    expect(pgrepCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("errors when Claude fails to quit within the timeout", async () => {
+    // Spy on setTimeout to call back immediately AND advance Date.now() so the
+    // deadline check exits after one iteration of the polling loop.
+    const realDateNow = Date.now;
+    let fakeNow = realDateNow();
+    vi.spyOn(global, "setTimeout").mockImplementation(
+      (fn: TimerHandler, _delay?: number) => {
+        // Each sleep advances fake time by QUIT_POLL_INTERVAL_MS (200ms).
+        fakeNow += 200;
+        (fn as () => void)();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      },
+    );
+    vi.spyOn(Date, "now").mockImplementation(() => fakeNow);
+
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") return ok("12345\n"); // always running
+      return ok();
+    });
+
+    try {
+      await expect(claudeDesktop.spawn!([], ROUTING)).rejects.toMatchObject({
+        message: expect.stringContaining("did not quit"),
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

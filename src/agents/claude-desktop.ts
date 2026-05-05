@@ -4,6 +4,7 @@ import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { run } from "../util/run.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -56,6 +57,9 @@ function appCandidates(): string[] {
 
 const OPPER_PROFILE_ID = "727f05c8-a429-43cc-b1c6-36d8883d98b8";
 const OPPER_PROFILE_NAME = "Opper";
+
+const QUIT_TIMEOUT_MS = 5_000;
+const QUIT_POLL_INTERVAL_MS = 200;
 
 interface ThirdPartyPaths {
   desktopConfig: string;
@@ -309,6 +313,77 @@ async function install(): Promise<void> {
   );
 }
 
+function isClaudeRunning(): boolean {
+  switch (platform()) {
+    case "darwin": {
+      const result = run("pgrep", ["-f", "Claude.app/Contents/MacOS/Claude"]);
+      return result.code === 0 && result.stdout.trim().length > 0;
+    }
+    case "win32": {
+      const result = run("powershell.exe", [
+        "-NoProfile",
+        "-Command",
+        "(Get-Process claude -ErrorAction SilentlyContinue | " +
+          "Where-Object { $_.MainWindowHandle -ne 0 } | " +
+          "Select-Object -First 1).Id",
+      ]);
+      return result.code === 0 && result.stdout.trim().length > 0;
+    }
+    default:
+      return false;
+  }
+}
+
+function quitClaude(): void {
+  switch (platform()) {
+    case "darwin":
+      run("osascript", ["-e", 'tell application "Claude" to quit']);
+      return;
+    case "win32":
+      run("powershell.exe", [
+        "-NoProfile",
+        "-Command",
+        "Get-Process claude -ErrorAction SilentlyContinue | " +
+          "Where-Object { $_.MainWindowHandle -ne 0 } | " +
+          "ForEach-Object { [void]$_.CloseMainWindow() }",
+      ]);
+      return;
+  }
+}
+
+async function waitForClaudeExit(): Promise<boolean> {
+  const deadline = Date.now() + QUIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (!isClaudeRunning()) return true;
+    await new Promise((r) => setTimeout(r, QUIT_POLL_INTERVAL_MS));
+  }
+  return !isClaudeRunning();
+}
+
+function openClaude(): void {
+  switch (platform()) {
+    case "darwin":
+      run("open", ["-a", "Claude"]);
+      return;
+    case "win32": {
+      const exe = appCandidates().find((p) => existsSync(p));
+      if (!exe) {
+        throw new OpperError(
+          "AGENT_NOT_FOUND",
+          "Claude Desktop executable was not found.",
+          "Open Claude Desktop manually once and re-run.",
+        );
+      }
+      run("powershell.exe", [
+        "-NoProfile",
+        "-Command",
+        `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
+      ]);
+      return;
+    }
+  }
+}
+
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   if (args.length > 0) {
     throw new OpperError(
@@ -317,7 +392,19 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     );
   }
   await configure({ apiKey: routing.apiKey });
-  // Quit + reopen logic added in Task 8.
+
+  if (isClaudeRunning()) {
+    quitClaude();
+    const exited = await waitForClaudeExit();
+    if (!exited) {
+      throw new OpperError(
+        "AGENT_RESTORE_FAILED",
+        "Claude Desktop did not quit within 5s.",
+        "Quit Claude Desktop manually and re-run `opper launch claude-desktop`.",
+      );
+    }
+  }
+  openClaude();
   return 0;
 }
 
