@@ -309,8 +309,16 @@ async function install(): Promise<void> {
   );
 }
 
-async function spawn(_args: string[], _routing: OpperRouting): Promise<number> {
-  throw new OpperError("AGENT_NOT_FOUND", "claude-desktop adapter not yet implemented");
+async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  if (args.length > 0) {
+    throw new OpperError(
+      "AGENT_NOT_FOUND",
+      "claude-desktop does not accept passthrough arguments.",
+    );
+  }
+  await configure({ apiKey: routing.apiKey });
+  // Quit + reopen logic added in Task 8.
+  return 0;
 }
 
 export const claudeDesktop: AgentAdapter = {

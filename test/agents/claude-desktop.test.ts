@@ -316,3 +316,29 @@ describe("claude-desktop adapter — unconfigure", () => {
     expect(await claudeDesktop.isConfigured()).toBe(false);
   });
 });
+
+describe("claude-desktop adapter — install / spawn arg guards", () => {
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    homedirMock.mockReturnValue(makeTempHome());
+  });
+
+  it("install throws AGENT_NOT_FOUND with the manual-install hint", async () => {
+    await expect(claudeDesktop.install!()).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      hint: expect.stringContaining("claude.ai/download"),
+    });
+  });
+
+  it("spawn rejects passthrough arguments", async () => {
+    const ROUTING = {
+      baseUrl: "https://api.opper.ai/v3/compat",
+      apiKey: "op_test_key",
+      model: "claude-opus-4-7",
+      compatShape: "openai" as const,
+    };
+    await expect(claudeDesktop.spawn!(["foo"], ROUTING)).rejects.toMatchObject({
+      message: expect.stringContaining("does not accept"),
+    });
+  });
+});
