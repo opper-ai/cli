@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -121,6 +123,57 @@ function targetPaths(): ConfigTargets {
   };
 }
 
+type JsonObject = Record<string, unknown>;
+
+async function readJsonAllowMissing(path: string): Promise<JsonObject> {
+  try {
+    const data = await readFile(path, "utf8");
+    const parsed = JSON.parse(data) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as JsonObject;
+    }
+    return {};
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+}
+
+async function writeJson(path: string, data: JsonObject): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf8");
+}
+
+async function writeDeploymentMode(path: string, mode: "1p" | "3p"): Promise<void> {
+  const cfg = await readJsonAllowMissing(path);
+  cfg.deploymentMode = mode;
+  await writeJson(path, cfg);
+}
+
+async function writeMetaWithOpperEntry(path: string): Promise<void> {
+  const meta = await readJsonAllowMissing(path);
+  meta.appliedId = OPPER_PROFILE_ID;
+  const entries = Array.isArray(meta.entries) ? meta.entries : [];
+  const filtered = entries.filter((e: unknown) => {
+    const obj = e as { id?: unknown } | null;
+    return !(obj && typeof obj === "object" && obj.id === OPPER_PROFILE_ID);
+  });
+  filtered.push({ id: OPPER_PROFILE_ID, name: OPPER_PROFILE_NAME });
+  meta.entries = filtered;
+  await writeJson(path, meta);
+}
+
+async function writeGatewayProfile(path: string, apiKey: string): Promise<void> {
+  const cfg = await readJsonAllowMissing(path);
+  cfg.inferenceProvider = "gateway";
+  cfg.inferenceGatewayBaseUrl = OPPER_COMPAT_URL;
+  cfg.inferenceGatewayApiKey = apiKey;
+  cfg.inferenceGatewayAuthScheme = "bearer";
+  cfg.disableDeploymentModeChooser = true;
+  delete cfg.inferenceModels;
+  await writeJson(path, cfg);
+}
+
 async function detect(): Promise<DetectResult> {
   for (const candidate of appCandidates()) {
     if (existsSync(candidate)) return { installed: true };
@@ -132,8 +185,23 @@ async function isConfigured(): Promise<boolean> {
   return false;
 }
 
-async function configure(_opts: ConfigureOptions): Promise<void> {
-  throw new OpperError("AGENT_NOT_FOUND", "claude-desktop adapter not yet implemented");
+async function configure(opts: ConfigureOptions): Promise<void> {
+  if (!opts.apiKey) {
+    throw new OpperError(
+      "AUTH_REQUIRED",
+      "Claude Desktop configuration needs an Opper API key.",
+      "Run `opper login` first, or set OPPER_API_KEY.",
+    );
+  }
+  const targets = targetPaths();
+  for (const path of targets.normalConfigs) {
+    await writeDeploymentMode(path, "3p");
+  }
+  for (const target of targets.thirdPartyProfiles) {
+    await writeDeploymentMode(target.desktopConfig, "3p");
+    await writeMetaWithOpperEntry(target.meta);
+    await writeGatewayProfile(target.profile, opts.apiKey);
+  }
 }
 
 async function unconfigure(): Promise<void> {

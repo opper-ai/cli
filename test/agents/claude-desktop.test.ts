@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync as readFileSyncReal } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -94,5 +95,110 @@ describe("claude-desktop adapter — paths (via isConfigured)", () => {
 
   it("returns false when no config files exist (fresh tree)", async () => {
     expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+});
+
+describe("claude-desktop adapter — configure", () => {
+  let home: string;
+
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+  });
+
+  function readJSON(path: string): any {
+    return JSON.parse(readFileSyncReal(path, "utf8"));
+  }
+
+  it("throws AUTH_REQUIRED when called without an apiKey", async () => {
+    await expect(claudeDesktop.configure({})).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+    });
+  });
+
+  it("writes deploymentMode=3p to both normal and 3p config files", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const base = join(home, "Library", "Application Support");
+    expect(readJSON(join(base, "Claude", "claude_desktop_config.json"))).toMatchObject({
+      deploymentMode: "3p",
+    });
+    expect(readJSON(join(base, "Claude-3p", "claude_desktop_config.json"))).toMatchObject({
+      deploymentMode: "3p",
+    });
+  });
+
+  it("writes the Opper entry into _meta.json and sets appliedId", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const meta = readJSON(
+      join(home, "Library", "Application Support", "Claude-3p", "configLibrary", "_meta.json"),
+    );
+    expect(meta.appliedId).toBe("727f05c8-a429-43cc-b1c6-36d8883d98b8");
+    expect(meta.entries).toContainEqual({
+      id: "727f05c8-a429-43cc-b1c6-36d8883d98b8",
+      name: "Opper",
+    });
+  });
+
+  it("writes the gateway profile JSON with Opper's compat URL and the api key", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profile = readJSON(
+      join(
+        home,
+        "Library",
+        "Application Support",
+        "Claude-3p",
+        "configLibrary",
+        "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+      ),
+    );
+    expect(profile).toMatchObject({
+      inferenceProvider: "gateway",
+      inferenceGatewayBaseUrl: "https://api.opper.ai/v3/compat",
+      inferenceGatewayApiKey: "op_test_key",
+      inferenceGatewayAuthScheme: "bearer",
+      disableDeploymentModeChooser: true,
+    });
+  });
+
+  it("preserves user-owned siblings in the normal config and _meta.json", async () => {
+    const base = join(home, "Library", "Application Support");
+    const normalCfg = join(base, "Claude", "claude_desktop_config.json");
+    mkdirSync(join(base, "Claude"), { recursive: true });
+    writeFileSync(
+      normalCfg,
+      JSON.stringify({ mcpServers: { fs: { command: "fs" } } }, null, 2),
+    );
+    const metaPath = join(base, "Claude-3p", "configLibrary", "_meta.json");
+    mkdirSync(join(base, "Claude-3p", "configLibrary"), { recursive: true });
+    writeFileSync(
+      metaPath,
+      JSON.stringify({ entries: [{ id: "user-other", name: "Other" }] }, null, 2),
+    );
+
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+
+    expect(readJSON(normalCfg)).toMatchObject({
+      mcpServers: { fs: { command: "fs" } },
+      deploymentMode: "3p",
+    });
+    const meta = readJSON(metaPath);
+    expect(meta.entries).toContainEqual({ id: "user-other", name: "Other" });
+    expect(meta.entries).toContainEqual({
+      id: "727f05c8-a429-43cc-b1c6-36d8883d98b8",
+      name: "Opper",
+    });
+  });
+
+  it("is idempotent — running twice does not duplicate the Opper entry", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const meta = readJSON(
+      join(home, "Library", "Application Support", "Claude-3p", "configLibrary", "_meta.json"),
+    );
+    const opperEntries = (meta.entries as Array<{ id: string }>).filter(
+      (e) => e.id === "727f05c8-a429-43cc-b1c6-36d8883d98b8",
+    );
+    expect(opperEntries).toHaveLength(1);
   });
 });
