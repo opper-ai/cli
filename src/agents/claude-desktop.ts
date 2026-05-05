@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
@@ -31,10 +31,33 @@ function windowsLocalAppData(): string | null {
   }
 }
 
+function windowsGlobCandidates(local: string): string[] {
+  const parents = [
+    join(local, "AnthropicClaude"),
+    join(local, "Programs", "Claude"),
+    join(local, "Programs", "Claude Desktop"),
+  ];
+  const out: string[] = [];
+  for (const parent of parents) {
+    let entries: string[];
+    try {
+      entries = readdirSync(parent);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith("app-")) {
+        out.push(join(parent, entry, "Claude.exe"));
+      }
+    }
+  }
+  return out;
+}
+
 function windowsAppCandidates(): string[] {
   const local = windowsLocalAppData();
   if (!local) return [];
-  return [
+  const fixed = [
     join(local, "Programs", "Claude", "Claude.exe"),
     join(local, "Programs", "Claude Desktop", "Claude.exe"),
     join(local, "Claude", "Claude.exe"),
@@ -42,6 +65,7 @@ function windowsAppCandidates(): string[] {
     join(local, "Claude Desktop", "Claude.exe"),
     join(local, "AnthropicClaude", "Claude.exe"),
   ];
+  return dedupePaths([...fixed, ...windowsGlobCandidates(local)]);
 }
 
 function appCandidates(): string[] {
@@ -336,9 +360,17 @@ function isClaudeRunning(): boolean {
 
 function quitClaude(): void {
   switch (platform()) {
-    case "darwin":
-      run("osascript", ["-e", 'tell application "Claude" to quit']);
+    case "darwin": {
+      const result = run("osascript", ["-e", 'tell application "Claude" to quit']);
+      if (result.code !== 0 && /Not authorized/i.test(result.stderr)) {
+        throw new OpperError(
+          "AGENT_CONFIG_CONFLICT",
+          "macOS denied automation permission for Claude Desktop.",
+          "Grant access in System Settings → Privacy & Security → Automation, then re-run `opper launch claude-desktop`.",
+        );
+      }
       return;
+    }
     case "win32":
       run("powershell.exe", [
         "-NoProfile",
@@ -387,7 +419,7 @@ function openClaude(): void {
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   if (args.length > 0) {
     throw new OpperError(
-      "AGENT_NOT_FOUND",
+      "AGENT_CONFIG_CONFLICT",
       "claude-desktop does not accept passthrough arguments.",
     );
   }

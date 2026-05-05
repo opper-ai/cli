@@ -85,6 +85,22 @@ describe("claude-desktop adapter — detect", () => {
       else process.env.LOCALAPPDATA = prev;
     }
   });
+
+  it("windows: returns installed=true when only a Squirrel app-* sub-dir exists", async () => {
+    const prev = process.env.LOCALAPPDATA;
+    try {
+      platformMock.mockReturnValue("win32");
+      const local = join(home, "AppData", "Local");
+      process.env.LOCALAPPDATA = local;
+      mkdirSync(join(local, "AnthropicClaude", "app-1.2.3"), { recursive: true });
+      writeFileSync(join(local, "AnthropicClaude", "app-1.2.3", "Claude.exe"), "");
+      const result = await claudeDesktop.detect();
+      expect(result.installed).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = prev;
+    }
+  });
 });
 
 describe("claude-desktop adapter — paths (via isConfigured)", () => {
@@ -343,6 +359,7 @@ describe("claude-desktop adapter — install / spawn arg guards", () => {
       compatShape: "openai" as const,
     };
     await expect(claudeDesktop.spawn!(["foo"], ROUTING)).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT",
       message: expect.stringContaining("does not accept"),
     });
   });
@@ -413,6 +430,24 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
     ]);
     expect(runMock).toHaveBeenCalledWith("open", ["-a", "Claude"]);
     expect(pgrepCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("surfaces a TCC denial hint when osascript reports 'Not authorized'", async () => {
+    let pgrepCalls = 0;
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") {
+        pgrepCalls += 1;
+        return ok("12345\n"); // running
+      }
+      if (cmd === "osascript") {
+        return { code: 1, stdout: "", stderr: "Not authorized to send Apple events to Claude." };
+      }
+      return ok();
+    });
+    await expect(claudeDesktop.spawn!([], ROUTING)).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT",
+      hint: expect.stringContaining("Privacy & Security"),
+    });
   });
 
   it("errors when Claude fails to quit within the timeout", async () => {
