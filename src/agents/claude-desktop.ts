@@ -249,8 +249,56 @@ async function configure(opts: ConfigureOptions): Promise<void> {
   }
 }
 
+async function clearOpperEntryFromMeta(path: string): Promise<void> {
+  const meta = await readJsonOrNull(path);
+  if (!meta) return;
+  let changed = false;
+  if (meta.appliedId === OPPER_PROFILE_ID) {
+    delete meta.appliedId;
+    changed = true;
+  }
+  if (Array.isArray(meta.entries)) {
+    const filtered = meta.entries.filter((e: unknown) => {
+      const obj = e as { id?: unknown } | null;
+      return !(obj && typeof obj === "object" && obj.id === OPPER_PROFILE_ID);
+    });
+    if (filtered.length !== meta.entries.length) {
+      meta.entries = filtered;
+      changed = true;
+    }
+  }
+  if (changed) await writeJson(path, meta);
+}
+
+async function blankGatewayProfile(path: string): Promise<void> {
+  const cfg = await readJsonOrNull(path);
+  if (!cfg) return;
+  delete cfg.inferenceProvider;
+  delete cfg.inferenceGatewayBaseUrl;
+  delete cfg.inferenceGatewayApiKey;
+  delete cfg.inferenceGatewayAuthScheme;
+  delete cfg.inferenceModels;
+  cfg.disableDeploymentModeChooser = false;
+  await writeJson(path, cfg);
+}
+
+async function maybeFlipToFirstParty(path: string): Promise<void> {
+  const cfg = await readJsonOrNull(path);
+  if (!cfg) return;
+  cfg.deploymentMode = "1p";
+  await writeJson(path, cfg);
+}
+
 async function unconfigure(): Promise<void> {
-  // Filled in by Task 6.
+  const targets = targetPaths();
+  for (const path of targets.normalConfigs) {
+    await maybeFlipToFirstParty(path);
+  }
+  for (const target of targets.thirdPartyProfiles) {
+    await maybeFlipToFirstParty(target.desktopConfig);
+    await clearOpperEntryFromMeta(target.meta);
+    await blankGatewayProfile(target.profile);
+  }
 }
 
 async function install(): Promise<void> {

@@ -231,3 +231,88 @@ describe("claude-desktop adapter — configure", () => {
     expect(opperEntries).toHaveLength(1);
   });
 });
+
+describe("claude-desktop adapter — unconfigure", () => {
+  let home: string;
+
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+  });
+
+  function readJSON(path: string): any {
+    return JSON.parse(readFileSyncReal(path, "utf8"));
+  }
+
+  it("is a no-op on a fresh tree (no errors, no writes)", async () => {
+    await expect(claudeDesktop.unconfigure()).resolves.toBeUndefined();
+  });
+
+  it("flips deploymentMode back to 1p in both config files", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.unconfigure();
+    const base = join(home, "Library", "Application Support");
+    expect(readJSON(join(base, "Claude", "claude_desktop_config.json"))).toMatchObject({
+      deploymentMode: "1p",
+    });
+    expect(readJSON(join(base, "Claude-3p", "claude_desktop_config.json"))).toMatchObject({
+      deploymentMode: "1p",
+    });
+  });
+
+  it("removes the Opper entry from _meta.json and clears appliedId", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.unconfigure();
+    const meta = readJSON(
+      join(home, "Library", "Application Support", "Claude-3p", "configLibrary", "_meta.json"),
+    );
+    expect(meta.appliedId).toBeUndefined();
+    const opperEntries = (meta.entries as Array<{ id: string }>).filter(
+      (e) => e.id === "727f05c8-a429-43cc-b1c6-36d8883d98b8",
+    );
+    expect(opperEntries).toHaveLength(0);
+  });
+
+  it("preserves user-owned _meta.json entries", async () => {
+    const base = join(home, "Library", "Application Support");
+    mkdirSync(join(base, "Claude-3p", "configLibrary"), { recursive: true });
+    writeFileSync(
+      join(base, "Claude-3p", "configLibrary", "_meta.json"),
+      JSON.stringify({ entries: [{ id: "user-other", name: "Other" }] }),
+    );
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.unconfigure();
+    const meta = readJSON(
+      join(base, "Claude-3p", "configLibrary", "_meta.json"),
+    );
+    expect(meta.entries).toContainEqual({ id: "user-other", name: "Other" });
+  });
+
+  it("blanks the gateway fields in the profile JSON", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    await claudeDesktop.unconfigure();
+    const profile = readJSON(
+      join(
+        home,
+        "Library",
+        "Application Support",
+        "Claude-3p",
+        "configLibrary",
+        "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+      ),
+    );
+    expect(profile.inferenceProvider).toBeUndefined();
+    expect(profile.inferenceGatewayBaseUrl).toBeUndefined();
+    expect(profile.inferenceGatewayApiKey).toBeUndefined();
+    expect(profile.inferenceGatewayAuthScheme).toBeUndefined();
+    expect(profile.disableDeploymentModeChooser).toBe(false);
+  });
+
+  it("isConfigured returns false after unconfigure", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+    await claudeDesktop.unconfigure();
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+});
