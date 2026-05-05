@@ -170,7 +170,9 @@ async function readJsonAllowMissing(path: string): Promise<JsonObject> {
 
 async function writeJson(path: string, data: JsonObject): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf8");
+  // 0o600 because the gateway profile JSON stores inferenceGatewayApiKey;
+  // applied uniformly so we don't have to reason about which file is which.
+  await writeFile(path, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
 }
 
 async function readJsonOrNull(path: string): Promise<JsonObject | null> {
@@ -411,9 +413,18 @@ async function waitForClaudeExit(): Promise<boolean> {
 
 function openClaude(): void {
   switch (platform()) {
-    case "darwin":
-      run("open", ["-a", "Claude"]);
+    case "darwin": {
+      const result = run("open", ["-a", "Claude"]);
+      if (result.code !== 0) {
+        throw new OpperError(
+          "AGENT_NOT_FOUND",
+          "Failed to open Claude Desktop.",
+          (result.stderr.trim() || "`open -a Claude` exited non-zero.") +
+            " Open Claude Desktop manually and re-run if the problem persists.",
+        );
+      }
       return;
+    }
     case "win32": {
       const exe = appCandidates().find((p) => existsSync(p));
       if (!exe) {
@@ -423,11 +434,19 @@ function openClaude(): void {
           "Open Claude Desktop manually once and re-run.",
         );
       }
-      run("powershell.exe", [
+      const result = run("powershell.exe", [
         "-NoProfile",
         "-Command",
         `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
       ]);
+      if (result.code !== 0) {
+        throw new OpperError(
+          "AGENT_NOT_FOUND",
+          "Failed to start Claude Desktop.",
+          (result.stderr.trim() || "Start-Process exited non-zero.") +
+            " Open Claude Desktop manually and re-run if the problem persists.",
+        );
+      }
       return;
     }
   }

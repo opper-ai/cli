@@ -250,6 +250,21 @@ describe("claude-desktop adapter — configure", () => {
     expect(opperEntries).toHaveLength(1);
   });
 
+  it("writes the gateway profile JSON with owner-only permissions (0o600)", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profilePath = join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude-3p",
+      "configLibrary",
+      "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+    );
+    const { statSync } = await import("node:fs");
+    const mode = statSync(profilePath).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
   it("writes inferenceModels with DEFAULT_MODELS.opus first when configured via configure()", async () => {
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     const profile = readJSON(
@@ -470,6 +485,18 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
     ]);
     expect(runMock).toHaveBeenCalledWith("open", ["-a", "Claude"]);
     expect(pgrepCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it("throws when `open -a Claude` exits non-zero", async () => {
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") return ok(""); // not running
+      if (cmd === "open") return { code: 1, stdout: "", stderr: "kLSApplicationNotFoundErr" };
+      return ok();
+    });
+    await expect(claudeDesktop.spawn!([], ROUTING)).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      message: expect.stringContaining("Failed to open"),
+    });
   });
 
   it("surfaces a TCC denial hint when osascript reports 'Not authorized'", async () => {
