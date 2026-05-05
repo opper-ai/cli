@@ -1,6 +1,7 @@
-import { listAdapters } from "../agents/registry.js";
+import { listAdapters, getAdapter } from "../agents/registry.js";
 import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
+import { OpperError } from "../errors.js";
 
 interface Row {
   name: string;
@@ -84,4 +85,17 @@ export async function agentsListCommand(): Promise<void> {
       ].join("  "),
     );
   }
+}
+
+export async function agentsUninstallCommand(name: string): Promise<void> {
+  const adapter = getAdapter(name);
+  if (!adapter) {
+    throw new OpperError(
+      "AGENT_NOT_FOUND",
+      `Unknown agent "${name}"`,
+      "Run `opper agents list` to see supported agents.",
+    );
+  }
+  await adapter.unconfigure();
+  console.log(`${adapter.displayName} integration removed.`);
 }
