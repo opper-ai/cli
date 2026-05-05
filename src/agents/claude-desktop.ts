@@ -144,6 +144,40 @@ async function writeJson(path: string, data: JsonObject): Promise<void> {
   await writeFile(path, JSON.stringify(data, null, 2) + "\n", "utf8");
 }
 
+async function readJsonOrNull(path: string): Promise<JsonObject | null> {
+  try {
+    const data = await readFile(path, "utf8");
+    const parsed = JSON.parse(data) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as JsonObject;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function deploymentModeIsThirdParty(path: string): Promise<boolean> {
+  const cfg = await readJsonOrNull(path);
+  return cfg?.deploymentMode === "3p";
+}
+
+async function profileIsOpperGateway(target: ThirdPartyPaths): Promise<boolean> {
+  const meta = await readJsonOrNull(target.meta);
+  if (meta?.appliedId !== OPPER_PROFILE_ID) return false;
+  const profile = await readJsonOrNull(target.profile);
+  if (!profile) return false;
+  if (profile.inferenceProvider !== "gateway") return false;
+  const url = typeof profile.inferenceGatewayBaseUrl === "string"
+    ? profile.inferenceGatewayBaseUrl.replace(/\/+$/, "")
+    : "";
+  if (url !== OPPER_COMPAT_URL.replace(/\/+$/, "")) return false;
+  const key = typeof profile.inferenceGatewayApiKey === "string"
+    ? profile.inferenceGatewayApiKey.trim()
+    : "";
+  return key.length > 0;
+}
+
 async function writeDeploymentMode(path: string, mode: "1p" | "3p"): Promise<void> {
   const cfg = await readJsonAllowMissing(path);
   cfg.deploymentMode = mode;
@@ -182,7 +216,18 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function isConfigured(): Promise<boolean> {
-  return false;
+  const targets = targetPaths();
+  if (targets.normalConfigs.length === 0 || targets.thirdPartyProfiles.length === 0) {
+    return false;
+  }
+  for (const path of targets.normalConfigs) {
+    if (!(await deploymentModeIsThirdParty(path))) return false;
+  }
+  for (const target of targets.thirdPartyProfiles) {
+    if (!(await deploymentModeIsThirdParty(target.desktopConfig))) return false;
+    if (!(await profileIsOpperGateway(target))) return false;
+  }
+  return true;
 }
 
 async function configure(opts: ConfigureOptions): Promise<void> {

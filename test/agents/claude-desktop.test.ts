@@ -98,6 +98,35 @@ describe("claude-desktop adapter — paths (via isConfigured)", () => {
   });
 });
 
+describe("claude-desktop adapter — isConfigured", () => {
+  let home: string;
+
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+  });
+
+  it("returns false on a fresh tree", async () => {
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+
+  it("returns true after configure()", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+  });
+
+  it("returns false when only the normal config is in 3p mode (incomplete)", async () => {
+    const base = join(home, "Library", "Application Support");
+    mkdirSync(join(base, "Claude"), { recursive: true });
+    writeFileSync(
+      join(base, "Claude", "claude_desktop_config.json"),
+      JSON.stringify({ deploymentMode: "3p" }),
+    );
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+});
+
 describe("claude-desktop adapter — configure", () => {
   let home: string;
 
