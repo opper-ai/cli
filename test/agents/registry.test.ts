@@ -15,4 +15,11 @@ describe("adapter registry", () => {
   it("returns null for unknown names", () => {
     expect(getAdapter("nonexistent")).toBeNull();
   });
+
+  it("registers claude-desktop as a launchable adapter", async () => {
+    const adapter = getAdapter("claude-desktop");
+    expect(adapter).not.toBeNull();
+    expect(adapter?.displayName).toBe("Claude Desktop");
+    expect(typeof adapter?.spawn).toBe("function");
+  });
 });
