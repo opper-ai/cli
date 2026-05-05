@@ -58,21 +58,27 @@ describe("claude-desktop adapter — detect", () => {
     expect((await claudeDesktop.detect()).installed).toBe(false);
   });
 
-  it("darwin: returns installed=true when /Applications/Claude.app exists", async () => {
-    // The adapter checks /Applications/Claude.app first; we can't write
-    // to it in CI, so verify the user-Applications fallback instead.
+  it("darwin: returns installed=true when ~/Applications/Claude.app exists", async () => {
+    // /Applications/Claude.app is forced absent by the existsSync mock in
+    // beforeEach; this test exercises the user-Applications fallback instead.
     mkdirSync(join(home, "Applications", "Claude.app"), { recursive: true });
     const result = await claudeDesktop.detect();
     expect(result.installed).toBe(true);
   });
 
   it("windows: returns installed=true when a known candidate exists", async () => {
-    platformMock.mockReturnValue("win32");
-    const local = join(home, "AppData", "Local");
-    process.env.LOCALAPPDATA = local;
-    mkdirSync(join(local, "AnthropicClaude"), { recursive: true });
-    writeFileSync(join(local, "AnthropicClaude", "Claude.exe"), "");
-    const result = await claudeDesktop.detect();
-    expect(result.installed).toBe(true);
+    const prev = process.env.LOCALAPPDATA;
+    try {
+      platformMock.mockReturnValue("win32");
+      const local = join(home, "AppData", "Local");
+      process.env.LOCALAPPDATA = local;
+      mkdirSync(join(local, "AnthropicClaude"), { recursive: true });
+      writeFileSync(join(local, "AnthropicClaude", "Claude.exe"), "");
+      const result = await claudeDesktop.detect();
+      expect(result.installed).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = prev;
+    }
   });
 });
