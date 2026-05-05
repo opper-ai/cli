@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const hermesDetect = vi.fn();
 const hermesIsConfigured = vi.fn().mockResolvedValue(false);
@@ -20,6 +20,11 @@ vi.mock("../../src/agents/registry.js", () => ({
 }));
 
 const { agentsListCommand } = await import("../../src/commands/agents.js");
+
+const hermesUnconfigure = vi.fn();
+const getAdapterMock = vi.mocked(
+  (await import("../../src/agents/registry.js")).getAdapter,
+);
 
 describe("agentsListCommand", () => {
   it("prints each adapter with installed status, slug, and launch command", async () => {
@@ -53,5 +58,47 @@ describe("agentsListCommand", () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe("agentsUninstallCommand", () => {
+  beforeEach(() => {
+    hermesUnconfigure.mockReset();
+    getAdapterMock.mockReset();
+  });
+
+  it("calls unconfigure on the resolved adapter", async () => {
+    getAdapterMock.mockReturnValue({
+      name: "hermes",
+      displayName: "Hermes Agent",
+      docsUrl: "https://example.com",
+      detect: vi.fn(),
+      isConfigured: vi.fn(),
+      configure: vi.fn(),
+      unconfigure: hermesUnconfigure,
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { agentsUninstallCommand } = await import(
+        "../../src/commands/agents.js"
+      );
+      await agentsUninstallCommand("hermes");
+      expect(hermesUnconfigure).toHaveBeenCalled();
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("Hermes Agent");
+      expect(out).toContain("removed");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("throws AGENT_NOT_FOUND for unknown adapter names", async () => {
+    getAdapterMock.mockReturnValue(null);
+    const { agentsUninstallCommand } = await import(
+      "../../src/commands/agents.js"
+    );
+    await expect(agentsUninstallCommand("nope")).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+    });
   });
 });

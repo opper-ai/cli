@@ -55,12 +55,14 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 `opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. After the session, the CLI prints a summary with duration, model, and a traces link.
 
 ```bash
-opper agents list            # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
-opper launch claude          # Anthropic Messages compat → /v3/compat
-opper launch opencode        # OpenAI Chat Completions compat → /v3/compat
-opper launch codex           # OpenAI Responses compat → /v3/compat
-opper launch hermes          # OpenAI Chat Completions compat → /v3/compat
-opper launch pi              # OpenAI Chat Completions compat → /v3/compat
+opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
+opper launch claude              # Anthropic Messages compat → /v3/compat
+opper launch claude-desktop      # rewire Claude Desktop (GUI) → /v3/compat
+opper launch opencode            # OpenAI Chat Completions compat → /v3/compat
+opper launch codex               # OpenAI Responses compat → /v3/compat
+opper launch hermes              # OpenAI Chat Completions compat → /v3/compat
+opper launch openclaw            # OpenAI Chat Completions compat → /v3/compat (background gateway)
+opper launch pi                  # OpenAI Chat Completions compat → /v3/compat
 
 # Anything after the agent name is forwarded to its CLI — handy for
 # scripting / cron with non-interactive flags.
@@ -71,14 +73,24 @@ opper launch claude --resume
 | Agent | Slug | How Opper plugs in |
 |-------|------|--------------------|
 | Claude Code | `claude` | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env vars |
+| Claude Desktop | `claude-desktop` | writes a third-party-inference (`deploymentMode: "3p"`) profile into `~/Library/Application Support/Claude-3p/` (macOS) / `%LOCALAPPDATA%\Claude-3p\` (Windows); quits and reopens the GUI app to apply |
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
 | Codex | `codex` | sentinel-managed `[model_providers.opper]` + `[profiles.opper-opus]` block in `~/.codex/config.toml` |
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
+| OpenClaw | `openclaw` | `opper` provider entry in `~/.openclaw/agents/main/agent/models.json`; `opper launch openclaw` defaults to `gateway start` (background daemon) |
 | Pi | `pi` | `opper` provider entry in `~/.pi/agent/models.json` (added/removed idempotently next to your other providers) |
 
-`opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported).
+`opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported). Claude Desktop is GUI-only on macOS/Windows and has no scripted installer — install it from <https://claude.ai/download> first.
 
 The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default.
+
+To remove an agent's Opper integration without uninstalling the agent itself:
+
+```bash
+opper agents uninstall claude-desktop   # works for any registered adapter
+```
+
+This is the non-interactive equivalent of the menu's "Uninstall" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
 ## Ask — built-in support agent
 

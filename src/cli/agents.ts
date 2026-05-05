@@ -1,4 +1,4 @@
-import { agentsListCommand } from "../commands/agents.js";
+import { agentsListCommand, agentsUninstallCommand } from "../commands/agents.js";
 import { launchCommand } from "../commands/launch.js";
 import type { RegisterFn } from "./types.js";
 
@@ -11,6 +11,15 @@ const register: RegisterFn = (program, ctx) => {
     .command("list")
     .description("List supported agents and whether each is installed")
     .action(agentsListCommand);
+
+  agentsCmd
+    .command("uninstall <name>")
+    .description(
+      "Remove the Opper integration from an agent's config (does not uninstall the agent itself)",
+    )
+    .action(async (name: string) => {
+      await agentsUninstallCommand(name);
+    });
 
   program
     .command("launch")
