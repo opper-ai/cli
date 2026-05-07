@@ -49,13 +49,17 @@ async function writeConfig(data: PiModelsFile): Promise<void> {
  * Idempotently install our `opper` provider entry. Other providers in the
  * same file (ollama, etc.) are preserved.
  */
-async function setOpperProvider(apiKey: string, launchModel: string): Promise<void> {
+async function setOpperProvider(
+  apiKey: string,
+  launchModel: string,
+  baseUrl: string,
+): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
-    baseUrl: OPPER_COMPAT_URL,
+    baseUrl,
     models: [
       {
         id: launchModel,
@@ -115,7 +119,7 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus);
+  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, OPPER_COMPAT_URL);
 }
 
 async function unconfigure(): Promise<void> {
@@ -127,9 +131,9 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Re-write the provider on every launch so the latest credentials and the
-  // chosen launch model are always the active ones.
-  await setOpperProvider(routing.apiKey, routing.model);
+  // Re-write the provider on every launch so the latest credentials, the
+  // chosen launch model, and the per-session base URL are always active.
+  await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
 
   // pi's CLI requires *both* --provider and --model to resolve a non-default
   // provider — passing only --provider falls through to the auto-resolver

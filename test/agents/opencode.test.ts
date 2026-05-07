@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
@@ -23,14 +32,48 @@ vi.mock("node:child_process", async () => {
 
 const { opencode } = await import("../../src/agents/opencode.js");
 
+const SESSION_URL =
+  "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
+
 const ROUTING = {
-  baseUrl: "https://api.opper.ai/v3/compat",
+  baseUrl: SESSION_URL,
   apiKey: "op_live_run",
   model: "claude-opus-4-7",
   compatShape: "openai" as const,
 };
 
+function opencodeConfigPath(sandbox: string): string {
+  return join(sandbox, ".config", "opencode", "opencode.json");
+}
+
+function seedOpencodeConfig(sandbox: string): void {
+  const cfgPath = opencodeConfigPath(sandbox);
+  mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+  writeFileSync(
+    cfgPath,
+    JSON.stringify(
+      {
+        provider: {
+          opper: {
+            npm: "@ai-sdk/openai-compatible",
+            options: {
+              baseURL: "https://api.opper.ai/v3/compat",
+              apiKey: "{env:OPPER_API_KEY}",
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
 describe("opencode adapter", () => {
+  let sandbox: string;
+  let prevHome: string | undefined;
+
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
@@ -42,6 +85,15 @@ describe("opencode adapter", () => {
       exists: false,
       hasOpperProvider: false,
     });
+    sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
+    prevHome = process.env.HOME;
+    process.env.HOME = sandbox;
+  });
+
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
   });
 
   it("metadata is correct", () => {
@@ -85,10 +137,11 @@ describe("opencode adapter", () => {
 
   it("spawn ensures the provider config exists then runs opencode with OPPER_API_KEY in env", async () => {
     configureOpenCodeMock.mockResolvedValue({
-      path: "/tmp/opencode.json",
+      path: opencodeConfigPath(sandbox),
       wrote: true,
     });
     spawnSyncMock.mockReturnValue({ status: 0 });
+    seedOpencodeConfig(sandbox);
 
     const code = await opencode.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
@@ -101,9 +154,45 @@ describe("opencode adapter", () => {
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
   });
 
+  it("spawn rewrites provider.opper.options.baseURL to routing.baseUrl on every launch", async () => {
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    seedOpencodeConfig(sandbox);
+
+    await opencode.spawn!([], ROUTING);
+
+    const cfg = JSON.parse(
+      readFileSync(opencodeConfigPath(sandbox), "utf8"),
+    ) as {
+      provider: { opper: { options: { baseURL: string; apiKey: string } } };
+    };
+    expect(cfg.provider.opper.options.baseURL).toBe(SESSION_URL);
+    // The {env:OPPER_API_KEY} placeholder is preserved — we only rewrote
+    // baseURL.
+    expect(cfg.provider.opper.options.apiKey).toBe("{env:OPPER_API_KEY}");
+  });
+
+  it("spawn does not crash if the opencode.json doesn't exist yet (configureOpenCode was a no-op stub)", async () => {
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    // No seedOpencodeConfig — config is missing.
+    const code = await opencode.spawn!([], ROUTING);
+    expect(code).toBe(0);
+  });
+
   it("spawn propagates non-zero exit codes", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "/tmp/x", wrote: false });
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
     spawnSyncMock.mockReturnValue({ status: 2 });
+    seedOpencodeConfig(sandbox);
     const code = await opencode.spawn!([], ROUTING);
     expect(code).toBe(2);
   });

@@ -7,6 +7,7 @@ import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import type {
   AgentAdapter,
+  ConfigureOptions,
   DetectResult,
   OpperRouting,
 } from "./types.js";
@@ -18,27 +19,29 @@ const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
 const DEFAULT_PROFILE = "opper-opus";
 
-const OPPER_BLOCK = [
-  SENTINEL_OPEN,
-  "# Managed by `opper`. Edits between these markers will be overwritten",
-  "# the next time you reconfigure Codex via the Opper CLI.",
-  "",
-  "[model_providers.opper]",
-  'name = "Opper"',
-  `base_url = "${OPPER_COMPAT_URL}"`,
-  'env_key = "OPPER_API_KEY"',
-  'wire_api = "responses"',
-  "",
-  "[profiles.opper-opus]",
-  `model = "${DEFAULT_MODELS.opus}"`,
-  'model_provider = "opper"',
-  "",
-  "[profiles.opper-sonnet]",
-  `model = "${DEFAULT_MODELS.sonnet}"`,
-  'model_provider = "opper"',
-  SENTINEL_CLOSE,
-  "",
-].join("\n");
+function buildOpperBlock(baseUrl: string): string {
+  return [
+    SENTINEL_OPEN,
+    "# Managed by `opper`. Edits between these markers will be overwritten",
+    "# the next time you reconfigure Codex via the Opper CLI.",
+    "",
+    "[model_providers.opper]",
+    'name = "Opper"',
+    `base_url = "${baseUrl}"`,
+    'env_key = "OPPER_API_KEY"',
+    'wire_api = "responses"',
+    "",
+    "[profiles.opper-opus]",
+    `model = "${DEFAULT_MODELS.opus}"`,
+    'model_provider = "opper"',
+    "",
+    "[profiles.opper-sonnet]",
+    `model = "${DEFAULT_MODELS.sonnet}"`,
+    'model_provider = "opper"',
+    SENTINEL_CLOSE,
+    "",
+  ].join("\n");
+}
 
 function codexConfigPath(): string {
   return join(homedir(), ".codex", "config.toml");
@@ -73,16 +76,17 @@ async function isConfigured(): Promise<boolean> {
   if (!existsSync(cfg)) return false;
   try {
     const text = readFileSync(cfg, "utf8");
+    // Match the sentinel + the start of the base_url line, but don't pin
+    // the URL value — at launch we rewrite it to the per-session URL.
     return (
-      text.includes(SENTINEL_OPEN) &&
-      text.includes(`base_url = "${OPPER_COMPAT_URL}"`)
+      text.includes(SENTINEL_OPEN) && /base_url = "/.test(text)
     );
   } catch {
     return false;
   }
 }
 
-async function configure(): Promise<void> {
+async function writeOpperBlock(baseUrl: string): Promise<void> {
   const cfg = codexConfigPath();
   let existing = "";
   if (existsSync(cfg)) {
@@ -93,15 +97,24 @@ async function configure(): Promise<void> {
     }
   }
   const cleaned = stripOpperBlock(existing);
+  const block = buildOpperBlock(baseUrl);
   const padded =
     cleaned.length === 0
-      ? OPPER_BLOCK
+      ? block
       : cleaned.endsWith("\n")
-        ? cleaned + OPPER_BLOCK
-        : `${cleaned}\n${OPPER_BLOCK}`;
+        ? cleaned + block
+        : `${cleaned}\n${block}`;
 
   await mkdir(dirname(cfg), { recursive: true });
   await writeFile(cfg, padded, "utf8");
+}
+
+async function configure(_opts: ConfigureOptions): Promise<void> {
+  // Configure-only flow (menu / `opper agents`): bake in the default
+  // compat URL. At launch time `spawn` rewrites the block with the
+  // session-specific URL.
+  void _opts;
+  await writeOpperBlock(OPPER_COMPAT_URL);
 }
 
 async function unconfigure(): Promise<void> {
@@ -128,8 +141,9 @@ function hasProfileArg(args: string[]): boolean {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Ensure our provider/profile block is present (first-launch ergonomics).
-  await configure();
+  // Rewrite our provider/profile block on every launch so the latest
+  // session URL (and any tags it carries) is the active base_url.
+  await writeOpperBlock(routing.baseUrl);
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
