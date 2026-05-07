@@ -2,9 +2,11 @@ import { run } from "../util/run.js";
 import { which } from "../util/which.js";
 import { OpperError } from "../errors.js";
 
-// On Windows, npm ships as `npm.cmd`. spawnSync without `shell: true` won't
-// resolve .cmd shims, so we have to invoke the right binary explicitly.
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+// On Windows, npm ships as a `.cmd` shim. Node refuses to execute .cmd
+// files via spawnSync without a shell — even when given the explicit
+// extension — so we have to route through cmd.exe (shell: true) on
+// Windows. POSIX still runs npm directly, no shell.
+const USE_SHELL = process.platform === "win32";
 
 /**
  * Run `npm install -g <pkg>` and surface a useful error if it fails.
@@ -14,7 +16,7 @@ export async function npmInstallGlobal(
   packageName: string,
   docsUrl: string,
 ): Promise<void> {
-  if (!(await which(NPM))) {
+  if (!(await which("npm"))) {
     throw new OpperError(
       "AGENT_NOT_FOUND",
       "npm is required to install this agent but was not found on PATH.",
@@ -22,7 +24,10 @@ export async function npmInstallGlobal(
     );
   }
 
-  const result = run(NPM, ["install", "-g", packageName], { inherit: true });
+  const result = run("npm", ["install", "-g", packageName], {
+    inherit: true,
+    shell: USE_SHELL,
+  });
   if (result.code === 0) return;
 
   // run() collapses both signal-killed children and spawn-time errors

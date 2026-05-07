@@ -23,10 +23,23 @@ describe("npmInstallGlobal", () => {
     ).resolves.toBeUndefined();
 
     const [cmd, args, opts] = runMock.mock.calls[0]!;
-    // Cross-platform: helper picks npm.cmd on Windows, npm elsewhere.
-    expect(cmd).toMatch(/^npm(\.cmd)?$/);
+    expect(cmd).toBe("npm");
     expect(args).toEqual(["install", "-g", "some-pkg"]);
     expect(opts).toMatchObject({ inherit: true });
+  });
+
+  it("routes through a shell on Windows so cmd.exe can resolve the npm.cmd shim", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+
+    await npmInstallGlobal("some-pkg", "https://example.test");
+
+    const [, , opts] = runMock.mock.calls[0]!;
+    // Node's spawnSync refuses to execute .cmd shims directly — without
+    // shell:true on Windows, every install would fail with code -1.
+    expect((opts as { shell?: boolean }).shell).toBe(
+      process.platform === "win32",
+    );
   });
 
   it("throws AGENT_NOT_FOUND with a Node.js install hint when npm isn't on PATH", async () => {
