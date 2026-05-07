@@ -5,11 +5,15 @@
  *   - the [profiles.opper-X] blocks Codex's adapter writes into config.toml
  *
  * Bumping a model here updates every consumer in one go.
+ *
+ * The Claude entries use Opper's vendor-agnostic aliases (no `anthropic/`
+ * prefix) so the gateway can transparently fall back across upstream
+ * providers / regions when one is degraded.
  */
 export const DEFAULT_MODELS = {
-  opus: "anthropic/claude-opus-4-7",
-  sonnet: "anthropic/claude-sonnet-4-6",
-  haiku: "anthropic/claude-haiku-4-5",
+  opus: "claude-opus-4-7",
+  sonnet: "claude-sonnet-4-6",
+  haiku: "claude-haiku-4-5",
   /** Image generation default (Imagen via Opper). */
   image: "vertexai/imagen-4.0-fast-generate-001-eu",
 } as const;

@@ -278,11 +278,11 @@ describe("claude-desktop adapter — configure", () => {
       ),
     );
     expect(profile.inferenceModels).toBeInstanceOf(Array);
-    expect(profile.inferenceModels[0]).toMatchObject({ name: "anthropic/claude-opus-4-7" });
+    expect(profile.inferenceModels[0]).toMatchObject({ name: "claude-opus-4-7" });
     // List should also include sonnet and haiku for picker convenience.
     const names = (profile.inferenceModels as Array<{name: string}>).map(m => m.name);
-    expect(names).toContain("anthropic/claude-sonnet-4-6");
-    expect(names).toContain("anthropic/claude-haiku-4-5");
+    expect(names).toContain("claude-sonnet-4-6");
+    expect(names).toContain("claude-haiku-4-5");
   });
 
   it("idempotent — running twice produces the same inferenceModels list with no duplicates", async () => {
@@ -525,7 +525,7 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
     const customRouting = {
       baseUrl: "https://api.opper.ai/v3/compat",
       apiKey: "op_test_key",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "claude-sonnet-4-6",
       compatShape: "openai" as const,
     };
     await claudeDesktop.spawn!([], customRouting);
@@ -539,7 +539,7 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
       "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
     );
     const profile = JSON.parse(readFileSyncReal(profilePath, "utf8"));
-    expect(profile.inferenceModels[0]).toMatchObject({ name: "anthropic/claude-sonnet-4-6" });
+    expect(profile.inferenceModels[0]).toMatchObject({ name: "claude-sonnet-4-6" });
   });
 
   it("errors when Claude fails to quit within the timeout", async () => {
