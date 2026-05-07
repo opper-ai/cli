@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 
+const runMock = vi.fn();
+vi.mock("../../src/util/run.js", () => ({ run: runMock }));
+
 const spawnSyncMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
@@ -23,6 +26,7 @@ const ROUTING = {
 describe("claude-code adapter", () => {
   beforeEach(() => {
     whichMock.mockReset();
+    runMock.mockReset();
     spawnSyncMock.mockReset();
   });
 
@@ -59,7 +63,19 @@ describe("claude-code adapter", () => {
     });
   });
 
-  it("install throws with the install hint", async () => {
+  it("install runs `npm i -g @anthropic-ai/claude-code` and resolves on exit 0", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    await expect(claudeCode.install!()).resolves.toBeUndefined();
+    const [cmd, args, options] = runMock.mock.calls[0]!;
+    expect(cmd).toMatch(/^npm(\.cmd)?$/);
+    expect(args).toEqual(["install", "-g", "@anthropic-ai/claude-code"]);
+    expect(options).toMatchObject({ inherit: true });
+  });
+
+  it("install throws AGENT_NOT_FOUND when npm exits non-zero", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
     await expect(claudeCode.install!()).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });

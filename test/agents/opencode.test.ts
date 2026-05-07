@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 
+const runMock = vi.fn();
+vi.mock("../../src/util/run.js", () => ({ run: runMock }));
+
 const configureOpenCodeMock = vi.fn();
 const readProjectConfigStateMock = vi.fn();
 vi.mock("../../src/setup/opencode.js", () => ({
@@ -30,6 +33,7 @@ const ROUTING = {
 describe("opencode adapter", () => {
   beforeEach(() => {
     whichMock.mockReset();
+    runMock.mockReset();
     configureOpenCodeMock.mockReset();
     readProjectConfigStateMock.mockReset();
     spawnSyncMock.mockReset();
@@ -45,7 +49,26 @@ describe("opencode adapter", () => {
     expect(opencode.displayName).toBe("OpenCode");
     expect(opencode.docsUrl).toMatch(/^https:\/\//);
     expect(typeof opencode.spawn).toBe("function");
-    expect(opencode.install).toBeUndefined(); // no scripted installer
+    expect(typeof opencode.install).toBe("function");
+  });
+
+  it("install runs `npm i -g opencode-ai` with inherited stdio and resolves on exit 0", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    await expect(opencode.install!()).resolves.toBeUndefined();
+    expect(runMock).toHaveBeenCalledTimes(1);
+    const [cmd, args, options] = runMock.mock.calls[0]!;
+    expect(cmd).toMatch(/^npm(\.cmd)?$/);
+    expect(args).toEqual(["install", "-g", "opencode-ai"]);
+    expect(options).toMatchObject({ inherit: true });
+  });
+
+  it("install throws OpperError(AGENT_NOT_FOUND) when npm exits non-zero", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
+    await expect(opencode.install!()).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+    });
   });
 
   it("detect returns installed=false when opencode not on PATH", async () => {

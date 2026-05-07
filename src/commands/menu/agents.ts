@@ -57,6 +57,13 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
     const options: Array<{ value: string; label: string; hint?: string }> = [];
 
     if (!installed) {
+      if (adapter.install) {
+        options.push({
+          value: "install",
+          label: `Install ${adapter.displayName}`,
+          hint: adapter.docsUrl,
+        });
+      }
       options.push({
         value: "docs",
         label: "Show install instructions",
@@ -120,6 +127,11 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
         case "uninstall":
           await adapter.unconfigure();
           log.success(`${adapter.displayName} integration removed.`);
+          break;
+        case "install":
+          if (!adapter.install) break;
+          await adapter.install();
+          log.success(`${adapter.displayName} installed.`);
           break;
         case "docs":
           log.info(`Install ${adapter.displayName}: ${adapter.docsUrl}`);

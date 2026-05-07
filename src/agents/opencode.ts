@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { which } from "../util/which.js";
+import { npmInstallGlobal } from "./npm-install.js";
 import {
   configureOpenCode,
   readProjectConfigState,
@@ -23,6 +24,10 @@ async function detect(): Promise<DetectResult> {
     installed: true,
     ...(existsSync(cfg) ? { configPath: cfg } : {}),
   };
+}
+
+async function install(): Promise<void> {
+  await npmInstallGlobal("opencode-ai", "https://opencode.ai");
 }
 
 async function isConfigured(): Promise<boolean> {
@@ -109,5 +114,6 @@ export const opencode: AgentAdapter = {
   isConfigured,
   configure,
   unconfigure,
+  install,
   spawn,
 };

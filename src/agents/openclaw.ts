@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
+import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import type {
@@ -100,11 +101,7 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function install(): Promise<void> {
-  throw new OpperError(
-    "AGENT_NOT_FOUND",
-    "OpenClaw must be installed manually.",
-    "Install via `npm i -g openclaw` or see https://docs.openclaw.ai.",
-  );
+  await npmInstallGlobal("openclaw", "https://docs.openclaw.ai");
 }
 
 async function isConfigured(): Promise<boolean> {
