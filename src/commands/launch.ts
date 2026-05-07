@@ -9,6 +9,9 @@ import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperApi } from "../api/client.js";
 import { resolveApiContext } from "../api/resolve.js";
 import type { OpperRouting } from "../agents/types.js";
+import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
+
+const TRACES_URL = "https://platform.opper.ai/traces";
 
 export interface LaunchOptions {
   agent: string;
@@ -104,7 +107,6 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       key: opts.key,
       startedAt,
       endedAt,
-      model: routing.model,
     });
   } catch {
     /* swallow */
@@ -117,12 +119,12 @@ interface SummaryOptions {
   key: string;
   startedAt: Date;
   endedAt: Date;
-  model: string;
 }
 
 // Numeric fields come back from /v2/analytics/usage as strings (or null
 // for empty buckets). Coerce defensively at the edge.
 interface UsageRow {
+  model?: string | null;
   cost?: string | number | null;
   count?: number | null;
   total_tokens?: string | number | null;
@@ -155,45 +157,33 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
       // session.
       granularity: "minute",
       fields: "total_tokens",
+      // Group by model so the summary reflects every model the agent
+      // actually called (e.g. /model picker switches, Haiku for compaction)
+      // rather than just the launch-time default.
+      group_by: "model",
     });
   } catch {
     rows = [];
   }
 
-  let cost = 0;
-  let count = 0;
-  let tokens = 0;
+  // Same minute bucket can show up multiple times when other group_by keys
+  // exist server-side; merge by model just in case.
+  const byModel = new Map<string, ModelUsage>();
   for (const r of rows) {
-    cost += toNum(r.cost);
-    count += toNum(r.count);
-    tokens += toNum(r.total_tokens);
+    const name = (r.model ?? "").trim();
+    if (!name) continue;
+    const existing = byModel.get(name) ?? { model: name, cost: 0, count: 0, tokens: 0 };
+    existing.cost += toNum(r.cost);
+    existing.count += toNum(r.count);
+    existing.tokens += toNum(r.total_tokens);
+    byModel.set(name, existing);
   }
 
-  const lines: string[] = ["", brand.accent("Session summary")];
-  lines.push(`  ${brand.dim("Duration".padEnd(10))}${formatDuration(durationMs)}`);
-  lines.push(`  ${brand.dim("Model".padEnd(10))}${opts.model}`);
-  if (count > 0 || tokens > 0) {
-    lines.push(`  ${brand.dim("Requests".padEnd(10))}${count.toLocaleString()}`);
-    lines.push(`  ${brand.dim("Tokens".padEnd(10))}${tokens.toLocaleString()}`);
-    lines.push(`  ${brand.dim("Cost".padEnd(10))}$${cost.toFixed(4)}`);
-  }
-  lines.push(`  ${brand.dim("Traces".padEnd(10))}https://platform.opper.ai/traces`);
-  if (count === 0 && tokens === 0) {
-    lines.push(
-      brand.dim("  (usage rollup lags ~30s — run `opper usage list` for cost / token totals)"),
-    );
-  }
-  lines.push("");
-  process.stderr.write(lines.join("\n") + "\n");
-}
-
-function formatDuration(ms: number): string {
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec}s`;
-  const min = Math.floor(totalSec / 60);
-  const sec = totalSec % 60;
-  if (min < 60) return `${min}m ${sec}s`;
-  const hr = Math.floor(min / 60);
-  const remMin = min % 60;
-  return `${hr}h ${remMin}m`;
+  process.stderr.write(
+    formatSessionSummary({
+      durationMs,
+      models: Array.from(byModel.values()),
+      tracesUrl: TRACES_URL,
+    }),
+  );
 }
