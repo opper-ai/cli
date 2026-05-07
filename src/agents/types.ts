@@ -16,6 +16,18 @@ export interface ConfigureOptions {
   apiKey?: string;
 }
 
+export interface SpawnOptions {
+  /**
+   * Where the adapter should write its persistent Opper config. Adapters
+   * without a project-level config concept (Codex, Pi, Claude Code, …)
+   * ignore this. "user" is the default — the per-user-machine config is
+   * the safe place to land, and writing there doesn't pollute repos.
+   * "project" opts into writing the cwd-local config, which is useful
+   * for pinning a model per repo.
+   */
+  configScope?: "user" | "project";
+}
+
 /**
  * One unified contract for everything we route through Opper — launchable
  * CLI agents (Hermes, OpenCode, Claude Code, Codex, Pi) and editor-only
@@ -67,7 +79,11 @@ export interface AgentAdapter {
    * Adapters without this method are configure-only (e.g. editor
    * integrations).
    */
-  spawn?(args: string[], routing: OpperRouting): Promise<number>;
+  spawn?(
+    args: string[],
+    routing: OpperRouting,
+    opts?: SpawnOptions,
+  ): Promise<number>;
 }
 
 /** Narrowed shape — useful at call sites that have already gated on `spawn`. */
