@@ -25,10 +25,20 @@ export async function npmInstallGlobal(
   const result = run(NPM, ["install", "-g", packageName], { inherit: true });
   if (result.code === 0) return;
 
-  // run() collapses spawn errors and signal-killed children to code: -1.
-  // The most common -1 here is the user hitting Ctrl-C mid-install — they
-  // already know they cancelled, so don't surface a scary "exited with -1".
+  // run() collapses both signal-killed children and spawn-time errors
+  // (EACCES on the npm binary, transient ENOENT, etc.) to code: -1.
+  // We tell them apart by stderr: with `inherit: true` run() only
+  // populates stderr when it has captured an Error.message from the
+  // spawn-failure path. Empty stderr ⇒ the child started and was killed
+  // by a signal (almost always Ctrl-C).
   if (result.code === -1) {
+    if (result.stderr.trim().length > 0) {
+      throw new OpperError(
+        "AGENT_NOT_FOUND",
+        `npm install -g ${packageName} failed to start: ${result.stderr.trim()}`,
+        `Resolve the underlying error, or install ${packageName} manually from ${docsUrl}.`,
+      );
+    }
     throw new OpperError(
       "AGENT_NOT_FOUND",
       `npm install -g ${packageName} was interrupted before completion.`,

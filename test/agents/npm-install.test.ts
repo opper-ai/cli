@@ -42,7 +42,7 @@ describe("npmInstallGlobal", () => {
     expect(runMock).not.toHaveBeenCalled();
   });
 
-  it("throws a graceful 'interrupted' error when run() reports code -1", async () => {
+  it("throws a graceful 'interrupted' error when code is -1 with empty stderr (signal kill)", async () => {
     whichMock.mockResolvedValue("/usr/bin/npm");
     runMock.mockReturnValue({ code: -1, stdout: "", stderr: "" });
 
@@ -51,6 +51,22 @@ describe("npmInstallGlobal", () => {
     ).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
       message: expect.stringContaining("interrupted"),
+    });
+  });
+
+  it("surfaces the spawn error when code is -1 with stderr (e.g. EACCES on npm)", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({
+      code: -1,
+      stdout: "",
+      stderr: "EACCES: permission denied",
+    });
+
+    await expect(
+      npmInstallGlobal("some-pkg", "https://example.test"),
+    ).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      message: expect.stringContaining("EACCES: permission denied"),
     });
   });
 
