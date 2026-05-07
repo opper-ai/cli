@@ -95,10 +95,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          git fetch origin --tags --prune --force >/dev/null
+
           # Take the higher of (local package.json) and (highest published v* tag)
           # so we never collide with a version another (possibly racing) run cut.
           compute_next() {
-            git fetch origin --tags --prune --force >/dev/null
             local pkg tag base
             pkg=$(node -p "require('./package.json').version")
             tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
@@ -113,17 +114,48 @@ jobs:
             }'
           }
 
-          apply_bump() {
-            local v=$1
-            npm version "$v" --no-git-tag-version >/dev/null
-            git add package.json package-lock.json
-            git commit -m "release: $v"
-            git tag -a "v$v" -m "release: $v"
+          apply_bump_local() {
+            npm version "$1" --no-git-tag-version >/dev/null
           }
+
+          apply_bump_with_commit() {
+            apply_bump_local "$1"
+            git add package.json package-lock.json
+            git commit -m "release: $1"
+            git tag -a "v$1" -m "release: $1"
+          }
+
+          # Rerun idempotency: if a prior attempt for THIS trigger SHA already
+          # pushed a release tag (because npm publish or gh release create
+          # failed afterwards), reuse that version instead of cutting a new one.
+          # We re-apply the version bump locally so npm publish picks up the
+          # right package.json, but skip the push entirely. The publish and
+          # gh-release steps are idempotent.
+          EXISTING_TAG=""
+          if [ -n "${GITHUB_SHA:-}" ]; then
+            while read -r t; do
+              [ -z "$t" ] && continue
+              c=$(git rev-list -n 1 "$t")
+              p=$(git log -1 --format=%P "$c" | awk '{print $1}')
+              if [ "$p" = "$GITHUB_SHA" ]; then
+                EXISTING_TAG="$t"
+                break
+              fi
+            done < <(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname)
+          fi
+
+          if [ -n "$EXISTING_TAG" ]; then
+            VER="${EXISTING_TAG#v}"
+            echo "Rerun detected for $GITHUB_SHA: reusing $EXISTING_TAG (skipping bump and push)"
+            apply_bump_local "$VER"
+            echo "version=$VER" >> "$GITHUB_OUTPUT"
+            echo "tag=$EXISTING_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           NEXT=$(compute_next)
           echo "Computed next version: $NEXT"
-          apply_bump "$NEXT"
+          apply_bump_with_commit "$NEXT"
 
           attempts=3
           for attempt in $(seq 1 $attempts); do
@@ -143,7 +175,7 @@ jobs:
             git reset --hard origin/main
             NEXT=$(compute_next)
             echo "Recomputed next version: $NEXT"
-            apply_bump "$NEXT"
+            apply_bump_with_commit "$NEXT"
           done
           exit 1
 
