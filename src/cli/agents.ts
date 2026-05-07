@@ -2,7 +2,7 @@ import { agentsListCommand, agentsUninstallCommand } from "../commands/agents.js
 import { launchCommand } from "../commands/launch.js";
 import type { RegisterFn } from "./types.js";
 
-function collectTagPairs(
+export function collectTagPairs(
   raw: string,
   acc: Record<string, string>,
 ): Record<string, string> {
