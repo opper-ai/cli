@@ -33,9 +33,10 @@ export function buildSessionBaseUrl(
   tags: Record<string, string>,
 ): string {
   validateTags(tags);
+  const cleanHost = host.replace(/\/+$/, "");
   const sortedKeys = Object.keys(tags).sort();
   const pairs = sortedKeys.map(
     (k) => `/${k}:${encodeURIComponent(tags[k] ?? "")}`,
   );
-  return `${host}/v3/session/${sessionId}${pairs.join("")}`;
+  return `${cleanHost}/v3/session/${sessionId}${pairs.join("")}`;
 }

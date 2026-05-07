@@ -28,6 +28,15 @@ describe("session-url", () => {
     );
   });
 
+  it("buildSessionBaseUrl strips trailing slashes from the host", () => {
+    const url = buildSessionBaseUrl(
+      "https://api.opper.ai/",
+      "sess_abc",
+      {},
+    );
+    expect(url).toBe("https://api.opper.ai/v3/session/sess_abc");
+  });
+
   it("buildSessionBaseUrl percent-encodes values", () => {
     const url = buildSessionBaseUrl("https://api.opper.ai", "sess_abc", {
       team: "eu/west",
