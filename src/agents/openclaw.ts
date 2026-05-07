@@ -46,13 +46,17 @@ async function writeConfig(data: ModelsFile): Promise<void> {
   await writeFile(cfg, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
 }
 
-async function setOpperProvider(apiKey: string, launchModel: string): Promise<void> {
+async function setOpperProvider(
+  apiKey: string,
+  launchModel: string,
+  baseUrl: string,
+): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
-    baseUrl: OPPER_COMPAT_URL,
+    baseUrl,
     models: [
       {
         id: launchModel,
@@ -117,7 +121,7 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus);
+  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, OPPER_COMPAT_URL);
 }
 
 async function unconfigure(): Promise<void> {
@@ -129,9 +133,9 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Ensure our provider is current with the latest credentials and the
-  // chosen launch model on every spawn.
-  await setOpperProvider(routing.apiKey, routing.model);
+  // Ensure our provider is current with the latest credentials, the
+  // chosen launch model, and the per-session base URL on every spawn.
+  await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
 
   // OpenClaw is a gateway/daemon, not an interactive REPL. Default to
   // `gateway start` — installs/starts the background service via

@@ -17,7 +17,7 @@ vi.mock("node:child_process", async () => {
 const { claudeCode } = await import("../../src/agents/claude-code.js");
 
 const ROUTING = {
-  baseUrl: "ignored-by-this-adapter",
+  baseUrl: "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme",
   apiKey: "op_live_run",
   model: "claude-sonnet-4-6",
   compatShape: "openai" as const,
@@ -90,7 +90,9 @@ describe("claude-code adapter", () => {
     expect(call[0]).toBe("claude");
     expect(call[1]).toEqual(["chat"]);
     const init = call[2] as { env: NodeJS.ProcessEnv };
-    expect(init.env.ANTHROPIC_BASE_URL).toBe("https://api.opper.ai/v3/compat");
+    expect(init.env.ANTHROPIC_BASE_URL).toBe(
+      "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme",
+    );
     expect(init.env.ANTHROPIC_AUTH_TOKEN).toBe("op_live_run");
     expect(init.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
     // Stops Claude Code from pinging api.anthropic.com directly when

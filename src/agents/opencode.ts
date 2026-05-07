@@ -68,12 +68,42 @@ async function unconfigure(): Promise<void> {
   await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
 }
 
+/**
+ * Rewrite `provider.opper.options.baseURL` in the existing opencode.json to
+ * the per-launch URL (typically a /v3/session/<sid>/<tags...> URL). The
+ * template only writes once via `configureOpenCode`, so without this step
+ * launching a session would fall back to the default compat URL baked into
+ * the template.
+ */
+async function setSessionBaseUrl(
+  baseUrl: string,
+  location: "global" | "local",
+): Promise<void> {
+  const cfg = opencodeConfigPath(location);
+  if (!existsSync(cfg)) return;
+  let parsed: {
+    provider?: Record<string, { options?: Record<string, unknown> }>;
+    [k: string]: unknown;
+  };
+  try {
+    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+  } catch {
+    return;
+  }
+  const opper = parsed.provider?.opper;
+  if (!opper) return;
+  opper.options = opper.options ?? {};
+  opper.options.baseURL = baseUrl;
+  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
   opts: SpawnOptions = {},
 ): Promise<number> {
   const scope = opts.configScope ?? "user";
+  const location = scope === "project" ? "local" : "global";
 
   if (scope === "project") {
     // Explicit opt-in to writing the cwd-local config. We never silently
@@ -97,6 +127,10 @@ async function spawn(
       );
     }
   }
+
+  // Rewrite the baseURL to the per-session URL on every launch so
+  // generations land on the right session.
+  await setSessionBaseUrl(routing.baseUrl, location);
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,

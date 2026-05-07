@@ -25,6 +25,19 @@ vi.mock("../../src/agents/registry.js", () => ({
 const loginMock = vi.fn();
 vi.mock("../../src/commands/login.js", () => ({ loginCommand: loginMock }));
 
+const apiGetMock = vi.fn().mockResolvedValue([]);
+vi.mock("../../src/api/client.js", () => ({
+  OpperApi: class {
+    get = apiGetMock;
+  },
+}));
+vi.mock("../../src/api/resolve.js", () => ({
+  resolveApiContext: vi.fn().mockResolvedValue({
+    apiKey: "op_live_x",
+    baseUrl: "https://api.opper.ai",
+  }),
+}));
+
 const { launchCommand } = await import("../../src/commands/launch.js");
 
 useTempOpperHome();
@@ -38,6 +51,8 @@ describe("launchCommand", () => {
     adapter.install.mockReset();
     adapter.spawn.mockReset();
     loginMock.mockReset();
+    apiGetMock.mockClear();
+    apiGetMock.mockResolvedValue([]);
   });
 
   it("throws AGENT_NOT_FOUND when the adapter name is unknown", async () => {
@@ -147,6 +162,95 @@ describe("launchCommand", () => {
     adapter.spawn.mockResolvedValue(-1);
     const code = await launchCommand({ agent: "hermes", key: "default" });
     expect(code).toBe(-1);
+  });
+
+  it("includes a session prefix in routing.baseUrl with no tags", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl).toMatch(
+      /^https:\/\/api\.opper\.ai\/v3\/session\/sess_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("appends --tag pairs to routing.baseUrl in alphabetical order", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({
+      agent: "hermes",
+      key: "default",
+      tags: { team: "eu", customer: "acme" }, // intentionally unsorted
+    });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl).toMatch(
+      /\/v3\/session\/sess_[0-9a-f-]{36}\/customer:acme\/team:eu$/,
+    );
+  });
+
+  it("rejects invalid --tag keys before spawning", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+
+    await expect(
+      launchCommand({
+        agent: "hermes",
+        key: "default",
+        tags: { "1bad": "v" },
+      }),
+    ).rejects.toThrow(/invalid tag key/);
+    expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
+  it("respects slot.baseUrl when set", async () => {
+    await setSlot("default", { apiKey: "op_live_x", baseUrl: "https://staging.opper.ai" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl.startsWith("https://staging.opper.ai/v3/session/sess_")).toBe(true);
+  });
+
+  it("queries /v2/analytics/usage with session_id and no date window", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    // Make sure the session is long enough to pass the durationMs >= 1500 guard.
+    adapter.spawn.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 1600));
+      return 0;
+    });
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    // The first /v2/analytics/usage call is the summary.
+    const usageCall = apiGetMock.mock.calls.find(
+      ([path]) => path === "/v2/analytics/usage",
+    );
+    expect(usageCall).toBeDefined();
+    const [, query] = usageCall!;
+    expect(query.session_id).toMatch(/^sess_[0-9a-f-]{36}$/);
+    expect(query.granularity).toBe("minute");
+    expect(query.group_by).toBe("model");
+    expect(query).not.toHaveProperty("from_date");
+    expect(query).not.toHaveProperty("to_date");
+  });
+
+  it("skips the summary for very short sessions", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0); // exits immediately, < 1500ms
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    expect(apiGetMock).not.toHaveBeenCalled();
   });
 
   it("rejects launching a configure-only adapter", async () => {

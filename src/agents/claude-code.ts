@@ -8,8 +8,6 @@ import type {
   OpperRouting,
 } from "./types.js";
 
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-
 // Claude Code reads ANTHROPIC_BASE_URL and appends `/v1/messages` for
 // inference and `/v1/models` for the /model picker. Opper's compat
 // endpoint at `/v3/compat` serves both, so the picker auto-populates
@@ -51,7 +49,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // the rest from `${ANTHROPIC_BASE_URL}/v1/models`.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    ANTHROPIC_BASE_URL: OPPER_COMPAT_URL,
+    ANTHROPIC_BASE_URL: routing.baseUrl,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
     ANTHROPIC_MODEL: routing.model,
     // Suppress telemetry/auto-update/error-report calls that Claude Code

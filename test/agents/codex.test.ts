@@ -26,6 +26,9 @@ vi.mock("node:child_process", async () => {
 
 const { codex } = await import("../../src/agents/codex.js");
 
+const SESSION_URL =
+  "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
+
 describe("codex adapter", () => {
   let sandbox: string;
   let prevHome: string | undefined;
@@ -151,7 +154,7 @@ describe("codex adapter", () => {
   it("spawn injects OPPER_API_KEY and prepends --profile opper-opus when no profile is set", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     const code = await codex.spawn!(["chat"], {
-      baseUrl: "ignored",
+      baseUrl: SESSION_URL,
       apiKey: "op_live_run",
       model: "claude-opus-4-7",
       compatShape: "openai",
@@ -163,12 +166,19 @@ describe("codex adapter", () => {
     expect(call[1]).toEqual(["--profile", "opper-opus", "chat"]);
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
+
+    // The session URL from routing.baseUrl is written into the config.toml
+    // managed block — that's how Codex picks up the per-launch session.
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    const text = readFileSync(cfgPath, "utf8");
+    expect(text).toContain(`base_url = "${SESSION_URL}"`);
+    expect(text).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
   });
 
   it("spawn does not add --profile when the user already passed one", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     await codex.spawn!(["--profile", "opper-sonnet", "chat"], {
-      baseUrl: "ignored",
+      baseUrl: SESSION_URL,
       apiKey: "k",
       model: "m",
       compatShape: "openai",
@@ -180,7 +190,7 @@ describe("codex adapter", () => {
   it("spawn propagates non-zero exit codes", async () => {
     spawnSyncMock.mockReturnValue({ status: 2 });
     const code = await codex.spawn!([], {
-      baseUrl: "ignored",
+      baseUrl: SESSION_URL,
       apiKey: "k",
       model: "m",
       compatShape: "openai",

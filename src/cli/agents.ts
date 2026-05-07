@@ -2,6 +2,33 @@ import { agentsListCommand, agentsUninstallCommand } from "../commands/agents.js
 import { launchCommand } from "../commands/launch.js";
 import type { RegisterFn } from "./types.js";
 
+export function collectTagPairs(
+  raw: string,
+  acc: Record<string, string>,
+): Record<string, string> {
+  const eq = raw.indexOf("=");
+  if (eq <= 0) {
+    throw new Error(`--tag expects key=value, got "${raw}"`);
+  }
+  const key = raw.slice(0, eq);
+  const value = raw.slice(eq + 1);
+  // Only reject the multi-pair shorthand (a=1,b=2): a comma followed by
+  // another `key=` pair. Plain commas inside a value (`Acme, Inc`) are fine.
+  const commaIdx = value.indexOf(",");
+  if (commaIdx >= 0) {
+    const after = value.slice(commaIdx + 1).trimStart();
+    if (/^[a-zA-Z][a-zA-Z0-9_.-]*=/.test(after)) {
+      throw new Error(
+        `--tag does not accept multiple pairs in one flag — pass each as a separate --tag (got "${raw}")`,
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(acc, key)) {
+    throw new Error(`--tag key "${key}" specified twice`);
+  }
+  return { ...acc, [key]: value };
+}
+
 const register: RegisterFn = (program, ctx) => {
   const agentsCmd = program
     .command("agents")
@@ -38,12 +65,23 @@ const register: RegisterFn = (program, ctx) => {
       "write the Opper config into the cwd-local project config (where supported, e.g. opencode) instead of the user-level config",
       false,
     )
+    .option(
+      "--tag <pair>",
+      "attach metadata as key=value (repeatable). Stored as a tag on every generation in this launch.",
+      collectTagPairs,
+      {} as Record<string, string>,
+    )
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .action(
       async (
         agentName: string,
-        cmdOpts: { model?: string; install?: boolean; project?: boolean },
+        cmdOpts: {
+          model?: string;
+          install?: boolean;
+          project?: boolean;
+          tag?: Record<string, string>;
+        },
         cmd,
       ) => {
         const args = (cmd.args as string[]).slice(1);
@@ -53,6 +91,9 @@ const register: RegisterFn = (program, ctx) => {
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
           ...(cmdOpts.install ? { install: true } : {}),
           ...(cmdOpts.project ? { configScope: "project" as const } : {}),
+          ...(cmdOpts.tag && Object.keys(cmdOpts.tag).length > 0
+            ? { tags: cmdOpts.tag }
+            : {}),
           passthrough: args,
         });
         process.exit(code);
