@@ -12,6 +12,11 @@ function collectTagPairs(
   }
   const key = raw.slice(0, eq);
   const value = raw.slice(eq + 1);
+  if (value.includes(",")) {
+    throw new Error(
+      `--tag value for "${key}" contains ',' — pass each pair as a separate --tag flag (got "${raw}")`,
+    );
+  }
   if (Object.prototype.hasOwnProperty.call(acc, key)) {
     throw new Error(`--tag key "${key}" specified twice`);
   }
