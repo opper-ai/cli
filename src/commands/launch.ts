@@ -8,7 +8,7 @@ import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperApi } from "../api/client.js";
 import { resolveApiContext } from "../api/resolve.js";
-import type { OpperRouting } from "../agents/types.js";
+import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
 
 const TRACES_URL = "https://platform.opper.ai/traces";
@@ -19,6 +19,7 @@ export interface LaunchOptions {
   model?: string;
   install?: boolean;
   passthrough?: string[];
+  configScope?: SpawnOptions["configScope"];
 }
 
 export async function launchCommand(opts: LaunchOptions): Promise<number> {
@@ -93,8 +94,11 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
   const startedAt = new Date();
   let code: number;
+  const spawnOpts: SpawnOptions = opts.configScope
+    ? { configScope: opts.configScope }
+    : {};
   try {
-    code = await adapter.spawn(opts.passthrough ?? [], routing);
+    code = await adapter.spawn(opts.passthrough ?? [], routing, spawnOpts);
   } finally {
     for (const [sig, h] of noopHandlers) process.off(sig, h);
   }

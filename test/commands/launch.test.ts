@@ -59,6 +59,7 @@ describe("launchCommand", () => {
     expect(adapter.spawn).toHaveBeenCalledWith(
       [],
       expect.objectContaining({ apiKey: "op_live_fresh" }),
+      expect.any(Object),
     );
   });
 
@@ -98,7 +99,37 @@ describe("launchCommand", () => {
         model: "claude-opus-4-7",
         compatShape: "openai",
       }),
+      expect.any(Object),
     );
+  });
+
+  it("forwards configScope=project to spawn", async () => {
+    await setSlot("default", { apiKey: "op_live_p" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({
+      agent: "hermes",
+      key: "default",
+      configScope: "project",
+    });
+
+    expect(adapter.spawn).toHaveBeenCalledWith(
+      [],
+      expect.any(Object),
+      expect.objectContaining({ configScope: "project" }),
+    );
+  });
+
+  it("does not set configScope=project when --project wasn't passed", async () => {
+    await setSlot("default", { apiKey: "op_live_n" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    const lastCall = adapter.spawn.mock.calls.at(-1)!;
+    expect(lastCall[2]).not.toMatchObject({ configScope: "project" });
   });
 
   it("propagates spawn errors", async () => {

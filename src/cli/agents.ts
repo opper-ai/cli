@@ -33,19 +33,31 @@ const register: RegisterFn = (program, ctx) => {
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
     .option("--install", "install the agent if missing", false)
+    .option(
+      "--project",
+      "write the Opper config into the cwd-local project config (where supported, e.g. opencode) instead of the user-level config",
+      false,
+    )
     .allowUnknownOption(true)
     .allowExcessArguments(true)
-    .action(async (agentName: string, cmdOpts: { model?: string; install?: boolean }, cmd) => {
-      const args = (cmd.args as string[]).slice(1);
-      const code = await launchCommand({
-        agent: agentName,
-        key: ctx.key(),
-        ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
-        ...(cmdOpts.install ? { install: true } : {}),
-        passthrough: args,
-      });
-      process.exit(code);
-    });
+    .action(
+      async (
+        agentName: string,
+        cmdOpts: { model?: string; install?: boolean; project?: boolean },
+        cmd,
+      ) => {
+        const args = (cmd.args as string[]).slice(1);
+        const code = await launchCommand({
+          agent: agentName,
+          key: ctx.key(),
+          ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+          ...(cmdOpts.install ? { install: true } : {}),
+          ...(cmdOpts.project ? { configScope: "project" as const } : {}),
+          passthrough: args,
+        });
+        process.exit(code);
+      },
+    );
 };
 
 export default register;

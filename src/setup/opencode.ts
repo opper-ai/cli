@@ -4,6 +4,31 @@ import { dirname } from "node:path";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 
+export interface ProjectConfigState {
+  exists: boolean;
+  hasOpperProvider: boolean;
+}
+
+/**
+ * Inspect the cwd-local `opencode.json` (if any). Used at launch time to
+ * decide whether to warn that a project-level config will shadow whatever
+ * we just wrote to the user-level config.
+ */
+export function readProjectConfigState(path: string): ProjectConfigState {
+  if (!existsSync(path)) return { exists: false, hasOpperProvider: false };
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+      provider?: { opper?: unknown };
+    };
+    return {
+      exists: true,
+      hasOpperProvider: parsed?.provider?.opper !== undefined,
+    };
+  } catch {
+    return { exists: true, hasOpperProvider: false };
+  }
+}
+
 export interface ConfigureOpenCodeOptions {
   location: Location;
   /** If the destination already has an Opper provider, rewrite it. */
