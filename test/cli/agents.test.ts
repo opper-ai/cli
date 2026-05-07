@@ -24,10 +24,16 @@ describe("collectTagPairs", () => {
     expect(() => collectTagPairs("=value", {})).toThrow(/expects key=value/);
   });
 
-  it("rejects a comma-separated form so users can't sneak multiple pairs in", () => {
+  it("rejects the multi-pair shorthand (key=value,key=value)", () => {
     expect(() =>
       collectTagPairs("team=eu,customer=acme", {}),
-    ).toThrow(/contains ','/);
+    ).toThrow(/multiple pairs/);
+  });
+
+  it("preserves a plain comma inside a value", () => {
+    expect(collectTagPairs("customer=Acme, Inc", {})).toEqual({
+      customer: "Acme, Inc",
+    });
   });
 
   it("rejects a duplicate key on a second call", () => {

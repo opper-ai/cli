@@ -12,10 +12,16 @@ export function collectTagPairs(
   }
   const key = raw.slice(0, eq);
   const value = raw.slice(eq + 1);
-  if (value.includes(",")) {
-    throw new Error(
-      `--tag value for "${key}" contains ',' — pass each pair as a separate --tag flag (got "${raw}")`,
-    );
+  // Only reject the multi-pair shorthand (a=1,b=2): a comma followed by
+  // another `key=` pair. Plain commas inside a value (`Acme, Inc`) are fine.
+  const commaIdx = value.indexOf(",");
+  if (commaIdx >= 0) {
+    const after = value.slice(commaIdx + 1).trimStart();
+    if (/^[a-zA-Z][a-zA-Z0-9_.-]*=/.test(after)) {
+      throw new Error(
+        `--tag does not accept multiple pairs in one flag — pass each as a separate --tag (got "${raw}")`,
+      );
+    }
   }
   if (Object.prototype.hasOwnProperty.call(acc, key)) {
     throw new Error(`--tag key "${key}" specified twice`);
