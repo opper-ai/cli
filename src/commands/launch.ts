@@ -76,10 +76,6 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   const host = process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai";
   const sessionId = newSessionId();
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
-  // sessionId is captured locally so Task 12 can plumb it through to
-  // the post-launch summary as a session_id query rather than a time
-  // window.
-  void sessionId;
 
   const routing: OpperRouting = {
     baseUrl,
@@ -118,6 +114,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   try {
     await printSessionSummary({
       key: opts.key,
+      sessionId,
       startedAt,
       endedAt,
     });
@@ -130,6 +127,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
 interface SummaryOptions {
   key: string;
+  sessionId: string;
   startedAt: Date;
   endedAt: Date;
 }
@@ -163,16 +161,12 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
   let rows: UsageRow[] = [];
   try {
     rows = await api.get<UsageRow[]>("/v2/analytics/usage", {
-      from_date: opts.startedAt.toISOString(),
-      to_date: opts.endedAt.toISOString(),
-      // Without granularity the endpoint returns daily buckets, which
-      // would sweep up the entire day's spend instead of just this
-      // session.
+      session_id: opts.sessionId,
+      // session_id alone scopes to this launch, but we still pass granularity
+      // so the response shape stays consistent and tokens aggregate per minute
+      // bucket. group_by=model lets us render a per-model breakdown.
       granularity: "minute",
       fields: "total_tokens",
-      // Group by model so the summary reflects every model the agent
-      // actually called (e.g. /model picker switches, Haiku for compaction)
-      // rather than just the launch-time default.
       group_by: "model",
     });
   } catch {
