@@ -1,6 +1,6 @@
 {
   "name": "@opperai/cli",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "The official Opper CLI — authenticate, route agent inference, and manage the Opper platform",
   "type": "module",
   "bin": {
