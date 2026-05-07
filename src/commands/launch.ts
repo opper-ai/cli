@@ -4,12 +4,12 @@ import { getSlot } from "../auth/config.js";
 import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperApi } from "../api/client.js";
 import { resolveApiContext } from "../api/resolve.js";
 import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
+import { newSessionId, buildSessionBaseUrl } from "../util/session-url.js";
 
 const TRACES_URL = "https://platform.opper.ai/traces";
 
@@ -20,6 +20,7 @@ export interface LaunchOptions {
   install?: boolean;
   passthrough?: string[];
   configScope?: SpawnOptions["configScope"];
+  tags?: Record<string, string>;
 }
 
 export async function launchCommand(opts: LaunchOptions): Promise<number> {
@@ -72,8 +73,16 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     await adapter.install();
   }
 
+  const host = process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai";
+  const sessionId = newSessionId();
+  const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
+  // sessionId is captured locally so Task 12 can plumb it through to
+  // the post-launch summary as a session_id query rather than a time
+  // window.
+  void sessionId;
+
   const routing: OpperRouting = {
-    baseUrl: OPPER_COMPAT_URL,
+    baseUrl,
     apiKey: slot.apiKey,
     model: opts.model ?? DEFAULT_MODELS.opus,
     compatShape: "openai",

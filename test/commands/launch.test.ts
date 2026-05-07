@@ -149,6 +149,61 @@ describe("launchCommand", () => {
     expect(code).toBe(-1);
   });
 
+  it("includes a session prefix in routing.baseUrl with no tags", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl).toMatch(
+      /^https:\/\/api\.opper\.ai\/v3\/session\/sess_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it("appends --tag pairs to routing.baseUrl in alphabetical order", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({
+      agent: "hermes",
+      key: "default",
+      tags: { team: "eu", customer: "acme" }, // intentionally unsorted
+    });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl).toMatch(
+      /\/v3\/session\/sess_[0-9a-f-]{36}\/customer:acme\/team:eu$/,
+    );
+  });
+
+  it("rejects invalid --tag keys before spawning", async () => {
+    await setSlot("default", { apiKey: "op_live_x" });
+    adapter.detect.mockResolvedValue({ installed: true });
+
+    await expect(
+      launchCommand({
+        agent: "hermes",
+        key: "default",
+        tags: { "1bad": "v" },
+      }),
+    ).rejects.toThrow(/invalid tag key/);
+    expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
+  it("respects slot.baseUrl when set", async () => {
+    await setSlot("default", { apiKey: "op_live_x", baseUrl: "https://staging.opper.ai" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    const arg = adapter.spawn.mock.calls[0][1] as { baseUrl: string };
+    expect(arg.baseUrl.startsWith("https://staging.opper.ai/v3/session/sess_")).toBe(true);
+  });
+
   it("rejects launching a configure-only adapter", async () => {
     const editorAdapter = {
       name: "editor-only",

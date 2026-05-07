@@ -2,6 +2,22 @@ import { agentsListCommand, agentsUninstallCommand } from "../commands/agents.js
 import { launchCommand } from "../commands/launch.js";
 import type { RegisterFn } from "./types.js";
 
+function collectTagPairs(
+  raw: string,
+  acc: Record<string, string>,
+): Record<string, string> {
+  const eq = raw.indexOf("=");
+  if (eq <= 0) {
+    throw new Error(`--tag expects key=value, got "${raw}"`);
+  }
+  const key = raw.slice(0, eq);
+  const value = raw.slice(eq + 1);
+  if (Object.prototype.hasOwnProperty.call(acc, key)) {
+    throw new Error(`--tag key "${key}" specified twice`);
+  }
+  return { ...acc, [key]: value };
+}
+
 const register: RegisterFn = (program, ctx) => {
   const agentsCmd = program
     .command("agents")
@@ -38,12 +54,23 @@ const register: RegisterFn = (program, ctx) => {
       "write the Opper config into the cwd-local project config (where supported, e.g. opencode) instead of the user-level config",
       false,
     )
+    .option(
+      "--tag <pair>",
+      "attach metadata as key=value (repeatable). Stored as a tag on every generation in this launch.",
+      collectTagPairs,
+      {} as Record<string, string>,
+    )
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .action(
       async (
         agentName: string,
-        cmdOpts: { model?: string; install?: boolean; project?: boolean },
+        cmdOpts: {
+          model?: string;
+          install?: boolean;
+          project?: boolean;
+          tag?: Record<string, string>;
+        },
         cmd,
       ) => {
         const args = (cmd.args as string[]).slice(1);
@@ -53,6 +80,9 @@ const register: RegisterFn = (program, ctx) => {
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
           ...(cmdOpts.install ? { install: true } : {}),
           ...(cmdOpts.project ? { configScope: "project" as const } : {}),
+          ...(cmdOpts.tag && Object.keys(cmdOpts.tag).length > 0
+            ? { tags: cmdOpts.tag }
+            : {}),
           passthrough: args,
         });
         process.exit(code);
