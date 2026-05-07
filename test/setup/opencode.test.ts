@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configureOpenCode } from "../../src/setup/opencode.js";
+import {
+  configureOpenCode,
+  readProjectConfigState,
+} from "../../src/setup/opencode.js";
 import { opencodeConfigPath } from "../../src/util/editor-paths.js";
 
 describe("configureOpenCode", () => {
@@ -119,6 +122,51 @@ describe("configureOpenCode", () => {
       "https://api.opper.ai/v3/compat",
     );
     expect(parsed.agent.build.mode).toBe("primary");
+  });
+
+  describe("readProjectConfigState", () => {
+    it("reports exists=false for a missing file", () => {
+      const state = readProjectConfigState(join(home, "missing.json"));
+      expect(state).toEqual({ exists: false, hasOpperProvider: false });
+    });
+
+    it("reports hasOpperProvider=false when the file lacks the opper provider", () => {
+      const target = join(home, "opencode.json");
+      writeFileSync(
+        target,
+        JSON.stringify({
+          theme: "tokyonight",
+          model: "anthropic/claude-sonnet-4-5",
+        }),
+        "utf8",
+      );
+      expect(readProjectConfigState(target)).toEqual({
+        exists: true,
+        hasOpperProvider: false,
+      });
+    });
+
+    it("reports hasOpperProvider=true when the file has the opper provider", () => {
+      const target = join(home, "opencode.json");
+      writeFileSync(
+        target,
+        JSON.stringify({ provider: { opper: { id: "opper" } } }),
+        "utf8",
+      );
+      expect(readProjectConfigState(target)).toEqual({
+        exists: true,
+        hasOpperProvider: true,
+      });
+    });
+
+    it("treats unparseable files as exists=true / hasOpperProvider=false", () => {
+      const target = join(home, "opencode.json");
+      writeFileSync(target, "{not json", "utf8");
+      expect(readProjectConfigState(target)).toEqual({
+        exists: true,
+        hasOpperProvider: false,
+      });
+    });
   });
 
   it("replaces only the Opper provider when overwrite=true is set on a populated config", async () => {
