@@ -11,7 +11,7 @@ on:
         options: [patch, minor, major]
         default: patch
       dry_run:
-        description: 'Dry run (build but do not publish)'
+        description: 'Dry run (build only, no push or publish)'
         type: boolean
         default: false
 
@@ -60,24 +60,82 @@ jobs:
           npm run build
           npm test
 
-      - name: Bump version
-        id: version
+      # Bump-and-push live in one step so a race (another commit landed on main
+      # between checkout and push) can be resolved by resetting to origin/main
+      # and recomputing the version, instead of trying to rebase a package.json
+      # bump that would conflict with the new HEAD.
+      - name: Bump, tag, and push (atomic, recompute on race)
+        id: release
+        if: github.event.inputs.dry_run != 'true'
         env:
           BUMP: ${{ github.event.inputs.bump || 'patch' }}
         run: |
-          TAG=$(npm version "$BUMP" -m "release: %s")
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: Publish
+          # Take the higher of (local package.json) and (highest published v* tag)
+          # so we never collide with a version another (possibly racing) run cut.
+          compute_next() {
+            git fetch origin --tags --prune --force >/dev/null
+            local pkg tag base
+            pkg=$(node -p "require('./package.json').version")
+            tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
+            : "${tag:=0.0.0}"
+            base=$(printf '%s\n%s\n' "$pkg" "$tag" | sort -V | tail -1)
+            awk -v v="$base" -v k="$BUMP" 'BEGIN {
+              split(v, p, ".")
+              if (k == "major") { p[1]++; p[2]=0; p[3]=0 }
+              else if (k == "minor") { p[2]++; p[3]=0 }
+              else { p[3]++ }
+              print p[1] "." p[2] "." p[3]
+            }'
+          }
+
+          apply_bump() {
+            local v=$1
+            npm version "$v" --no-git-tag-version >/dev/null
+            git add package.json package-lock.json
+            git commit -m "release: $v"
+            git tag -a "v$v" -m "release: $v"
+          }
+
+          NEXT=$(compute_next)
+          echo "Computed next version: $NEXT"
+          apply_bump "$NEXT"
+
+          attempts=3
+          for attempt in $(seq 1 $attempts); do
+            if git push origin "HEAD:refs/heads/main" "refs/tags/v$NEXT" --atomic; then
+              echo "Pushed v$NEXT on attempt $attempt"
+              echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+              echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Push failed (attempt $attempt of $attempts)"
+            if [ "$attempt" -eq "$attempts" ]; then
+              exit 1
+            fi
+            echo "Resetting to origin/main and recomputing..."
+            git fetch origin main
+            git tag -d "v$NEXT" 2>/dev/null || true
+            git reset --hard origin/main
+            NEXT=$(compute_next)
+            echo "Recomputed next version: $NEXT"
+            apply_bump "$NEXT"
+          done
+          exit 1
+
+      - name: Publish to npm
         if: github.event.inputs.dry_run != 'true'
         run: npm publish --access public
 
-      - name: Push commit, tag, and create release
+      - name: Create GitHub release
         if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
-          git push origin HEAD --follow-tags
-          gh release create "$TAG" --title "$TAG" --generate-notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping."
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
