@@ -250,6 +250,20 @@ describe("menuCommand", () => {
     expect(launchMock).toHaveBeenCalledWith({ agent: "hermes", key: "default" });
   });
 
+  it("agents submenu → agent menu → Install runs adapter.install() when not installed", async () => {
+    hermesDetect.mockResolvedValue({ installed: false });
+    hermesIsConfigured.mockResolvedValue(false);
+    answers.push(() => "agents");
+    answers.push(() => "agent:hermes");
+    answers.push(() => "install");
+    answers.push(() => "back");
+    answers.push(() => "back");
+    answers.push(() => "quit");
+
+    await menuCommand({ key: "default" });
+    expect(hermesAdapter.install).toHaveBeenCalled();
+  });
+
   it("agents submenu → agent menu → Remove integration calls unconfigure()", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
     hermesIsConfigured.mockResolvedValue(true);

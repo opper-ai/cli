@@ -4,7 +4,7 @@ import { join, dirname } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile, mkdir } from "node:fs/promises";
 import { which } from "../util/which.js";
-import { OpperError } from "../errors.js";
+import { npmInstallGlobal } from "./npm-install.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -65,11 +65,7 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function install(): Promise<void> {
-  throw new OpperError(
-    "AGENT_NOT_FOUND",
-    "Codex must be installed manually.",
-    "Install via `npm i -g @openai/codex` or see https://github.com/openai/codex.",
-  );
+  await npmInstallGlobal("@openai/codex", "https://github.com/openai/codex");
 }
 
 async function isConfigured(): Promise<boolean> {

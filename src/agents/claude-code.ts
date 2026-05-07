@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { which } from "../util/which.js";
 import { OpperError } from "../errors.js";
+import { npmInstallGlobal } from "./npm-install.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -14,8 +15,8 @@ import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 // endpoint at `/v3/compat` serves both, so the picker auto-populates
 // with Opper's catalogue.
 
-const INSTALL_HINT =
-  "Install via `npm i -g @anthropic-ai/claude-code` or see https://docs.claude.com/en/docs/claude-code/setup";
+const DOCS_URL = "https://docs.claude.com/en/docs/claude-code/setup";
+const INSTALL_HINT = `Install via \`npm i -g @anthropic-ai/claude-code\` or see ${DOCS_URL}`;
 
 async function detect(): Promise<DetectResult> {
   const path = await which("claude");
@@ -24,11 +25,7 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function install(): Promise<void> {
-  throw new OpperError(
-    "AGENT_NOT_FOUND",
-    "Claude Code must be installed manually.",
-    INSTALL_HINT,
-  );
+  await npmInstallGlobal("@anthropic-ai/claude-code", DOCS_URL);
 }
 
 async function isConfigured(): Promise<boolean> {

@@ -6,6 +6,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
+import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import type {
@@ -98,11 +99,7 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function install(): Promise<void> {
-  throw new OpperError(
-    "AGENT_NOT_FOUND",
-    "Pi must be installed manually.",
-    "Install via the instructions at https://pi.dev.",
-  );
+  await npmInstallGlobal("@mariozechner/pi-coding-agent", "https://pi.dev");
 }
 
 async function isConfigured(): Promise<boolean> {

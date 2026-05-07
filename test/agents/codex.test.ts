@@ -13,6 +13,9 @@ import { join } from "node:path";
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 
+const runMock = vi.fn();
+vi.mock("../../src/util/run.js", () => ({ run: runMock }));
+
 const spawnSyncMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
@@ -29,6 +32,7 @@ describe("codex adapter", () => {
 
   beforeEach(() => {
     whichMock.mockReset();
+    runMock.mockReset();
     spawnSyncMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-codex-"));
     prevHome = process.env.HOME;
@@ -126,7 +130,19 @@ describe("codex adapter", () => {
     expect(text).toContain('theme = "dark"');
   });
 
-  it("install throws AGENT_NOT_FOUND with the install hint", async () => {
+  it("install runs `npm i -g @openai/codex` and resolves on exit 0", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    await expect(codex.install!()).resolves.toBeUndefined();
+    const [cmd, args, options] = runMock.mock.calls[0]!;
+    expect(cmd).toMatch(/^npm(\.cmd)?$/);
+    expect(args).toEqual(["install", "-g", "@openai/codex"]);
+    expect(options).toMatchObject({ inherit: true });
+  });
+
+  it("install throws AGENT_NOT_FOUND when npm exits non-zero", async () => {
+    whichMock.mockResolvedValue("/usr/bin/npm");
+    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
     await expect(codex.install!()).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });
