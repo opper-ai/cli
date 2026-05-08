@@ -118,6 +118,18 @@ async function unconfigure(): Promise<void> {
   }
 }
 
+function isDaemonInvocation(args: string[]): boolean {
+  for (let i = 0; i < args.length - 1; i++) {
+    if (
+      (args[i] === "gateway" || args[i] === "daemon") &&
+      args[i + 1] === "start"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // OpenClaw is a gateway/daemon, not an interactive REPL. Default to
   // `gateway start` — installs/starts the background service via
@@ -130,15 +142,12 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   //   opper launch openclaw -- agent --local -m "summarise ..."
   //   opper launch openclaw -- gateway run     # foreground if you
   //                                            # really want it
-  // Detect daemon launches by subcommand, not arg count: `opper launch
-  // openclaw` (no args, defaults to `gateway start`) AND `opper launch
-  // openclaw -- gateway start` / `-- daemon start` all detach a
-  // long-lived service that outlives spawnSync.
+  // Detect daemon launches by subcommand, not arg count. Scan for the
+  // adjacent pair `gateway start` / `daemon start` anywhere in args
+  // because OpenClaw allows global flags before the subcommand
+  // (e.g. `opper launch openclaw -- --profile dev gateway start`).
   const finalArgs = args.length === 0 ? ["gateway", "start"] : args;
-  const isDaemonStart =
-    finalArgs.length >= 2 &&
-    (finalArgs[0] === "gateway" || finalArgs[0] === "daemon") &&
-    finalArgs[1] === "start";
+  const isDaemonStart = isDaemonInvocation(finalArgs);
 
   // Snapshot/restore only fits one-shot synchronous invocations. For the
   // daemon path, `spawnSync` returns as soon as the gateway detaches —

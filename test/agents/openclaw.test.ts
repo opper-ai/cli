@@ -213,6 +213,17 @@ describe("openclaw adapter", () => {
     expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
   });
 
+  it("spawn does NOT snapshot when daemon-start follows global flags", async () => {
+    // OpenClaw accepts global flags before the subcommand:
+    //   `opper launch openclaw -- --profile dev gateway start`
+    // The daemon detection has to find the pair anywhere in args, not
+    // just at index 0.
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["--profile", "dev", "gateway", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
   it("spawn forwards user-supplied args verbatim", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     await openclaw.spawn!(["agent", "--local"], ROUTING);
