@@ -269,7 +269,7 @@ describe("menuCommand", () => {
     hermesIsConfigured.mockResolvedValue(true);
     answers.push(() => "agents");
     answers.push(() => "agent:hermes");
-    answers.push(() => "uninstall");
+    answers.push(() => "remove");
     answers.push(() => "back");
     answers.push(() => "back");
     answers.push(() => "quit");
