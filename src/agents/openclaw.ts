@@ -130,8 +130,15 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   //   opper launch openclaw -- agent --local -m "summarise ..."
   //   opper launch openclaw -- gateway run     # foreground if you
   //                                            # really want it
-  const isDaemonStart = args.length === 0;
-  const finalArgs = isDaemonStart ? ["gateway", "start"] : args;
+  // Detect daemon launches by subcommand, not arg count: `opper launch
+  // openclaw` (no args, defaults to `gateway start`) AND `opper launch
+  // openclaw -- gateway start` / `-- daemon start` all detach a
+  // long-lived service that outlives spawnSync.
+  const finalArgs = args.length === 0 ? ["gateway", "start"] : args;
+  const isDaemonStart =
+    finalArgs.length >= 2 &&
+    (finalArgs[0] === "gateway" || finalArgs[0] === "daemon") &&
+    finalArgs[1] === "start";
 
   // Snapshot/restore only fits one-shot synchronous invocations. For the
   // daemon path, `spawnSync` returns as soon as the gateway detaches —

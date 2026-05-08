@@ -196,6 +196,23 @@ describe("openclaw adapter", () => {
     expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
   });
 
+  it("spawn does NOT snapshot when the user explicitly passes `gateway start`", async () => {
+    // `opper launch openclaw -- gateway start` is the daemon path too
+    // — same semantics as the no-args default. We must not gate on
+    // arg-count alone.
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["gateway", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot when the user explicitly passes `daemon start`", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["daemon", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
   it("spawn forwards user-supplied args verbatim", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     await openclaw.spawn!(["agent", "--local"], ROUTING);
