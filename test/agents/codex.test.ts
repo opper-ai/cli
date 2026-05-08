@@ -272,6 +272,43 @@ describe("codex adapter", () => {
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
   });
 
+  it("spawn restore does not destroy user data when the pre-launch config has a stale unclosed sentinel marker", async () => {
+    // Repro for the malformed-config case: a partial manual edit left
+    // a `# >>> opper-cli >>>` opener with no matching closer. Without
+    // lastIndexOf-based strip, our restore would treat the stale opener
+    // and our newly-written closer as a single block and erase everything
+    // between them — including unrelated user content.
+    const cfgDir = join(sandbox, ".codex");
+    const cfgPath = join(cfgDir, "config.toml");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      cfgPath,
+      "# >>> opper-cli >>>\n# unclosed leftover from a partial edit\n[settings]\ntheme = \"dark\"\n",
+      "utf8",
+    );
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    // The user's [settings] section MUST still be there.
+    const after = readFileSync(cfgPath, "utf8");
+    expect(after).toContain("[settings]");
+    expect(after).toContain('theme = "dark"');
+    // Our newly-written block has been removed (no SESSION_URL in the
+    // restored file). The stale unclosed opener stays in place — we
+    // never touched it.
+    expect(after).not.toContain(SESSION_URL);
+    // before may or may not equal after — the key invariant is that
+    // user content is preserved.
+    void before;
+  });
+
   it("spawn restore preserves user edits outside the sentinel block made mid-spawn", async () => {
     // Anything outside the SENTINEL_OPEN/CLOSE markers is the user's
     // own config (theme, settings, etc.). The narrow restore must

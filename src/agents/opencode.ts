@@ -156,14 +156,16 @@ async function spawn(
   }
 
   // User-scope: snapshot the Opper-owned keys. The template writes
-  // both `provider.opper` AND a top-level `model: "opper/..."` — narrow
-  // restore must cover both, otherwise a fresh first launch leaves an
-  // orphaned `model` pointing at a removed provider. OpenCode mutates
+  // `provider.opper`, a top-level `model: "opper/..."`, AND a top-level
+  // `$schema` — all three need narrow restore. Without `$schema`, a
+  // fresh first launch leaves a `{"$schema": "..."}` file behind even
+  // though it's meant to be ephemeral. Without `model`, an orphaned
+  // `model: "opper/..."` points at a removed provider. OpenCode mutates
   // sibling keys (theme, MCP servers, …) during a session — those are
   // outside our keyPaths and survive the restore.
   return withJsonKeys(
     opencodeConfigPath("global"),
-    [["provider", "opper"], ["model"]],
+    [["provider", "opper"], ["model"], ["$schema"]],
     async () => {
       await configureOpenCode({ location: "global", overwrite: true });
 

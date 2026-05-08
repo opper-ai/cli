@@ -294,12 +294,11 @@ describe("opencode adapter", () => {
     );
   });
 
-  it("user scope: restore removes orphaned `model: opper/...` when no opper provider existed before", async () => {
-    // The exact regression Codex flagged: a fresh first launch with no
-    // prior opencode.json. The template writes provider.opper AND a
-    // top-level model: "opper/...". After restore, both must be gone —
-    // an orphaned `model` pointing at a removed provider would break
-    // direct `opencode` runs after the launch.
+  it("user scope: a fresh first launch leaves no opencode.json behind (covers $schema, provider.opper, model)", async () => {
+    // The template (data/opencode.json) writes THREE Opper-owned
+    // top-level keys: $schema, provider.opper, model. Narrow restore
+    // must cover all three — otherwise a fresh first launch leaves
+    // orphan state behind and the launch isn't truly ephemeral.
     const cfg = opencodeConfigPath(sandbox);
     expect(existsSync(cfg)).toBe(false);
     configureOpenCodeMock.mockImplementation(async () => {
@@ -307,6 +306,7 @@ describe("opencode adapter", () => {
       writeFileSync(
         cfg,
         JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
           provider: {
             opper: {
               npm: "@ai-sdk/openai-compatible",

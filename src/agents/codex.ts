@@ -67,6 +67,30 @@ function extractOpperBlock(text: string): string | null {
   return text.slice(startIdx, endIdx + SENTINEL_CLOSE.length);
 }
 
+// Snapshot/restore variants that target the LAST opener-closer pair in
+// the file. `writeOpperBlock` always appends our block at the end, so
+// post-spawn the well-formed block is the last one. Using indexOf-first
+// for restore would cross-match a stale unclosed opener with our new
+// closer and strip user data between them.
+function extractLastOpperBlock(text: string): string | null {
+  const startIdx = text.lastIndexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return null;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return null;
+  return text.slice(startIdx, endIdx + SENTINEL_CLOSE.length);
+}
+
+function stripLastOpperBlock(text: string): string {
+  const startIdx = text.lastIndexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return text;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return text;
+  const before = text.slice(0, startIdx).replace(/\n$/, "");
+  const after = text.slice(endIdx + SENTINEL_CLOSE.length).replace(/^\n/, "");
+  if (before.length === 0) return after;
+  return `${before}\n${after}`;
+}
+
 async function detect(): Promise<DetectResult> {
   const path = await which("codex");
   if (!path) return { installed: false };
@@ -163,7 +187,10 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   let opperBlockBefore: string | null = null;
   if (fileExistedBefore) {
     try {
-      opperBlockBefore = extractOpperBlock(readFileSync(cfg, "utf8"));
+      // Use lastIndexOf so a stale unclosed opener earlier in the file
+      // doesn't cause us to capture (and later restore) unrelated user
+      // content as part of the "block".
+      opperBlockBefore = extractLastOpperBlock(readFileSync(cfg, "utf8"));
     } catch {
       opperBlockBefore = null;
     }
@@ -192,7 +219,11 @@ async function restoreOpperBlock(
 ): Promise<void> {
   try {
     const current = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
-    const stripped = stripOpperBlock(current);
+    // Use lastIndexOf-based strip: writeOpperBlock appended our block
+    // at the end, so stripping the LAST opener-closer pair removes
+    // exactly what we wrote. indexOf-first would cross-match a stale
+    // unclosed opener with our new closer and erase user data between.
+    const stripped = stripLastOpperBlock(current);
     let next: string;
     if (blockBefore === null) {
       next = stripped;
