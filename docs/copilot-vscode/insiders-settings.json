@@ -1,0 +1,104 @@
+{
+  "github.copilot.chat.customOAIModels": {
+    "claude-opus-4-7": {
+      "name": "Opper · claude-opus-4-7",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": true,
+      "thinking": true,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 32768
+    },
+    "claude-sonnet-4-6": {
+      "name": "Opper · claude-sonnet-4-6",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": true,
+      "thinking": true,
+      "maxInputTokens": 1000000,
+      "maxOutputTokens": 32768
+    },
+    "claude-haiku-4-5": {
+      "name": "Opper · claude-haiku-4-5",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": true,
+      "thinking": false,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 32768
+    },
+    "gpt-5.5": {
+      "name": "Opper · gpt-5.5",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": true,
+      "thinking": true,
+      "maxInputTokens": 1050000,
+      "maxOutputTokens": 32768
+    },
+    "gemini-3.1-pro-preview": {
+      "name": "Opper · gemini-3.1-pro-preview",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": true,
+      "thinking": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 32768
+    },
+    "deepinfra/kimi-k2.6": {
+      "name": "Opper · deepinfra/kimi-k2.6",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": false,
+      "thinking": true,
+      "maxInputTokens": 262144,
+      "maxOutputTokens": 32768
+    },
+    "deepinfra/glm-5.1": {
+      "name": "Opper · deepinfra/glm-5.1",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": false,
+      "thinking": true,
+      "maxInputTokens": 202752,
+      "maxOutputTokens": 32768
+    },
+    "fireworks/minimax-m2p7": {
+      "name": "Opper · fireworks/minimax-m2p7",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": false,
+      "thinking": false,
+      "maxInputTokens": 196608,
+      "maxOutputTokens": 32768
+    },
+    "deepinfra/deepseek-v4-pro": {
+      "name": "Opper · deepinfra/deepseek-v4-pro",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": false,
+      "thinking": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 32768
+    },
+    "deepinfra/deepseek-v4-flash": {
+      "name": "Opper · deepinfra/deepseek-v4-flash",
+      "url": "https://api.opper.ai/v3/compat",
+      "requiresAPIKey": true,
+      "toolCalling": true,
+      "vision": false,
+      "thinking": true,
+      "maxInputTokens": 1048576,
+      "maxOutputTokens": 32768
+    }
+  }
+}

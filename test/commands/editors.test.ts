@@ -16,14 +16,14 @@ const { editorsListCommand, editorsOpenCodeCommand } = await import(
 useTempOpperHome();
 
 describe("editors commands", () => {
-  it("list prints a placeholder message when no editor-only adapters are registered", async () => {
+  it("list shows the registered configure-only adapters", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await editorsListCommand();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      // OpenCode is launchable so it shows up under `opper agents list`,
-      // and Continue.dev was removed — list should report empty.
-      expect(out.toLowerCase()).toContain("no editor integrations");
+      // GitHub Copilot (VS Code) is configure-only (no spawn) — should
+      // surface here. Launchable adapters live under `opper agents list`.
+      expect(out).toContain("GitHub Copilot (VS Code)");
     } finally {
       log.mockRestore();
     }
