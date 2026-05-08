@@ -13,13 +13,19 @@ import type {
 } from "./types.js";
 
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS } from "../config/models.js";
+import { PICKER_MODELS } from "../config/models.js";
 
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
 const DEFAULT_PROFILE = "opper-opus";
 
 function buildOpperBlock(baseUrl: string): string {
+  const profileBlocks = PICKER_MODELS.flatMap((m) => [
+    "",
+    `[profiles.opper-${m.codexProfile}]`,
+    `model = "${m.id}"`,
+    'model_provider = "opper"',
+  ]);
   return [
     SENTINEL_OPEN,
     "# Managed by `opper`. Edits between these markers will be overwritten",
@@ -30,14 +36,7 @@ function buildOpperBlock(baseUrl: string): string {
     `base_url = "${baseUrl}"`,
     'env_key = "OPPER_API_KEY"',
     'wire_api = "responses"',
-    "",
-    "[profiles.opper-opus]",
-    `model = "${DEFAULT_MODELS.opus}"`,
-    'model_provider = "opper"',
-    "",
-    "[profiles.opper-sonnet]",
-    `model = "${DEFAULT_MODELS.sonnet}"`,
-    'model_provider = "opper"',
+    ...profileBlocks,
     SENTINEL_CLOSE,
     "",
   ].join("\n");

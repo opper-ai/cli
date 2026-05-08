@@ -6,6 +6,7 @@ import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { opperHome } from "../auth/paths.js";
 import { OpperError } from "../errors.js";
+import { PICKER_MODELS } from "../config/models.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -101,6 +102,30 @@ async function writeOpperConfig(routing: OpperRouting): Promise<void> {
     base_url: routing.baseUrl,
     default: routing.model,
   };
+
+  // Register Opper as a named provider so Hermes' `/model` picker shows
+  // "Opper (N models)" alongside the built-in providers. Without this the
+  // picker only enumerates first-class providers (OpenRouter, Copilot,
+  // OpenAI…) with detected creds — our `model.provider: custom` route is
+  // invisible to it.
+  //
+  // We let Hermes auto-discover models from `<base_url>/v1/models` (the
+  // default behaviour) — same pattern Claude Code uses with our compat
+  // endpoint. The curated `models:` dict below is the fallback Hermes
+  // uses when discovery fails (network error, auth, etc.).
+  //
+  // `key_env: OPENAI_API_KEY` matches the env var we already export at
+  // spawn time, so no api key lands on disk.
+  const opperModels: Record<string, Record<string, never>> = {};
+  for (const m of PICKER_MODELS) opperModels[m.id] = {};
+  const providers = (existing.providers as Record<string, unknown> | undefined) ?? {};
+  providers.opper = {
+    name: "Opper",
+    base_url: routing.baseUrl,
+    key_env: "OPENAI_API_KEY",
+    models: opperModels,
+  };
+  existing.providers = providers;
 
   await writeFile(path, stringify(existing), { mode: 0o600 });
 }

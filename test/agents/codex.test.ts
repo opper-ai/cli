@@ -86,6 +86,17 @@ describe("codex adapter", () => {
     expect(await codex.isConfigured()).toBe(true);
   });
 
+  it("configure writes one profile block per PICKER_MODELS entry", async () => {
+    const { PICKER_MODELS } = await import("../../src/config/models.js");
+    await codex.configure({});
+    const text = readFileSync(join(sandbox, ".codex", "config.toml"), "utf8");
+    for (const m of PICKER_MODELS) {
+      // Profile header + the corresponding model id appear in the block.
+      expect(text).toContain(`[profiles.opper-${m.codexProfile}]`);
+      expect(text).toContain(`model = "${m.id}"`);
+    }
+  });
+
   it("configure preserves user content outside the sentinels", async () => {
     const cfgDir = join(sandbox, ".codex");
     const cfgPath = join(cfgDir, "config.toml");

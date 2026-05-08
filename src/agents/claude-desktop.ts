@@ -4,7 +4,7 @@ import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS } from "../config/models.js";
+import { DEFAULT_MODELS, PICKER_MODELS } from "../config/models.js";
 import { run } from "../util/run.js";
 import type {
   AgentAdapter,
@@ -240,12 +240,10 @@ async function writeGatewayProfile(
   cfg.inferenceGatewayAuthScheme = "bearer";
   cfg.disableDeploymentModeChooser = true;
   // First entry is the picker default. Dedupe in case primaryModel
-  // equals one of the catalog defaults.
+  // equals one of the catalog ids.
   const names = Array.from(new Set([
     primaryModel,
-    DEFAULT_MODELS.opus,
-    DEFAULT_MODELS.sonnet,
-    DEFAULT_MODELS.haiku,
+    ...PICKER_MODELS.map((m) => m.id),
   ]));
   cfg.inferenceModels = names.map((name) => ({ name }));
   await writeJson(path, cfg);

@@ -174,6 +174,48 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     expect(after.toolsets).toEqual(["hermes-cli", "web"]);
   });
 
+  it("writes a providers.opper block with all picker model ids on every spawn", async () => {
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    const SESSION_URL = "https://api.opper.ai/v3/session/sess_test";
+    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_URL });
+
+    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
+    const written = parse(readFileSync(configPath, "utf8")) as {
+      providers?: { opper?: { name?: string; base_url?: string; key_env?: string; models?: Record<string, unknown> } };
+    };
+    expect(written.providers?.opper).toBeDefined();
+    expect(written.providers?.opper?.name).toBe("Opper");
+    expect(written.providers?.opper?.base_url).toBe(SESSION_URL);
+    expect(written.providers?.opper?.key_env).toBe("OPENAI_API_KEY");
+    const ids = Object.keys(written.providers?.opper?.models ?? {});
+    // Spot-check both ends: the curated 5 plus the 5 added later.
+    expect(ids).toContain("claude-opus-4-7");
+    expect(ids).toContain("gpt-5.5");
+    expect(ids).toContain("gemini-3.1-pro-preview");
+    expect(ids).toContain("deepinfra/kimi-k2.6");
+    expect(ids).toContain("fireworks/minimax-m2p7");
+    expect(ids).toContain("deepinfra/deepseek-v4-flash");
+  });
+
+  it("rewrites providers.opper.base_url with the per-session URL on each spawn", async () => {
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    const SESSION_A = "https://api.opper.ai/v3/session/sess_a";
+    const SESSION_B = "https://api.opper.ai/v3/session/sess_b";
+
+    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_A });
+    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_B });
+
+    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
+    const after = parse(readFileSync(configPath, "utf8")) as {
+      model?: { base_url?: string };
+      providers?: { opper?: { base_url?: string } };
+    };
+    // Both routing surfaces must follow the latest session URL — otherwise
+    // the picker row keeps pointing at a stale session.
+    expect(after.model?.base_url).toBe(SESSION_B);
+    expect(after.providers?.opper?.base_url).toBe(SESSION_B);
+  });
+
   it("propagates non-zero exit codes from run()", async () => {
     runMock.mockReturnValue({ code: 2, stdout: "", stderr: "" });
     const code = await hermes.spawn!([], ROUTING);

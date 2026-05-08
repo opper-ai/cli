@@ -9,6 +9,21 @@
         "apiKey": "{env:OPPER_API_KEY}"
       },
       "models": {
+        "claude-opus-4-7": {
+          "name": "Claude Opus 4.7",
+          "cost": { "input": 5.00, "output": 25.00 },
+          "limit": { "context": 1000000, "output": 128000 }
+        },
+        "claude-sonnet-4-6": {
+          "name": "Claude Sonnet 4.6",
+          "cost": { "input": 3.00, "output": 15.00 },
+          "limit": { "context": 1000000, "output": 64000 }
+        },
+        "claude-haiku-4-5": {
+          "name": "Claude Haiku 4.5",
+          "cost": { "input": 1.00, "output": 5.00 },
+          "limit": { "context": 200000, "output": 64000 }
+        },
         "gpt-5.5": {
           "name": "GPT 5.5",
           "cost": { "input": 5.00, "output": 30.00 },
@@ -21,70 +36,35 @@
             }
           }
         },
-        "claude-sonnet-4-6": {
-          "name": "Claude Sonnet 4.6",
-          "cost": { "input": 3.00, "output": 15.00 },
-          "limit": { "context": 1000000, "output": 64000 }
+        "gemini-3.1-pro-preview": {
+          "name": "Gemini 3.1 Pro Preview",
+          "cost": { "input": 2.00, "output": 12.00 },
+          "limit": { "context": 1048576, "output": 65536 }
         },
-        "claude-opus-4-7": {
-          "name": "Claude Opus 4.7",
-          "cost": { "input": 5.00, "output": 25.00 },
-          "limit": { "context": 1000000, "output": 128000 }
+        "deepinfra/kimi-k2.6": {
+          "name": "Kimi K2.6",
+          "cost": { "input": 0.75, "output": 3.50 },
+          "limit": { "context": 262144, "output": 65536 }
         },
-        "claude-haiku-4-5": {
-          "name": "Claude Haiku 4.5",
-          "cost": { "input": 1.00, "output": 5.00 },
-          "limit": { "context": 200000, "output": 64000 }
+        "deepinfra/glm-5.1": {
+          "name": "GLM 5.1",
+          "cost": { "input": 1.05, "output": 3.50 },
+          "limit": { "context": 202752, "output": 65536 }
         },
-        "gpt-5.2": {
-          "name": "GPT 5.2",
-          "cost": { "input": 1.75, "output": 14.00 },
-          "limit": { "context": 400000, "output": 128000 }
+        "fireworks/minimax-m2p7": {
+          "name": "MiniMax M2.7",
+          "cost": { "input": 0.30, "output": 1.20 },
+          "limit": { "context": 196608, "output": 65536 }
         },
-        "gpt-5-mini": {
-          "name": "GPT 5 Mini",
-          "cost": { "input": 0.25, "output": 1.00 },
-          "limit": { "context": 400000, "output": 128000 }
+        "deepinfra/deepseek-v4-pro": {
+          "name": "DeepSeek V4 Pro",
+          "cost": { "input": 1.74, "output": 3.48 },
+          "limit": { "context": 1048576, "output": 65536 }
         },
-        "gpt-5-nano": {
-          "name": "GPT 5 Nano",
-          "cost": { "input": 0.05, "output": 0.40 },
-          "limit": { "context": 400000, "output": 128000 }
-        },
-        "gemini-2.5-pro": {
-          "name": "Gemini 2.5 Pro",
-          "cost": { "input": 1.25, "output": 10.00 },
-          "limit": { "context": 1000000, "output": 65536 }
-        },
-        "gemini-2.5-flash": {
-          "name": "Gemini 2.5 Flash",
-          "cost": { "input": 0.30, "output": 2.50 },
-          "limit": { "context": 1000000, "output": 65536 }
-        },
-        "gemini-2.5-flash-lite": {
-          "name": "Gemini 2.5 Flash Lite",
-          "cost": { "input": 0.10, "output": 0.40 },
-          "limit": { "context": 1000000, "output": 65536 }
-        },
-        "gemini-3-flash-preview": {
-          "name": "Gemini 3 Flash Preview",
-          "cost": { "input": 0.50, "output": 3.00 },
-          "limit": { "context": 1000000, "output": 65536 }
-        },
-        "kimi-k2.5": {
-          "name": "Kimi K2.5",
-          "cost": { "input": 0.60, "output": 3.00 },
-          "limit": { "context": 256000, "output": 65536 }
-        },
-        "glm-4.7": {
-          "name": "GLM 4.7",
-          "cost": { "input": 0.60, "output": 2.20 },
-          "limit": { "context": 200000, "output": 128000 }
-        },
-        "gpt-oss-120b": {
-          "name": "GPT OSS 120B",
-          "cost": { "input": 0.15, "output": 0.75 },
-          "limit": { "context": 131072, "output": 131072 }
+        "deepinfra/deepseek-v4-flash": {
+          "name": "DeepSeek V4 Flash",
+          "cost": { "input": 0.14, "output": 0.28 },
+          "limit": { "context": 1048576, "output": 65536 }
         }
       }
     }

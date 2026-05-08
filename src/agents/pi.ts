@@ -8,7 +8,7 @@ import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS } from "../config/models.js";
+import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -56,31 +56,20 @@ async function setOpperProvider(
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
+  // The launch model is reordered to index 0 (Pi treats the first entry as
+  // the active default in its picker UI). `_launch: true` is the explicit
+  // marker the runtime reads.
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
     baseUrl,
-    models: [
-      {
-        id: launchModel,
-        contextWindow: 200000,
-        input: ["text"],
-        reasoning: true,
-        _launch: true,
-      },
-      {
-        id: DEFAULT_MODELS.sonnet,
-        contextWindow: 200000,
-        input: ["text"],
-        reasoning: true,
-      },
-      {
-        id: DEFAULT_MODELS.haiku,
-        contextWindow: 200000,
-        input: ["text"],
-        reasoning: false,
-      },
-    ],
+    models: pickerModelsForLaunch(launchModel).map((m) => ({
+      id: m.id,
+      contextWindow: m.contextWindow,
+      input: ["text"],
+      reasoning: m.reasoning,
+      ...(m.id === launchModel ? { _launch: true } : {}),
+    })),
   };
   await writeConfig(cfg);
 }
