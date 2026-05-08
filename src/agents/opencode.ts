@@ -9,7 +9,7 @@ import {
 } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
-import { withConfigSnapshot } from "../util/config-snapshot.js";
+import { withJsonKey } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
 import type {
   AgentAdapter,
@@ -153,11 +153,13 @@ async function spawn(
     }
   }
 
-  // User-scope: snapshot the global config so direct `opencode`
+  // User-scope: snapshot just `provider.opper` so direct `opencode`
   // invocations after the launch don't inherit this session's URL,
   // and so a launch on a machine with no prior opencode.json doesn't
-  // leave one behind.
-  return withConfigSnapshot(opencodeConfigPath("global"), async () => {
+  // leave one behind. OpenCode mutates this file during a session
+  // (theme, default model, MCP servers, …) — narrow restore keeps
+  // those edits and reverts only what we wrote.
+  return withJsonKey(opencodeConfigPath("global"), ["provider", "opper"], async () => {
     await configureOpenCode({ location: "global", overwrite: true });
 
     // OpenCode reads `./opencode.json` if present and uses it instead of

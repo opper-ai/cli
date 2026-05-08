@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -127,6 +127,37 @@ describe("pi adapter", () => {
     const code = await pi.spawn!([], ROUTING);
     expect(code).toBe(17);
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn restore preserves sibling providers / top-level edits made mid-spawn", async () => {
+    // The user (or a concurrent edit) adds a non-opper provider while
+    // the launch is running. Narrow restore must reset only providers.opper
+    // and leave the new sibling alone.
+    await pi.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+        providers?: Record<string, unknown>;
+        somethingElse?: string;
+      };
+      cur.providers = cur.providers ?? {};
+      cur.providers["lmstudio"] = { baseUrl: "http://localhost:1234" };
+      cur.somethingElse = "user added this";
+      writeFileSync(cfgPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
+      return { status: 0 };
+    });
+
+    await pi.spawn!([], ROUTING);
+
+    const after = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+      providers?: Record<string, { baseUrl?: string }>;
+      somethingElse?: string;
+    };
+    expect(after.providers?.lmstudio).toEqual({ baseUrl: "http://localhost:1234" });
+    expect(after.somethingElse).toBe("user added this");
+    // Our opper provider is reverted to the pre-launch (compat) URL.
+    expect(after.providers?.opper?.baseUrl).toBe("https://api.opper.ai/v3/compat");
   });
 
   it("spawn places the launch model at models[0] even when it isn't opus", async () => {

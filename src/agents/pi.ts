@@ -9,7 +9,7 @@ import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
-import { withConfigSnapshot } from "../util/config-snapshot.js";
+import { withJsonKey } from "../util/config-snapshot.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -121,9 +121,11 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Snapshot models.json so direct `pi` invocations after the launch
-  // don't inherit this session's URL.
-  return withConfigSnapshot(piConfigPath(), async () => {
+  // Snapshot just `providers.opper` so direct `pi` invocations after
+  // the launch don't inherit this session's URL — and so any sibling
+  // providers (or other top-level keys) the user/agent edited mid-spawn
+  // survive intact.
+  return withJsonKey(piConfigPath(), ["providers", PROVIDER_KEY], async () => {
     await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
 
     // pi's CLI requires *both* --provider and --model to resolve a non-default

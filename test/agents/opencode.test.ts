@@ -187,11 +187,11 @@ describe("opencode adapter", () => {
     });
     spawnSyncMock.mockReturnValue({ status: 0 });
     seedOpencodeConfig(sandbox);
-    const before = readFileSync(opencodeConfigPath(sandbox), "utf8");
+    const before = JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"));
 
     await opencode.spawn!([], ROUTING);
 
-    expect(readFileSync(opencodeConfigPath(sandbox), "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"))).toEqual(before);
   });
 
   it("spawn deletes any opencode.json it caused to be created when none existed before", async () => {
@@ -231,12 +231,65 @@ describe("opencode adapter", () => {
       wrote: false,
     });
     seedOpencodeConfig(sandbox);
-    const before = readFileSync(opencodeConfigPath(sandbox), "utf8");
+    const before = JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"));
 
     spawnSyncMock.mockReturnValue({ status: 17 });
     const code = await opencode.spawn!([], ROUTING);
     expect(code).toBe(17);
-    expect(readFileSync(opencodeConfigPath(sandbox), "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"))).toEqual(before);
+  });
+
+  it("user scope: restore preserves sibling edits OpenCode makes during the session", async () => {
+    // OpenCode mutates opencode.json during a session (theme, default
+    // model, MCP servers, …). Narrow restore must reset only
+    // provider.opper and leave the rest of the file alone.
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    seedOpencodeConfig(sandbox);
+    // Augment the seed with extra top-level keys that OpenCode would
+    // typically own.
+    const seedPath = opencodeConfigPath(sandbox);
+    const seeded = JSON.parse(readFileSync(seedPath, "utf8")) as {
+      provider: Record<string, unknown>;
+      [k: string]: unknown;
+    };
+    seeded.theme = "dark";
+    seeded.model = "old-default";
+    writeFileSync(seedPath, JSON.stringify(seeded, null, 2) + "\n", "utf8");
+
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(seedPath, "utf8")) as {
+        provider: Record<string, unknown>;
+        theme: string;
+        model: string;
+        mcpServers?: Record<string, unknown>;
+        [k: string]: unknown;
+      };
+      cur.theme = "light";
+      cur.model = "new-default";
+      cur.mcpServers = { fs: { command: "mcp-fs" } };
+      writeFileSync(seedPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
+      return { status: 0 };
+    });
+
+    await opencode.spawn!([], ROUTING);
+
+    const after = JSON.parse(readFileSync(seedPath, "utf8")) as {
+      provider: { opper: { options: { baseURL: string } } };
+      theme: string;
+      model: string;
+      mcpServers?: Record<string, unknown>;
+    };
+    // Sibling edits survive.
+    expect(after.theme).toBe("light");
+    expect(after.model).toBe("new-default");
+    expect(after.mcpServers).toEqual({ fs: { command: "mcp-fs" } });
+    // Our provider is back to the pre-launch (compat) URL.
+    expect(after.provider.opper.options.baseURL).toBe(
+      "https://api.opper.ai/v3/compat",
+    );
   });
 
   it("spawn does not crash if the opencode.json doesn't exist yet (configureOpenCode was a no-op stub)", async () => {

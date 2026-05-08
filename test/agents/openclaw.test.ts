@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,6 +132,35 @@ describe("openclaw adapter", () => {
     const code = await openclaw.spawn!(["agent"], ROUTING);
     expect(code).toBe(17);
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn restore preserves sibling providers / top-level edits made mid-spawn", async () => {
+    await openclaw.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
+    );
+
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+        providers?: Record<string, unknown>;
+        userKey?: string;
+      };
+      cur.providers = cur.providers ?? {};
+      cur.providers["custom"] = { baseUrl: "https://example.com" };
+      cur.userKey = "preserved";
+      writeFileSync(cfgPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
+      return { status: 0 };
+    });
+
+    await openclaw.spawn!(["agent"], ROUTING);
+
+    const after = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+      providers?: Record<string, { baseUrl?: string }>;
+      userKey?: string;
+    };
+    expect(after.providers?.custom).toEqual({ baseUrl: "https://example.com" });
+    expect(after.userKey).toBe("preserved");
+    expect(after.providers?.opper?.baseUrl).toBe("https://api.opper.ai/v3/compat");
   });
 
   it("spawn places the launch model at models[0] even when it isn't opus", async () => {

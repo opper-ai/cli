@@ -271,4 +271,34 @@ describe("codex adapter", () => {
     expect(code).toBe(17);
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
   });
+
+  it("spawn restore preserves user edits outside the sentinel block made mid-spawn", async () => {
+    // Anything outside the SENTINEL_OPEN/CLOSE markers is the user's
+    // own config (theme, settings, etc.). The narrow restore must
+    // not clobber edits made there during the session.
+    const cfgDir = join(sandbox, ".codex");
+    const cfgPath = join(cfgDir, "config.toml");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(cfgPath, "[settings]\ntheme = \"dark\"\n", "utf8");
+    await codex.configure({});
+
+    spawnSyncMock.mockImplementation(() => {
+      // Simulate the user editing the [settings] block mid-session.
+      const cur = readFileSync(cfgPath, "utf8");
+      writeFileSync(cfgPath, cur.replace('theme = "dark"', 'theme = "light"'), "utf8");
+      return { status: 0 };
+    });
+
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    const after = readFileSync(cfgPath, "utf8");
+    expect(after).toContain('theme = "light"'); // sibling edit survived
+    expect(after).toContain('base_url = "https://api.opper.ai/v3/compat"'); // our block reverted
+    expect(after).not.toContain(SESSION_URL);
+  });
 });

@@ -12,9 +12,10 @@ import type {
   OpperRouting,
 } from "./types.js";
 
+import { rm } from "node:fs/promises";
+
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { PICKER_MODELS } from "../config/models.js";
-import { withConfigSnapshot } from "../util/config-snapshot.js";
 
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
@@ -56,6 +57,14 @@ function stripOpperBlock(text: string): string {
   const after = text.slice(endIdx + SENTINEL_CLOSE.length).replace(/^\n/, "");
   if (before.length === 0) return after;
   return `${before}\n${after}`;
+}
+
+function extractOpperBlock(text: string): string | null {
+  const startIdx = text.indexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return null;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return null;
+  return text.slice(startIdx, endIdx + SENTINEL_CLOSE.length);
 }
 
 async function detect(): Promise<DetectResult> {
@@ -141,12 +150,18 @@ function hasProfileArg(args: string[]): boolean {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Snapshot config.toml so direct `codex` invocations after the launch
-  // don't inherit this session's URL. We rewrite the block with the
-  // session URL for the duration of spawn, then restore on exit.
-  return withConfigSnapshot(codexConfigPath(), async () => {
-    await writeOpperBlock(routing.baseUrl);
+  // Narrow snapshot: capture just the sentinel-delimited opper block (or
+  // its absence). On exit we restore that block on top of whatever the
+  // file looks like by then — anything outside the sentinels (user
+  // edits to [settings], theme, etc.) is preserved.
+  const cfg = codexConfigPath();
+  const fileExistedBefore = existsSync(cfg);
+  const opperBlockBefore = fileExistedBefore
+    ? extractOpperBlock(readFileSync(cfg, "utf8"))
+    : null;
 
+  await writeOpperBlock(routing.baseUrl);
+  try {
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       OPPER_API_KEY: routing.apiKey,
@@ -156,7 +171,42 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
       : ["--profile", DEFAULT_PROFILE, ...args];
     const result = spawnSync("codex", finalArgs, { stdio: "inherit", env });
     return result.status ?? -1;
-  });
+  } finally {
+    await restoreOpperBlock(cfg, opperBlockBefore, fileExistedBefore);
+  }
+}
+
+async function restoreOpperBlock(
+  cfg: string,
+  blockBefore: string | null,
+  fileExistedBefore: boolean,
+): Promise<void> {
+  try {
+    const current = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+    const stripped = stripOpperBlock(current);
+    let next: string;
+    if (blockBefore === null) {
+      next = stripped;
+    } else if (stripped.length === 0) {
+      next = `${blockBefore}\n`;
+    } else {
+      next = stripped.endsWith("\n")
+        ? `${stripped}${blockBefore}\n`
+        : `${stripped}\n${blockBefore}\n`;
+    }
+    if (!fileExistedBefore && next.trim().length === 0) {
+      await rm(cfg, { force: true });
+      return;
+    }
+    await mkdir(dirname(cfg), { recursive: true });
+    await writeFile(cfg, next, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `opper: failed to restore ${cfg} after launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+  }
 }
 
 export const codex: AgentAdapter = {
