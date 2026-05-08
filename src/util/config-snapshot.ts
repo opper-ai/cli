@@ -3,10 +3,11 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
 
 /**
- * Snapshot the value at `keyPath` in a JSON file (or its absence), run
- * `fn`, then restore just that key to its pre-`fn` state. Other keys —
- * including ones added or modified during `fn` (e.g. by the launched
- * agent or a concurrent user edit) — are preserved.
+ * Snapshot the values at one or more `keyPaths` in a JSON file (or
+ * their absence), run `fn`, then restore just those keys to their
+ * pre-`fn` state. Other keys — including ones added or modified during
+ * `fn` (e.g. by the launched agent or a concurrent user edit) — are
+ * preserved.
  *
  * Used by adapters that bake a per-launch session URL into a persistent
  * config: snapshot ensures direct invocations of the agent (without
@@ -14,25 +15,29 @@ import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
  * narrow scope keeps unrelated mid-spawn config changes intact.
  *
  * If the file didn't exist before `fn` and is structurally empty after
- * removing our key, it gets deleted on restore.
+ * the captured keys are restored, it gets deleted.
  *
  * Restore failures go to stderr but do not mask `fn`'s own error.
  */
-export async function withJsonKey<T>(
+export async function withJsonKeys<T>(
   path: string,
-  keyPath: string[],
+  keyPaths: string[][],
   fn: () => Promise<T>,
 ): Promise<T> {
-  if (keyPath.length === 0) throw new Error("keyPath must be non-empty");
+  if (keyPaths.length === 0) throw new Error("keyPaths must be non-empty");
+  for (const kp of keyPaths) {
+    if (kp.length === 0) throw new Error("each keyPath must be non-empty");
+  }
   const fileExistedBefore = existsSync(path);
   const beforeMode = fileExistedBefore
     ? statSync(path).mode & 0o777
     : undefined;
-  const valueBefore = readKey(readJsonOrEmpty(path), keyPath);
+  const before = readJsonOrEmpty(path);
+  const valuesBefore = keyPaths.map((kp) => readKey(before, kp));
   try {
     return await fn();
   } finally {
-    await restore(path, keyPath, valueBefore, fileExistedBefore, beforeMode);
+    await restore(path, keyPaths, valuesBefore, fileExistedBefore, beforeMode);
   }
 }
 
@@ -105,15 +110,19 @@ function pruneEmptyAlongPath(
 
 async function restore(
   path: string,
-  keyPath: string[],
-  valueBefore: unknown,
+  keyPaths: string[][],
+  valuesBefore: unknown[],
   fileExistedBefore: boolean,
   beforeMode: number | undefined,
 ): Promise<void> {
   try {
     const after = readJsonOrEmpty(path);
-    setKey(after, keyPath, valueBefore);
-    pruneEmptyAlongPath(after, keyPath);
+    for (let i = 0; i < keyPaths.length; i++) {
+      setKey(after, keyPaths[i]!, valuesBefore[i]);
+    }
+    for (const kp of keyPaths) {
+      pruneEmptyAlongPath(after, kp);
+    }
 
     if (!fileExistedBefore && Object.keys(after).length === 0) {
       await rm(path, { force: true });

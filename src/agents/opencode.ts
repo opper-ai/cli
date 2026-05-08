@@ -9,7 +9,7 @@ import {
 } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
-import { withJsonKey } from "../util/config-snapshot.js";
+import { withJsonKeys } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
 import type {
   AgentAdapter,
@@ -135,11 +135,13 @@ async function spawn(
     // the point — instead we apply the session URL only for the spawn
     // and reset baseURL afterwards. The opper provider block stays in
     // place across launches.
-    await configureOpenCode({ location: "local", overwrite: true });
-    // Capture *after* configureOpenCode so a fresh project picks up the
-    // template's compat URL, while a hand-edited config (e.g. pointing
-    // at a self-hosted Opper) keeps that custom URL across launches.
+    //
+    // Capture restoreUrl *before* configureOpenCode runs, since
+    // `overwrite: true` replaces provider.opper with template values
+    // (compat URL) — capturing after would discard a hand-edited
+    // self-hosted baseURL.
     const restoreUrl = readBaseUrl("local") ?? OPPER_COMPAT_URL;
+    await configureOpenCode({ location: "local", overwrite: true });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
       const env: NodeJS.ProcessEnv = {
@@ -153,38 +155,42 @@ async function spawn(
     }
   }
 
-  // User-scope: snapshot just `provider.opper` so direct `opencode`
-  // invocations after the launch don't inherit this session's URL,
-  // and so a launch on a machine with no prior opencode.json doesn't
-  // leave one behind. OpenCode mutates this file during a session
-  // (theme, default model, MCP servers, …) — narrow restore keeps
-  // those edits and reverts only what we wrote.
-  return withJsonKey(opencodeConfigPath("global"), ["provider", "opper"], async () => {
-    await configureOpenCode({ location: "global", overwrite: true });
+  // User-scope: snapshot the Opper-owned keys. The template writes
+  // both `provider.opper` AND a top-level `model: "opper/..."` — narrow
+  // restore must cover both, otherwise a fresh first launch leaves an
+  // orphaned `model` pointing at a removed provider. OpenCode mutates
+  // sibling keys (theme, MCP servers, …) during a session — those are
+  // outside our keyPaths and survive the restore.
+  return withJsonKeys(
+    opencodeConfigPath("global"),
+    [["provider", "opper"], ["model"]],
+    async () => {
+      await configureOpenCode({ location: "global", overwrite: true });
 
-    // OpenCode reads `./opencode.json` if present and uses it instead of
-    // the user-level config. If one exists without an Opper provider,
-    // whatever we just wrote globally is dead weight — warn so the user
-    // can re-run with `--project`.
-    const projectPath = opencodeConfigPath("local");
-    const state = readProjectConfigState(projectPath);
-    if (state.exists && !state.hasOpperProvider) {
-      process.stderr.write(
-        brand.dim(
-          `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
-        ),
-      );
-    }
+      // OpenCode reads `./opencode.json` if present and uses it instead
+      // of the user-level config. If one exists without an Opper
+      // provider, whatever we just wrote globally is dead weight — warn
+      // so the user can re-run with `--project`.
+      const projectPath = opencodeConfigPath("local");
+      const state = readProjectConfigState(projectPath);
+      if (state.exists && !state.hasOpperProvider) {
+        process.stderr.write(
+          brand.dim(
+            `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
+          ),
+        );
+      }
 
-    await setSessionBaseUrl(routing.baseUrl, "global");
+      await setSessionBaseUrl(routing.baseUrl, "global");
 
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      OPPER_API_KEY: routing.apiKey,
-    };
-    const result = spawnSync("opencode", args, { stdio: "inherit", env });
-    return result.status ?? -1;
-  });
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OPPER_API_KEY: routing.apiKey,
+      };
+      const result = spawnSync("opencode", args, { stdio: "inherit", env });
+      return result.status ?? -1;
+    },
+  );
 }
 
 export const opencode: AgentAdapter = {

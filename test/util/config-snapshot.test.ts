@@ -11,13 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withJsonKey } from "../../src/util/config-snapshot.js";
+import { withJsonKeys } from "../../src/util/config-snapshot.js";
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
-describe("withJsonKey", () => {
+describe("withJsonKeys", () => {
   let sandbox: string;
 
   beforeEach(() => {
@@ -35,7 +35,7 @@ describe("withJsonKey", () => {
       "utf8",
     );
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       writeFileSync(
         path,
         JSON.stringify(
@@ -56,7 +56,7 @@ describe("withJsonKey", () => {
     const path = join(sandbox, "models.json");
     writeFileSync(path, JSON.stringify({ other: "stuff" }, null, 2), "utf8");
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       writeFileSync(
         path,
         JSON.stringify(
@@ -85,7 +85,7 @@ describe("withJsonKey", () => {
       "utf8",
     );
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       const cur = readJson(path);
       // Agent rewrites our key (session URL) AND mutates a sibling.
       (cur.providers as Record<string, unknown>).opper = {
@@ -112,7 +112,7 @@ describe("withJsonKey", () => {
     const path = join(sandbox, "models.json");
     expect(existsSync(path)).toBe(false);
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       writeFileSync(
         path,
         JSON.stringify({ providers: { opper: { baseUrl: "x" } } }, null, 2),
@@ -126,7 +126,7 @@ describe("withJsonKey", () => {
   it("keeps the file when it didn't exist before but the agent added other content", async () => {
     const path = join(sandbox, "models.json");
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       writeFileSync(
         path,
         JSON.stringify(
@@ -157,7 +157,7 @@ describe("withJsonKey", () => {
     );
 
     await expect(
-      withJsonKey(path, ["providers", "opper"], async () => {
+      withJsonKeys(path, [["providers", "opper"]], async () => {
         writeFileSync(
           path,
           JSON.stringify(
@@ -185,7 +185,7 @@ describe("withJsonKey", () => {
     );
     expect(statSync(path).mode & 0o777).toBe(0o600);
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       writeFileSync(
         path,
         JSON.stringify({ providers: { opper: { baseUrl: "session" } } }),
@@ -195,6 +195,65 @@ describe("withJsonKey", () => {
     });
 
     expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("restores multiple keyPaths independently", async () => {
+    // OpenCode case: snapshot both `provider.opper` (the Opper provider
+    // block) and the top-level `model` key — both are Opper-owned.
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        provider: { opper: { baseURL: "compat" } },
+        model: "opper/old-default",
+        theme: "dark",
+      }, null, 2),
+      "utf8",
+    );
+
+    await withJsonKeys(
+      path,
+      [["provider", "opper"], ["model"]],
+      async () => {
+        writeFileSync(
+          path,
+          JSON.stringify({
+            provider: { opper: { baseURL: "session-url" } },
+            model: "opper/something-else",
+            theme: "light", // sibling user edit, must survive
+          }, null, 2),
+          "utf8",
+        );
+      },
+    );
+
+    const after = readJson(path);
+    expect(after.provider).toEqual({ opper: { baseURL: "compat" } });
+    expect(after.model).toBe("opper/old-default");
+    expect(after.theme).toBe("light");
+  });
+
+  it("removes multiple keyPaths if they didn't exist before fn added them", async () => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, JSON.stringify({ theme: "dark" }, null, 2), "utf8");
+
+    await withJsonKeys(
+      path,
+      [["provider", "opper"], ["model"]],
+      async () => {
+        writeFileSync(
+          path,
+          JSON.stringify({
+            theme: "dark",
+            provider: { opper: { baseURL: "x" } },
+            model: "opper/y",
+          }, null, 2),
+          "utf8",
+        );
+      },
+    );
+
+    expect(readJson(path)).toEqual({ theme: "dark" });
   });
 
   it("works when the parent directory has to be recreated to restore", async () => {
@@ -207,7 +266,7 @@ describe("withJsonKey", () => {
       "utf8",
     );
 
-    await withJsonKey(path, ["providers", "opper"], async () => {
+    await withJsonKeys(path, [["providers", "opper"]], async () => {
       rmSync(dir, { recursive: true, force: true });
     });
 

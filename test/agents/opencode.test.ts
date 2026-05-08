@@ -239,24 +239,26 @@ describe("opencode adapter", () => {
     expect(JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"))).toEqual(before);
   });
 
-  it("user scope: restore preserves sibling edits OpenCode makes during the session", async () => {
-    // OpenCode mutates opencode.json during a session (theme, default
-    // model, MCP servers, …). Narrow restore must reset only
-    // provider.opper and leave the rest of the file alone.
+  it("user scope: restore preserves non-Opper-owned sibling edits, reverts Opper-owned keys", async () => {
+    // OpenCode mutates opencode.json during a session — themes, MCP
+    // servers, etc. Narrow restore must:
+    //   - revert provider.opper AND top-level model (both Opper-owned;
+    //     the template writes both, and an orphaned `model: "opper/X"`
+    //     pointing at a removed provider would break direct opencode
+    //     runs after the launch);
+    //   - leave non-Opper-owned siblings (theme, mcpServers, …) alone.
     configureOpenCodeMock.mockResolvedValue({
       path: opencodeConfigPath(sandbox),
       wrote: false,
     });
     seedOpencodeConfig(sandbox);
-    // Augment the seed with extra top-level keys that OpenCode would
-    // typically own.
     const seedPath = opencodeConfigPath(sandbox);
     const seeded = JSON.parse(readFileSync(seedPath, "utf8")) as {
       provider: Record<string, unknown>;
       [k: string]: unknown;
     };
     seeded.theme = "dark";
-    seeded.model = "old-default";
+    seeded.model = "opper/claude-opus-4-7";
     writeFileSync(seedPath, JSON.stringify(seeded, null, 2) + "\n", "utf8");
 
     spawnSyncMock.mockImplementation(() => {
@@ -268,7 +270,7 @@ describe("opencode adapter", () => {
         [k: string]: unknown;
       };
       cur.theme = "light";
-      cur.model = "new-default";
+      cur.model = "opper/claude-haiku-4-5";
       cur.mcpServers = { fs: { command: "mcp-fs" } };
       writeFileSync(seedPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
       return { status: 0 };
@@ -282,14 +284,49 @@ describe("opencode adapter", () => {
       model: string;
       mcpServers?: Record<string, unknown>;
     };
-    // Sibling edits survive.
+    // Non-Opper-owned siblings survive.
     expect(after.theme).toBe("light");
-    expect(after.model).toBe("new-default");
     expect(after.mcpServers).toEqual({ fs: { command: "mcp-fs" } });
-    // Our provider is back to the pre-launch (compat) URL.
+    // Opper-owned keys revert to pre-launch state.
+    expect(after.model).toBe("opper/claude-opus-4-7");
     expect(after.provider.opper.options.baseURL).toBe(
       "https://api.opper.ai/v3/compat",
     );
+  });
+
+  it("user scope: restore removes orphaned `model: opper/...` when no opper provider existed before", async () => {
+    // The exact regression Codex flagged: a fresh first launch with no
+    // prior opencode.json. The template writes provider.opper AND a
+    // top-level model: "opper/...". After restore, both must be gone —
+    // an orphaned `model` pointing at a removed provider would break
+    // direct `opencode` runs after the launch.
+    const cfg = opencodeConfigPath(sandbox);
+    expect(existsSync(cfg)).toBe(false);
+    configureOpenCodeMock.mockImplementation(async () => {
+      mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+      writeFileSync(
+        cfg,
+        JSON.stringify({
+          provider: {
+            opper: {
+              npm: "@ai-sdk/openai-compatible",
+              options: {
+                baseURL: "https://api.opper.ai/v3/compat",
+                apiKey: "{env:OPPER_API_KEY}",
+              },
+            },
+          },
+          model: "opper/claude-opus-4-7",
+        }, null, 2) + "\n",
+        "utf8",
+      );
+      return { path: cfg, wrote: true };
+    });
+    spawnSyncMock.mockReturnValue({ status: 0 });
+
+    await opencode.spawn!([], ROUTING);
+
+    expect(existsSync(cfg)).toBe(false);
   });
 
   it("spawn does not crash if the opencode.json doesn't exist yet (configureOpenCode was a no-op stub)", async () => {
@@ -398,10 +435,24 @@ describe("opencode adapter", () => {
         }, null, 2),
         "utf8",
       );
-      // configureOpenCode is a no-op when an opper provider already
-      // exists (see src/setup/opencode.ts:80-82).
-      configureOpenCodeMock.mockResolvedValue({
-        path: projectCfg, wrote: false, reason: "exists" as const,
+      // Simulate `configureOpenCode({overwrite: true})` — it really
+      // does replace provider.opper with template values (compat URL),
+      // wiping the user's custom baseURL. The fix is to capture
+      // `restoreUrl` before this call.
+      configureOpenCodeMock.mockImplementation(async () => {
+        const cur = JSON.parse(readFileSync(projectCfg, "utf8")) as {
+          provider?: { opper?: { options?: { baseURL?: string } } };
+        };
+        cur.provider = cur.provider ?? {};
+        cur.provider.opper = {
+          npm: "@ai-sdk/openai-compatible",
+          options: {
+            baseURL: "https://api.opper.ai/v3/compat",
+            apiKey: "{env:OPPER_API_KEY}",
+          },
+        } as never;
+        writeFileSync(projectCfg, JSON.stringify(cur, null, 2), "utf8");
+        return { path: projectCfg, wrote: true };
       });
       spawnSyncMock.mockReturnValue({ status: 0 });
 

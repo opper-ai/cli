@@ -9,7 +9,7 @@ import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
-import { withJsonKey } from "../util/config-snapshot.js";
+import { withJsonKeys } from "../util/config-snapshot.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -170,7 +170,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // after the launch don't inherit this session's URL — and so any
   // sibling providers / top-level keys the user edits mid-spawn aren't
   // clobbered on restore.
-  return withJsonKey(modelsPath(), ["providers", PROVIDER_KEY], async () => {
+  return withJsonKeys(modelsPath(), [["providers", PROVIDER_KEY]], async () => {
     await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
     const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
     return result.status ?? -1;
