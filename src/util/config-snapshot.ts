@@ -29,9 +29,14 @@ export async function withJsonKeys<T>(
     if (kp.length === 0) throw new Error("each keyPath must be non-empty");
   }
   const fileExistedBefore = existsSync(path);
-  const beforeMode = fileExistedBefore
-    ? statSync(path).mode & 0o777
-    : undefined;
+  let beforeMode: number | undefined;
+  if (fileExistedBefore) {
+    try {
+      beforeMode = statSync(path).mode & 0o777;
+    } catch {
+      beforeMode = undefined;
+    }
+  }
   const before = readJsonOrEmpty(path);
   const valuesBefore = keyPaths.map((kp) => readKey(before, kp));
   try {

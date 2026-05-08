@@ -156,9 +156,18 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // edits to [settings], theme, etc.) is preserved.
   const cfg = codexConfigPath();
   const fileExistedBefore = existsSync(cfg);
-  const opperBlockBefore = fileExistedBefore
-    ? extractOpperBlock(readFileSync(cfg, "utf8"))
-    : null;
+  // Tolerate read failures (perm, transient I/O) — same baseline as
+  // writeOpperBlock, which falls back to empty on read errors. A
+  // hard fail here would regress launch for users with unreadable
+  // configs.
+  let opperBlockBefore: string | null = null;
+  if (fileExistedBefore) {
+    try {
+      opperBlockBefore = extractOpperBlock(readFileSync(cfg, "utf8"));
+    } catch {
+      opperBlockBefore = null;
+    }
+  }
 
   await writeOpperBlock(routing.baseUrl);
   try {
