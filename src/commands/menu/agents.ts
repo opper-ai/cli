@@ -91,7 +91,7 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
       });
       if (configured) {
         options.push({
-          value: "uninstall",
+          value: "remove",
           label: "Remove Opper integration",
           hint: "Strip Opper-specific config from the agent (binary stays)",
         });
@@ -124,7 +124,7 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
           log.success(`${adapter.displayName} configured.`);
           break;
         }
-        case "uninstall":
+        case "remove":
           await adapter.unconfigure();
           log.success(`${adapter.displayName} integration removed.`);
           break;

@@ -61,7 +61,7 @@ describe("agentsListCommand", () => {
   });
 });
 
-describe("agentsUninstallCommand", () => {
+describe("agentsRemoveCommand", () => {
   beforeEach(() => {
     hermesUnconfigure.mockReset();
     getAdapterMock.mockReset();
@@ -79,10 +79,10 @@ describe("agentsUninstallCommand", () => {
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      const { agentsUninstallCommand } = await import(
+      const { agentsRemoveCommand } = await import(
         "../../src/commands/agents.js"
       );
-      await agentsUninstallCommand("hermes");
+      await agentsRemoveCommand("hermes");
       expect(hermesUnconfigure).toHaveBeenCalled();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("Hermes Agent");
@@ -94,10 +94,10 @@ describe("agentsUninstallCommand", () => {
 
   it("throws AGENT_NOT_FOUND for unknown adapter names", async () => {
     getAdapterMock.mockReturnValue(null);
-    const { agentsUninstallCommand } = await import(
+    const { agentsRemoveCommand } = await import(
       "../../src/commands/agents.js"
     );
-    await expect(agentsUninstallCommand("nope")).rejects.toMatchObject({
+    await expect(agentsRemoveCommand("nope")).rejects.toMatchObject({
       code: "AGENT_NOT_FOUND",
     });
   });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -77,22 +77,90 @@ describe("openclaw adapter", () => {
     expect(models.providers?.opper?.apiKey).toBe("op_live_test");
   });
 
-  it("spawn writes routing.baseUrl (the session URL) into models.json before launching", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+  it("spawn writes routing.baseUrl (the session URL) into models.json mid-launch", async () => {
+    // Mid-spawn the session URL is the active baseUrl. We capture inside
+    // the spawn callback because we restore the file on exit.
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
+    );
+    let midRun: ReturnType<typeof readModels> | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = JSON.parse(readFileSync(cfgPath, "utf8"));
+      return { status: 0 };
+    });
 
     const code = await openclaw.spawn!(["agent"], ROUTING);
     expect(code).toBe(0);
 
-    const models = readModels(sandbox);
-    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
-    expect(models.providers?.opper?.apiKey).toBe("op_live_run");
+    expect(midRun?.providers?.opper?.baseUrl).toBe(SESSION_URL);
+    expect(midRun?.providers?.opper?.apiKey).toBe("op_live_run");
+  });
 
-    // The default compat URL should NOT have leaked into the file.
-    const raw = readFileSync(
-      join(sandbox, ".openclaw", "agents", "main", "agent", "models.json"),
-      "utf8",
+  it("spawn restores the pre-launch config so direct `openclaw` runs don't inherit the session URL", async () => {
+    await openclaw.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
     );
-    expect(raw).not.toContain('"baseUrl": "https://api.opper.ai/v3/compat"');
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["agent"], ROUTING);
+
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn deletes the config it created when none existed before", async () => {
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
+    );
+    expect(existsSync(cfgPath)).toBe(false);
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["agent"], ROUTING);
+
+    expect(existsSync(cfgPath)).toBe(false);
+  });
+
+  it("spawn restores the pre-launch config even on non-zero exit", async () => {
+    await openclaw.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
+    );
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 17 });
+    const code = await openclaw.spawn!(["agent"], ROUTING);
+    expect(code).toBe(17);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn restore preserves sibling providers / top-level edits made mid-spawn", async () => {
+    await openclaw.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(
+      sandbox, ".openclaw", "agents", "main", "agent", "models.json",
+    );
+
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+        providers?: Record<string, unknown>;
+        userKey?: string;
+      };
+      cur.providers = cur.providers ?? {};
+      cur.providers["custom"] = { baseUrl: "https://example.com" };
+      cur.userKey = "preserved";
+      writeFileSync(cfgPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
+      return { status: 0 };
+    });
+
+    await openclaw.spawn!(["agent"], ROUTING);
+
+    const after = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+      providers?: Record<string, { baseUrl?: string }>;
+      userKey?: string;
+    };
+    expect(after.providers?.custom).toEqual({ baseUrl: "https://example.com" });
+    expect(after.userKey).toBe("preserved");
+    expect(after.providers?.opper?.baseUrl).toBe("https://api.opper.ai/v3/compat");
   });
 
   it("spawn places the launch model at models[0] even when it isn't opus", async () => {
@@ -115,6 +183,59 @@ describe("openclaw adapter", () => {
     const call = spawnSyncMock.mock.calls[0]!;
     expect(call[0]).toBe("openclaw");
     expect(call[1]).toEqual(["gateway", "start"]);
+  });
+
+  it("spawn does NOT snapshot the config on the daemon path — the gateway daemon outlives spawnSync and owns the file from then on", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!([], ROUTING);
+    // Post-spawn, models.json keeps the session URL: the daemon is
+    // running, will keep using whatever URL it loaded, and the file
+    // mirrors that. Restoring would either break the live daemon or
+    // be cosmetic — neither is correct.
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot when the user explicitly passes `gateway start`", async () => {
+    // `opper launch openclaw -- gateway start` is the daemon path too
+    // — same semantics as the no-args default. We must not gate on
+    // arg-count alone.
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["gateway", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot when the user explicitly passes `daemon start`", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["daemon", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot when daemon-start follows global flags", async () => {
+    // OpenClaw accepts global flags before the subcommand:
+    //   `opper launch openclaw -- --profile dev gateway start`
+    // The daemon detection has to find the pair anywhere in args, not
+    // just at index 0.
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["--profile", "dev", "gateway", "start"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot for `gateway restart` (same lifecycle as start)", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["gateway", "restart"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot for `daemon restart`", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["daemon", "restart"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
   });
 
   it("spawn forwards user-supplied args verbatim", async () => {

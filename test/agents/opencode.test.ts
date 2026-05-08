@@ -4,6 +4,7 @@ import {
   rmSync,
   writeFileSync,
   readFileSync,
+  existsSync,
   mkdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -154,25 +155,178 @@ describe("opencode adapter", () => {
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
   });
 
-  it("spawn rewrites provider.opper.options.baseURL to routing.baseUrl on every launch", async () => {
+  it("spawn rewrites provider.opper.options.baseURL to routing.baseUrl mid-launch", async () => {
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    seedOpencodeConfig(sandbox);
+
+    // Mid-spawn the session URL is the active baseURL — we capture
+    // inside the spawn callback because we restore on exit.
+    let midRun: {
+      provider: { opper: { options: { baseURL: string; apiKey: string } } };
+    } | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"));
+      return { status: 0 };
+    });
+
+    await opencode.spawn!([], ROUTING);
+
+    expect(midRun?.provider.opper.options.baseURL).toBe(SESSION_URL);
+    // The {env:OPPER_API_KEY} placeholder is preserved — we only rewrote
+    // baseURL.
+    expect(midRun?.provider.opper.options.apiKey).toBe("{env:OPPER_API_KEY}");
+  });
+
+  it("spawn restores the pre-launch opencode.json so direct `opencode` runs don't inherit the session URL", async () => {
     configureOpenCodeMock.mockResolvedValue({
       path: opencodeConfigPath(sandbox),
       wrote: false,
     });
     spawnSyncMock.mockReturnValue({ status: 0 });
     seedOpencodeConfig(sandbox);
+    const before = JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"));
 
     await opencode.spawn!([], ROUTING);
 
-    const cfg = JSON.parse(
-      readFileSync(opencodeConfigPath(sandbox), "utf8"),
-    ) as {
-      provider: { opper: { options: { baseURL: string; apiKey: string } } };
+    expect(JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"))).toEqual(before);
+  });
+
+  it("spawn deletes any opencode.json it caused to be created when none existed before", async () => {
+    // Simulate `configureOpenCode` writing the template config from
+    // scratch — the real implementation does this on first launch.
+    const cfg = opencodeConfigPath(sandbox);
+    expect(existsSync(cfg)).toBe(false);
+    configureOpenCodeMock.mockImplementation(async () => {
+      mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+      writeFileSync(
+        cfg,
+        JSON.stringify({
+          provider: {
+            opper: {
+              npm: "@ai-sdk/openai-compatible",
+              options: {
+                baseURL: "https://api.opper.ai/v3/compat",
+                apiKey: "{env:OPPER_API_KEY}",
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+      return { path: cfg, wrote: true };
+    });
+    spawnSyncMock.mockReturnValue({ status: 0 });
+
+    await opencode.spawn!([], ROUTING);
+
+    expect(existsSync(cfg)).toBe(false);
+  });
+
+  it("spawn restores the pre-launch config even on non-zero exit", async () => {
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    seedOpencodeConfig(sandbox);
+    const before = JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"));
+
+    spawnSyncMock.mockReturnValue({ status: 17 });
+    const code = await opencode.spawn!([], ROUTING);
+    expect(code).toBe(17);
+    expect(JSON.parse(readFileSync(opencodeConfigPath(sandbox), "utf8"))).toEqual(before);
+  });
+
+  it("user scope: restore preserves non-Opper-owned sibling edits, reverts Opper-owned keys", async () => {
+    // OpenCode mutates opencode.json during a session — themes, MCP
+    // servers, etc. Narrow restore must:
+    //   - revert provider.opper AND top-level model (both Opper-owned;
+    //     the template writes both, and an orphaned `model: "opper/X"`
+    //     pointing at a removed provider would break direct opencode
+    //     runs after the launch);
+    //   - leave non-Opper-owned siblings (theme, mcpServers, …) alone.
+    configureOpenCodeMock.mockResolvedValue({
+      path: opencodeConfigPath(sandbox),
+      wrote: false,
+    });
+    seedOpencodeConfig(sandbox);
+    const seedPath = opencodeConfigPath(sandbox);
+    const seeded = JSON.parse(readFileSync(seedPath, "utf8")) as {
+      provider: Record<string, unknown>;
+      [k: string]: unknown;
     };
-    expect(cfg.provider.opper.options.baseURL).toBe(SESSION_URL);
-    // The {env:OPPER_API_KEY} placeholder is preserved — we only rewrote
-    // baseURL.
-    expect(cfg.provider.opper.options.apiKey).toBe("{env:OPPER_API_KEY}");
+    seeded.theme = "dark";
+    seeded.model = "opper/claude-opus-4-7";
+    writeFileSync(seedPath, JSON.stringify(seeded, null, 2) + "\n", "utf8");
+
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(seedPath, "utf8")) as {
+        provider: Record<string, unknown>;
+        theme: string;
+        model: string;
+        mcpServers?: Record<string, unknown>;
+        [k: string]: unknown;
+      };
+      cur.theme = "light";
+      cur.model = "opper/claude-haiku-4-5";
+      cur.mcpServers = { fs: { command: "mcp-fs" } };
+      writeFileSync(seedPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
+      return { status: 0 };
+    });
+
+    await opencode.spawn!([], ROUTING);
+
+    const after = JSON.parse(readFileSync(seedPath, "utf8")) as {
+      provider: { opper: { options: { baseURL: string } } };
+      theme: string;
+      model: string;
+      mcpServers?: Record<string, unknown>;
+    };
+    // Non-Opper-owned siblings survive.
+    expect(after.theme).toBe("light");
+    expect(after.mcpServers).toEqual({ fs: { command: "mcp-fs" } });
+    // Opper-owned keys revert to pre-launch state.
+    expect(after.model).toBe("opper/claude-opus-4-7");
+    expect(after.provider.opper.options.baseURL).toBe(
+      "https://api.opper.ai/v3/compat",
+    );
+  });
+
+  it("user scope: a fresh first launch leaves no opencode.json behind (covers $schema, provider.opper, model)", async () => {
+    // The template (data/opencode.json) writes THREE Opper-owned
+    // top-level keys: $schema, provider.opper, model. Narrow restore
+    // must cover all three — otherwise a fresh first launch leaves
+    // orphan state behind and the launch isn't truly ephemeral.
+    const cfg = opencodeConfigPath(sandbox);
+    expect(existsSync(cfg)).toBe(false);
+    configureOpenCodeMock.mockImplementation(async () => {
+      mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+      writeFileSync(
+        cfg,
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            opper: {
+              npm: "@ai-sdk/openai-compatible",
+              options: {
+                baseURL: "https://api.opper.ai/v3/compat",
+                apiKey: "{env:OPPER_API_KEY}",
+              },
+            },
+          },
+          model: "opper/claude-opus-4-7",
+        }, null, 2) + "\n",
+        "utf8",
+      );
+      return { path: cfg, wrote: true };
+    });
+    spawnSyncMock.mockReturnValue({ status: 0 });
+
+    await opencode.spawn!([], ROUTING);
+
+    expect(existsSync(cfg)).toBe(false);
   });
 
   it("spawn does not crash if the opencode.json doesn't exist yet (configureOpenCode was a no-op stub)", async () => {
@@ -203,6 +357,153 @@ describe("opencode adapter", () => {
 
     await opencode.spawn!(["chat"], ROUTING, { configScope: "project" });
     expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true });
+  });
+
+  it("project scope: opper provider persists across launches but baseURL is reset to compat", async () => {
+    // `--project` is opt-in to a checked-in config — the opper provider
+    // should stay. Only the session URL should not leak.
+    const prevCwd = process.cwd();
+    process.chdir(sandbox);
+    try {
+      const projectCfg = join(sandbox, "opencode.json");
+      configureOpenCodeMock.mockImplementation(async () => {
+        writeFileSync(
+          projectCfg,
+          JSON.stringify({
+            provider: {
+              opper: {
+                npm: "@ai-sdk/openai-compatible",
+                options: {
+                  baseURL: "https://api.opper.ai/v3/compat",
+                  apiKey: "{env:OPPER_API_KEY}",
+                },
+              },
+            },
+          }, null, 2),
+          "utf8",
+        );
+        return { path: projectCfg, wrote: true };
+      });
+
+      let midRunBaseUrl: string | undefined;
+      spawnSyncMock.mockImplementation(() => {
+        midRunBaseUrl = (
+          JSON.parse(readFileSync(projectCfg, "utf8")) as {
+            provider: { opper: { options: { baseURL: string } } };
+          }
+        ).provider.opper.options.baseURL;
+        return { status: 0 };
+      });
+
+      await opencode.spawn!([], ROUTING, { configScope: "project" });
+      expect(midRunBaseUrl).toBe(SESSION_URL);
+
+      // Post-spawn: opper provider still there, baseURL reset to compat.
+      const after = JSON.parse(readFileSync(projectCfg, "utf8")) as {
+        provider: { opper: { options: { baseURL: string } } };
+      };
+      expect(after.provider.opper.options.baseURL).toBe(
+        "https://api.opper.ai/v3/compat",
+      );
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
+  it("project scope: a hand-edited custom baseURL is preserved across launches", async () => {
+    // Self-hosted Opper / staging users may pin a custom baseURL in
+    // their checked-in opencode.json. The launch should swap to the
+    // session URL during spawn and restore *that* custom URL on exit,
+    // not blindly reset to the public compat URL.
+    const prevCwd = process.cwd();
+    process.chdir(sandbox);
+    try {
+      const projectCfg = join(sandbox, "opencode.json");
+      const customBaseUrl = "https://opper.internal.example.com/v3/compat";
+      writeFileSync(
+        projectCfg,
+        JSON.stringify({
+          provider: {
+            opper: {
+              npm: "@ai-sdk/openai-compatible",
+              options: {
+                baseURL: customBaseUrl,
+                apiKey: "{env:OPPER_API_KEY}",
+              },
+            },
+          },
+        }, null, 2),
+        "utf8",
+      );
+      // Simulate `configureOpenCode({overwrite: true})` — it really
+      // does replace provider.opper with template values (compat URL),
+      // wiping the user's custom baseURL. The fix is to capture
+      // `restoreUrl` before this call.
+      configureOpenCodeMock.mockImplementation(async () => {
+        const cur = JSON.parse(readFileSync(projectCfg, "utf8")) as {
+          provider?: { opper?: { options?: { baseURL?: string } } };
+        };
+        cur.provider = cur.provider ?? {};
+        cur.provider.opper = {
+          npm: "@ai-sdk/openai-compatible",
+          options: {
+            baseURL: "https://api.opper.ai/v3/compat",
+            apiKey: "{env:OPPER_API_KEY}",
+          },
+        } as never;
+        writeFileSync(projectCfg, JSON.stringify(cur, null, 2), "utf8");
+        return { path: projectCfg, wrote: true };
+      });
+      spawnSyncMock.mockReturnValue({ status: 0 });
+
+      await opencode.spawn!([], ROUTING, { configScope: "project" });
+
+      const after = JSON.parse(readFileSync(projectCfg, "utf8")) as {
+        provider: { opper: { options: { baseURL: string } } };
+      };
+      expect(after.provider.opper.options.baseURL).toBe(customBaseUrl);
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
+  it("project scope: baseURL is reset even when the agent exits non-zero", async () => {
+    const prevCwd = process.cwd();
+    process.chdir(sandbox);
+    try {
+      const projectCfg = join(sandbox, "opencode.json");
+      configureOpenCodeMock.mockImplementation(async () => {
+        writeFileSync(
+          projectCfg,
+          JSON.stringify({
+            provider: {
+              opper: {
+                npm: "@ai-sdk/openai-compatible",
+                options: {
+                  baseURL: "https://api.opper.ai/v3/compat",
+                  apiKey: "{env:OPPER_API_KEY}",
+                },
+              },
+            },
+          }, null, 2),
+          "utf8",
+        );
+        return { path: projectCfg, wrote: true };
+      });
+      spawnSyncMock.mockReturnValue({ status: 17 });
+
+      const code = await opencode.spawn!([], ROUTING, { configScope: "project" });
+      expect(code).toBe(17);
+
+      const after = JSON.parse(readFileSync(projectCfg, "utf8")) as {
+        provider: { opper: { options: { baseURL: string } } };
+      };
+      expect(after.provider.opper.options.baseURL).toBe(
+        "https://api.opper.ai/v3/compat",
+      );
+    } finally {
+      process.chdir(prevCwd);
+    }
   });
 
   it("spawn warns when a project opencode.json exists without an Opper provider", async () => {

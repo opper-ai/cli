@@ -163,7 +163,15 @@ describe("codex adapter", () => {
   });
 
   it("spawn injects OPPER_API_KEY and prepends --profile opper-opus when no profile is set", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+    // The session URL from routing.baseUrl is written into the config.toml
+    // managed block during spawn — that's how Codex picks up the per-launch
+    // session. Capture the file mid-run since we restore on exit.
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    let midRunCfg = "";
+    spawnSyncMock.mockImplementation(() => {
+      midRunCfg = readFileSync(cfgPath, "utf8");
+      return { status: 0 };
+    });
     const code = await codex.spawn!(["chat"], {
       baseUrl: SESSION_URL,
       apiKey: "op_live_run",
@@ -178,12 +186,8 @@ describe("codex adapter", () => {
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
 
-    // The session URL from routing.baseUrl is written into the config.toml
-    // managed block — that's how Codex picks up the per-launch session.
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    const text = readFileSync(cfgPath, "utf8");
-    expect(text).toContain(`base_url = "${SESSION_URL}"`);
-    expect(text).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
+    expect(midRunCfg).toContain(`base_url = "${SESSION_URL}"`);
+    expect(midRunCfg).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
   });
 
   it("spawn does not add --profile when the user already passed one", async () => {
@@ -207,5 +211,131 @@ describe("codex adapter", () => {
       compatShape: "openai",
     });
     expect(code).toBe(2);
+  });
+
+  it("spawn restores the pre-launch config so direct `codex` runs don't inherit the session URL", async () => {
+    // User has run `opper agents add codex` previously — config has the
+    // default compat URL baked in. When `opper launch` runs we rewrite
+    // base_url to the session URL during the run, but afterwards it must
+    // be back to what the user had.
+    await codex.configure({});
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    const before = readFileSync(cfgPath, "utf8");
+    expect(before).toContain('base_url = "https://api.opper.ai/v3/compat"');
+
+    spawnSyncMock.mockImplementation(() => {
+      // Mid-run the session URL is active — that's how Codex picks it up.
+      const mid = readFileSync(cfgPath, "utf8");
+      expect(mid).toContain(`base_url = "${SESSION_URL}"`);
+      return { status: 0 };
+    });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn deletes the config it created when none existed before", async () => {
+    // User never configured codex through opper. `opper launch codex`
+    // shouldn't leave a config file behind.
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    expect(existsSync(cfgPath)).toBe(false);
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    expect(existsSync(cfgPath)).toBe(false);
+  });
+
+  it("spawn restores the pre-launch config even if the agent exits non-zero", async () => {
+    await codex.configure({});
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 17 });
+    const code = await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+    expect(code).toBe(17);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn restore does not destroy user data when the pre-launch config has a stale unclosed sentinel marker", async () => {
+    // Repro for the malformed-config case: a partial manual edit left
+    // a `# >>> opper-cli >>>` opener with no matching closer. Without
+    // lastIndexOf-based strip, our restore would treat the stale opener
+    // and our newly-written closer as a single block and erase everything
+    // between them — including unrelated user content.
+    const cfgDir = join(sandbox, ".codex");
+    const cfgPath = join(cfgDir, "config.toml");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(
+      cfgPath,
+      "# >>> opper-cli >>>\n# unclosed leftover from a partial edit\n[settings]\ntheme = \"dark\"\n",
+      "utf8",
+    );
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    // The user's [settings] section MUST still be there.
+    const after = readFileSync(cfgPath, "utf8");
+    expect(after).toContain("[settings]");
+    expect(after).toContain('theme = "dark"');
+    // Our newly-written block has been removed (no SESSION_URL in the
+    // restored file). The stale unclosed opener stays in place — we
+    // never touched it.
+    expect(after).not.toContain(SESSION_URL);
+    // before may or may not equal after — the key invariant is that
+    // user content is preserved.
+    void before;
+  });
+
+  it("spawn restore preserves user edits outside the sentinel block made mid-spawn", async () => {
+    // Anything outside the SENTINEL_OPEN/CLOSE markers is the user's
+    // own config (theme, settings, etc.). The narrow restore must
+    // not clobber edits made there during the session.
+    const cfgDir = join(sandbox, ".codex");
+    const cfgPath = join(cfgDir, "config.toml");
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(cfgPath, "[settings]\ntheme = \"dark\"\n", "utf8");
+    await codex.configure({});
+
+    spawnSyncMock.mockImplementation(() => {
+      // Simulate the user editing the [settings] block mid-session.
+      const cur = readFileSync(cfgPath, "utf8");
+      writeFileSync(cfgPath, cur.replace('theme = "dark"', 'theme = "light"'), "utf8");
+      return { status: 0 };
+    });
+
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    const after = readFileSync(cfgPath, "utf8");
+    expect(after).toContain('theme = "light"'); // sibling edit survived
+    expect(after).toContain('base_url = "https://api.opper.ai/v3/compat"'); // our block reverted
+    expect(after).not.toContain(SESSION_URL);
   });
 });

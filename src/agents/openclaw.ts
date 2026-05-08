@@ -9,6 +9,7 @@ import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
+import { withJsonKeys } from "../util/config-snapshot.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -117,11 +118,22 @@ async function unconfigure(): Promise<void> {
   }
 }
 
-async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Ensure our provider is current with the latest credentials, the
-  // chosen launch model, and the per-session base URL on every spawn.
-  await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+function isDaemonInvocation(args: string[]): boolean {
+  // `start` and `restart` both launch a long-lived service that
+  // outlives spawnSync. `stop` / `status` / `logs` return synchronously
+  // and are safe to snapshot/restore around.
+  for (let i = 0; i < args.length - 1; i++) {
+    if (
+      (args[i] === "gateway" || args[i] === "daemon") &&
+      (args[i + 1] === "start" || args[i + 1] === "restart")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
+async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // OpenClaw is a gateway/daemon, not an interactive REPL. Default to
   // `gateway start` — installs/starts the background service via
   // launchd/systemd, returns quickly, and the gateway keeps serving
@@ -133,18 +145,48 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   //   opper launch openclaw -- agent --local -m "summarise ..."
   //   opper launch openclaw -- gateway run     # foreground if you
   //                                            # really want it
-  const finalArgs = args.length > 0 ? args : ["gateway", "start"];
-  const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
+  // Detect daemon launches by subcommand, not arg count. Scan for the
+  // adjacent pair `gateway start` / `daemon start` anywhere in args
+  // because OpenClaw allows global flags before the subcommand
+  // (e.g. `opper launch openclaw -- --profile dev gateway start`).
+  const finalArgs = args.length === 0 ? ["gateway", "start"] : args;
+  const isDaemonStart = isDaemonInvocation(finalArgs);
 
-  if (args.length === 0 && result.status === 0) {
-    console.log(
-      "\nOpenClaw gateway started in the background.\n" +
-        "  Stop it with:  openclaw gateway stop\n" +
-        "  Status:        openclaw gateway status\n" +
-        "  Logs:          openclaw logs\n",
-    );
+  // Snapshot/restore only fits one-shot synchronous invocations. For the
+  // daemon path, `spawnSync` returns as soon as the gateway detaches —
+  // restoring models.json then would either break the running gateway's
+  // routing (if it re-reads the file) or be cosmetic at best (if it
+  // cached at startup). Leave the file as-is for that path; the daemon
+  // owns its lifecycle and the user controls it via `gateway stop/start`.
+  //
+  // Trade-off: a direct `openclaw gateway start` run *after* an `opper
+  // launch openclaw` (without `opper launch` in front) will pick up the
+  // session-tagged URL until the next `opper launch` or `opper agents
+  // add openclaw` rewrites it. Acceptable — direct gateway use after a
+  // launch is rare, and the leak only persists in that narrow window.
+  if (isDaemonStart) {
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
+    if (result.status === 0) {
+      console.log(
+        "\nOpenClaw gateway started in the background.\n" +
+          "  Stop it with:  openclaw gateway stop\n" +
+          "  Status:        openclaw gateway status\n" +
+          "  Logs:          openclaw logs\n",
+      );
+    }
+    return result.status ?? -1;
   }
-  return result.status ?? -1;
+
+  // Snapshot just `providers.opper` so direct `openclaw` invocations
+  // after the launch don't inherit this session's URL — and so any
+  // sibling providers / top-level keys the user edits mid-spawn aren't
+  // clobbered on restore.
+  return withJsonKeys(modelsPath(), [["providers", PROVIDER_KEY]], async () => {
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
+    return result.status ?? -1;
+  });
 }
 
 export const openclaw: AgentAdapter = {

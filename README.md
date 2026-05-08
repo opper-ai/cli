@@ -87,10 +87,10 @@ The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Laun
 To remove an agent's Opper integration without uninstalling the agent itself:
 
 ```bash
-opper agents uninstall claude-desktop   # works for any registered adapter
+opper agents remove claude-desktop   # works for any registered adapter
 ```
 
-This is the non-interactive equivalent of the menu's "Uninstall" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
+This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
 ## Ask — built-in support agent
 

@@ -87,7 +87,7 @@ export async function agentsListCommand(): Promise<void> {
   }
 }
 
-export async function agentsUninstallCommand(name: string): Promise<void> {
+export async function agentsRemoveCommand(name: string): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) {
     throw new OpperError(

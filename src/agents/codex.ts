@@ -12,6 +12,8 @@ import type {
   OpperRouting,
 } from "./types.js";
 
+import { rm } from "node:fs/promises";
+
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { PICKER_MODELS } from "../config/models.js";
 
@@ -48,6 +50,38 @@ function codexConfigPath(): string {
 
 function stripOpperBlock(text: string): string {
   const startIdx = text.indexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return text;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return text;
+  const before = text.slice(0, startIdx).replace(/\n$/, "");
+  const after = text.slice(endIdx + SENTINEL_CLOSE.length).replace(/^\n/, "");
+  if (before.length === 0) return after;
+  return `${before}\n${after}`;
+}
+
+function extractOpperBlock(text: string): string | null {
+  const startIdx = text.indexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return null;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return null;
+  return text.slice(startIdx, endIdx + SENTINEL_CLOSE.length);
+}
+
+// Snapshot/restore variants that target the LAST opener-closer pair in
+// the file. `writeOpperBlock` always appends our block at the end, so
+// post-spawn the well-formed block is the last one. Using indexOf-first
+// for restore would cross-match a stale unclosed opener with our new
+// closer and strip user data between them.
+function extractLastOpperBlock(text: string): string | null {
+  const startIdx = text.lastIndexOf(SENTINEL_OPEN);
+  if (startIdx === -1) return null;
+  const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
+  if (endIdx === -1) return null;
+  return text.slice(startIdx, endIdx + SENTINEL_CLOSE.length);
+}
+
+function stripLastOpperBlock(text: string): string {
+  const startIdx = text.lastIndexOf(SENTINEL_OPEN);
   if (startIdx === -1) return text;
   const endIdx = text.indexOf(SENTINEL_CLOSE, startIdx);
   if (endIdx === -1) return text;
@@ -140,19 +174,79 @@ function hasProfileArg(args: string[]): boolean {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Rewrite our provider/profile block on every launch so the latest
-  // session URL (and any tags it carries) is the active base_url.
-  await writeOpperBlock(routing.baseUrl);
+  // Narrow snapshot: capture just the sentinel-delimited opper block (or
+  // its absence). On exit we restore that block on top of whatever the
+  // file looks like by then — anything outside the sentinels (user
+  // edits to [settings], theme, etc.) is preserved.
+  const cfg = codexConfigPath();
+  const fileExistedBefore = existsSync(cfg);
+  // Tolerate read failures (perm, transient I/O) — same baseline as
+  // writeOpperBlock, which falls back to empty on read errors. A
+  // hard fail here would regress launch for users with unreadable
+  // configs.
+  let opperBlockBefore: string | null = null;
+  if (fileExistedBefore) {
+    try {
+      // Use lastIndexOf so a stale unclosed opener earlier in the file
+      // doesn't cause us to capture (and later restore) unrelated user
+      // content as part of the "block".
+      opperBlockBefore = extractLastOpperBlock(readFileSync(cfg, "utf8"));
+    } catch {
+      opperBlockBefore = null;
+    }
+  }
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPPER_API_KEY: routing.apiKey,
-  };
-  const finalArgs = hasProfileArg(args)
-    ? args
-    : ["--profile", DEFAULT_PROFILE, ...args];
-  const result = spawnSync("codex", finalArgs, { stdio: "inherit", env });
-  return result.status ?? -1;
+  await writeOpperBlock(routing.baseUrl);
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPPER_API_KEY: routing.apiKey,
+    };
+    const finalArgs = hasProfileArg(args)
+      ? args
+      : ["--profile", DEFAULT_PROFILE, ...args];
+    const result = spawnSync("codex", finalArgs, { stdio: "inherit", env });
+    return result.status ?? -1;
+  } finally {
+    await restoreOpperBlock(cfg, opperBlockBefore, fileExistedBefore);
+  }
+}
+
+async function restoreOpperBlock(
+  cfg: string,
+  blockBefore: string | null,
+  fileExistedBefore: boolean,
+): Promise<void> {
+  try {
+    const current = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+    // Use lastIndexOf-based strip: writeOpperBlock appended our block
+    // at the end, so stripping the LAST opener-closer pair removes
+    // exactly what we wrote. indexOf-first would cross-match a stale
+    // unclosed opener with our new closer and erase user data between.
+    const stripped = stripLastOpperBlock(current);
+    let next: string;
+    if (blockBefore === null) {
+      next = stripped;
+    } else if (stripped.length === 0) {
+      next = `${blockBefore}\n`;
+    } else {
+      next = stripped.endsWith("\n")
+        ? `${stripped}${blockBefore}\n`
+        : `${stripped}\n${blockBefore}\n`;
+    }
+    if (!fileExistedBefore && next.trim().length === 0) {
+      await rm(cfg, { force: true });
+      return;
+    }
+    await mkdir(dirname(cfg), { recursive: true });
+    await writeFile(cfg, next, "utf8");
+  } catch (err) {
+    process.stderr.write(
+      `opper: failed to restore ${cfg} after launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+  }
 }
 
 export const codex: AgentAdapter = {

@@ -7,7 +7,9 @@ import {
   configureOpenCode,
   readProjectConfigState,
 } from "../setup/opencode.js";
+import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
+import { withJsonKeys } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
 import type {
   AgentAdapter,
@@ -101,47 +103,96 @@ async function setSessionBaseUrl(
   await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
 }
 
+/**
+ * Read `provider.opper.options.baseURL` from an opencode config without
+ * mutating the file. Returns undefined when the file or the provider is
+ * absent, or when the JSON is malformed — callers fall back to a default.
+ */
+function readBaseUrl(location: "global" | "local"): string | undefined {
+  const cfg = opencodeConfigPath(location);
+  if (!existsSync(cfg)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+      provider?: { opper?: { options?: { baseURL?: unknown } } };
+    };
+    const url = parsed.provider?.opper?.options?.baseURL;
+    return typeof url === "string" ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
   opts: SpawnOptions = {},
 ): Promise<number> {
   const scope = opts.configScope ?? "user";
-  const location = scope === "project" ? "local" : "global";
 
   if (scope === "project") {
-    // Explicit opt-in to writing the cwd-local config. We never silently
-    // mutate a project config the user didn't ask us to touch — that file
-    // is usually checked in.
+    // `--project` is opt-in to a persistent, usually-checked-in project
+    // config. Reverting the whole opper provider on exit would defeat
+    // the point — instead we apply the session URL only for the spawn
+    // and reset baseURL afterwards. The opper provider block stays in
+    // place across launches.
+    //
+    // Capture restoreUrl *before* configureOpenCode runs, since
+    // `overwrite: true` replaces provider.opper with template values
+    // (compat URL) — capturing after would discard a hand-edited
+    // self-hosted baseURL.
+    const restoreUrl = readBaseUrl("local") ?? OPPER_COMPAT_URL;
     await configureOpenCode({ location: "local", overwrite: true });
-  } else {
-    await configureOpenCode({ location: "global", overwrite: true });
-
-    // OpenCode reads `./opencode.json` if present and uses it instead of
-    // the user-level config. If one exists without an Opper provider,
-    // whatever we just wrote globally is dead weight — warn so the user
-    // can re-run with `--project`.
-    const projectPath = opencodeConfigPath("local");
-    const state = readProjectConfigState(projectPath);
-    if (state.exists && !state.hasOpperProvider) {
-      process.stderr.write(
-        brand.dim(
-          `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
-        ),
-      );
+    await setSessionBaseUrl(routing.baseUrl, "local");
+    try {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OPPER_API_KEY: routing.apiKey,
+      };
+      const result = spawnSync("opencode", args, { stdio: "inherit", env });
+      return result.status ?? -1;
+    } finally {
+      await setSessionBaseUrl(restoreUrl, "local");
     }
   }
 
-  // Rewrite the baseURL to the per-session URL on every launch so
-  // generations land on the right session.
-  await setSessionBaseUrl(routing.baseUrl, location);
+  // User-scope: snapshot the Opper-owned keys. The template writes
+  // `provider.opper`, a top-level `model: "opper/..."`, AND a top-level
+  // `$schema` — all three need narrow restore. Without `$schema`, a
+  // fresh first launch leaves a `{"$schema": "..."}` file behind even
+  // though it's meant to be ephemeral. Without `model`, an orphaned
+  // `model: "opper/..."` points at a removed provider. OpenCode mutates
+  // sibling keys (theme, MCP servers, …) during a session — those are
+  // outside our keyPaths and survive the restore.
+  return withJsonKeys(
+    opencodeConfigPath("global"),
+    [["provider", "opper"], ["model"], ["$schema"]],
+    async () => {
+      await configureOpenCode({ location: "global", overwrite: true });
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPPER_API_KEY: routing.apiKey,
-  };
-  const result = spawnSync("opencode", args, { stdio: "inherit", env });
-  return result.status ?? -1;
+      // OpenCode reads `./opencode.json` if present and uses it instead
+      // of the user-level config. If one exists without an Opper
+      // provider, whatever we just wrote globally is dead weight — warn
+      // so the user can re-run with `--project`.
+      const projectPath = opencodeConfigPath("local");
+      const state = readProjectConfigState(projectPath);
+      if (state.exists && !state.hasOpperProvider) {
+        process.stderr.write(
+          brand.dim(
+            `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
+          ),
+        );
+      }
+
+      await setSessionBaseUrl(routing.baseUrl, "global");
+
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        OPPER_API_KEY: routing.apiKey,
+      };
+      const result = spawnSync("opencode", args, { stdio: "inherit", env });
+      return result.status ?? -1;
+    },
+  );
 }
 
 export const opencode: AgentAdapter = {
