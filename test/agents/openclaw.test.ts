@@ -224,6 +224,20 @@ describe("openclaw adapter", () => {
     expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
   });
 
+  it("spawn does NOT snapshot for `gateway restart` (same lifecycle as start)", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["gateway", "restart"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
+  it("spawn does NOT snapshot for `daemon restart`", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await openclaw.spawn!(["daemon", "restart"], ROUTING);
+    const models = readModels(sandbox);
+    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+  });
+
   it("spawn forwards user-supplied args verbatim", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     await openclaw.spawn!(["agent", "--local"], ROUTING);

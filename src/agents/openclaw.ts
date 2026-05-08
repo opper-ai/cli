@@ -119,10 +119,13 @@ async function unconfigure(): Promise<void> {
 }
 
 function isDaemonInvocation(args: string[]): boolean {
+  // `start` and `restart` both launch a long-lived service that
+  // outlives spawnSync. `stop` / `status` / `logs` return synchronously
+  // and are safe to snapshot/restore around.
   for (let i = 0; i < args.length - 1; i++) {
     if (
       (args[i] === "gateway" || args[i] === "daemon") &&
-      args[i + 1] === "start"
+      (args[i + 1] === "start" || args[i + 1] === "restart")
     ) {
       return true;
     }
