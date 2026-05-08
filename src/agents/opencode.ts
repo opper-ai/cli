@@ -44,7 +44,11 @@ async function isConfigured(): Promise<boolean> {
 }
 
 async function configure(): Promise<void> {
-  await configureOpenCode({ location: "global" });
+  // overwrite: true so a re-run pulls in the latest template (model list,
+  // costs, defaults). Without it, an existing `provider.opper` block from
+  // an older CLI version would be left in place and the new models would
+  // never appear in OpenCode's picker.
+  await configureOpenCode({ location: "global", overwrite: true });
 }
 
 async function unconfigure(): Promise<void> {
@@ -109,9 +113,9 @@ async function spawn(
     // Explicit opt-in to writing the cwd-local config. We never silently
     // mutate a project config the user didn't ask us to touch — that file
     // is usually checked in.
-    await configureOpenCode({ location: "local" });
+    await configureOpenCode({ location: "local", overwrite: true });
   } else {
-    await configureOpenCode({ location: "global" });
+    await configureOpenCode({ location: "global", overwrite: true });
 
     // OpenCode reads `./opencode.json` if present and uses it instead of
     // the user-level config. If one exists without an Opper provider,

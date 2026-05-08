@@ -93,6 +93,33 @@ describe("pi adapter", () => {
     expect(raw).not.toContain('"baseUrl": "https://api.opper.ai/v3/compat"');
   });
 
+  it("spawn places the launch model at models[0] even when it isn't opus", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await pi.spawn!([], { ...ROUTING, model: "claude-haiku-4-5" });
+
+    const models = readModels(sandbox) as {
+      providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
+    };
+    const list = models.providers?.opper?.models ?? [];
+    expect(list[0]?.id).toBe("claude-haiku-4-5");
+    expect(list[0]?._launch).toBe(true);
+    // Other curated models still present after the launch entry.
+    expect(list.length).toBeGreaterThan(1);
+    expect(list.some((m) => m.id === "claude-opus-4-7")).toBe(true);
+  });
+
+  it("spawn prepends a non-curated --model id so it still appears in the picker", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await pi.spawn!([], { ...ROUTING, model: "deepinfra/some-future-model" });
+
+    const models = readModels(sandbox) as {
+      providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
+    };
+    const list = models.providers?.opper?.models ?? [];
+    expect(list[0]?.id).toBe("deepinfra/some-future-model");
+    expect(list[0]?._launch).toBe(true);
+  });
+
   it("spawn auto-injects --provider opper and --model when user doesn't pass --model", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     await pi.spawn!([], ROUTING);

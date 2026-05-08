@@ -145,7 +145,7 @@ describe("opencode adapter", () => {
 
     const code = await opencode.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global" });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global", overwrite: true });
 
     const call = spawnSyncMock.mock.calls[0]!;
     expect(call[0]).toBe("opencode");
@@ -202,7 +202,7 @@ describe("opencode adapter", () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
 
     await opencode.spawn!(["chat"], ROUTING, { configScope: "project" });
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local" });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true });
   });
 
   it("spawn warns when a project opencode.json exists without an Opper provider", async () => {

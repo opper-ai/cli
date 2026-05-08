@@ -8,7 +8,7 @@ import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS } from "../config/models.js";
+import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -53,36 +53,21 @@ async function setOpperProvider(
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
+  // The launch model is reordered to index 0 — OpenClaw has no explicit
+  // _launch marker, so position-0 is the only signal that picks the
+  // active default in its picker UI.
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
     baseUrl,
-    models: [
-      {
-        id: launchModel,
-        name: launchModel,
-        api: "openai-completions",
-        reasoning: true,
-        input: ["text"],
-        contextWindow: 200000,
-      },
-      {
-        id: DEFAULT_MODELS.sonnet,
-        name: DEFAULT_MODELS.sonnet,
-        api: "openai-completions",
-        reasoning: true,
-        input: ["text"],
-        contextWindow: 200000,
-      },
-      {
-        id: DEFAULT_MODELS.haiku,
-        name: DEFAULT_MODELS.haiku,
-        api: "openai-completions",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 200000,
-      },
-    ],
+    models: pickerModelsForLaunch(launchModel).map((m) => ({
+      id: m.id,
+      name: m.id,
+      api: "openai-completions",
+      reasoning: m.reasoning,
+      input: ["text"],
+      contextWindow: m.contextWindow,
+    })),
   };
   await writeConfig(cfg);
 }
