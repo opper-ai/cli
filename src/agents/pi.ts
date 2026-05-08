@@ -9,6 +9,7 @@ import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
+import { withConfigSnapshot } from "../util/config-snapshot.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -120,21 +121,23 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Re-write the provider on every launch so the latest credentials, the
-  // chosen launch model, and the per-session base URL are always active.
-  await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+  // Snapshot models.json so direct `pi` invocations after the launch
+  // don't inherit this session's URL.
+  return withConfigSnapshot(piConfigPath(), async () => {
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
 
-  // pi's CLI requires *both* --provider and --model to resolve a non-default
-  // provider — passing only --provider falls through to the auto-resolver
-  // and silently picks the first available provider (usually ollama).
-  const userPicked = args.some(
-    (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
-  );
-  const piArgs = userPicked
-    ? ["--provider", PROVIDER_KEY, ...args]
-    : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
-  const result = spawnSync("pi", piArgs, { stdio: "inherit" });
-  return result.status ?? -1;
+    // pi's CLI requires *both* --provider and --model to resolve a non-default
+    // provider — passing only --provider falls through to the auto-resolver
+    // and silently picks the first available provider (usually ollama).
+    const userPicked = args.some(
+      (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
+    );
+    const piArgs = userPicked
+      ? ["--provider", PROVIDER_KEY, ...args]
+      : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
+    const result = spawnSync("pi", piArgs, { stdio: "inherit" });
+    return result.status ?? -1;
+  });
 }
 
 export const pi: AgentAdapter = {

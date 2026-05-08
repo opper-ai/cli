@@ -14,6 +14,7 @@ import type {
 
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { PICKER_MODELS } from "../config/models.js";
+import { withConfigSnapshot } from "../util/config-snapshot.js";
 
 const SENTINEL_OPEN = "# >>> opper-cli >>>";
 const SENTINEL_CLOSE = "# <<< opper-cli <<<";
@@ -140,19 +141,22 @@ function hasProfileArg(args: string[]): boolean {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Rewrite our provider/profile block on every launch so the latest
-  // session URL (and any tags it carries) is the active base_url.
-  await writeOpperBlock(routing.baseUrl);
+  // Snapshot config.toml so direct `codex` invocations after the launch
+  // don't inherit this session's URL. We rewrite the block with the
+  // session URL for the duration of spawn, then restore on exit.
+  return withConfigSnapshot(codexConfigPath(), async () => {
+    await writeOpperBlock(routing.baseUrl);
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    OPPER_API_KEY: routing.apiKey,
-  };
-  const finalArgs = hasProfileArg(args)
-    ? args
-    : ["--profile", DEFAULT_PROFILE, ...args];
-  const result = spawnSync("codex", finalArgs, { stdio: "inherit", env });
-  return result.status ?? -1;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPPER_API_KEY: routing.apiKey,
+    };
+    const finalArgs = hasProfileArg(args)
+      ? args
+      : ["--profile", DEFAULT_PROFILE, ...args];
+    const result = spawnSync("codex", finalArgs, { stdio: "inherit", env });
+    return result.status ?? -1;
+  });
 }
 
 export const codex: AgentAdapter = {

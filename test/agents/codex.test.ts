@@ -163,7 +163,15 @@ describe("codex adapter", () => {
   });
 
   it("spawn injects OPPER_API_KEY and prepends --profile opper-opus when no profile is set", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+    // The session URL from routing.baseUrl is written into the config.toml
+    // managed block during spawn — that's how Codex picks up the per-launch
+    // session. Capture the file mid-run since we restore on exit.
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    let midRunCfg = "";
+    spawnSyncMock.mockImplementation(() => {
+      midRunCfg = readFileSync(cfgPath, "utf8");
+      return { status: 0 };
+    });
     const code = await codex.spawn!(["chat"], {
       baseUrl: SESSION_URL,
       apiKey: "op_live_run",
@@ -178,12 +186,8 @@ describe("codex adapter", () => {
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
 
-    // The session URL from routing.baseUrl is written into the config.toml
-    // managed block — that's how Codex picks up the per-launch session.
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    const text = readFileSync(cfgPath, "utf8");
-    expect(text).toContain(`base_url = "${SESSION_URL}"`);
-    expect(text).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
+    expect(midRunCfg).toContain(`base_url = "${SESSION_URL}"`);
+    expect(midRunCfg).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
   });
 
   it("spawn does not add --profile when the user already passed one", async () => {
@@ -207,5 +211,64 @@ describe("codex adapter", () => {
       compatShape: "openai",
     });
     expect(code).toBe(2);
+  });
+
+  it("spawn restores the pre-launch config so direct `codex` runs don't inherit the session URL", async () => {
+    // User has run `opper agents add codex` previously — config has the
+    // default compat URL baked in. When `opper launch` runs we rewrite
+    // base_url to the session URL during the run, but afterwards it must
+    // be back to what the user had.
+    await codex.configure({});
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    const before = readFileSync(cfgPath, "utf8");
+    expect(before).toContain('base_url = "https://api.opper.ai/v3/compat"');
+
+    spawnSyncMock.mockImplementation(() => {
+      // Mid-run the session URL is active — that's how Codex picks it up.
+      const mid = readFileSync(cfgPath, "utf8");
+      expect(mid).toContain(`base_url = "${SESSION_URL}"`);
+      return { status: 0 };
+    });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn deletes the config it created when none existed before", async () => {
+    // User never configured codex through opper. `opper launch codex`
+    // shouldn't leave a config file behind.
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    expect(existsSync(cfgPath)).toBe(false);
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+
+    expect(existsSync(cfgPath)).toBe(false);
+  });
+
+  it("spawn restores the pre-launch config even if the agent exits non-zero", async () => {
+    await codex.configure({});
+    const cfgPath = join(sandbox, ".codex", "config.toml");
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 17 });
+    const code = await codex.spawn!([], {
+      baseUrl: SESSION_URL,
+      apiKey: "k",
+      model: "m",
+      compatShape: "openai",
+    });
+    expect(code).toBe(17);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
   });
 });

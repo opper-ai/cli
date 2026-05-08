@@ -76,31 +76,72 @@ describe("pi adapter", () => {
     expect(models.providers?.opper?.apiKey).toBe("op_live_test");
   });
 
-  it("spawn writes routing.baseUrl (the session URL) into models.json before launching", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+  it("spawn writes routing.baseUrl (the session URL) into models.json mid-launch", async () => {
+    // Mid-spawn the session URL is the active baseUrl — that's how Pi
+    // picks it up. We capture inside the spawn callback because we
+    // restore the file on exit.
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    let midRun: ReturnType<typeof readModels> | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = JSON.parse(readFileSync(cfgPath, "utf8"));
+      return { status: 0 };
+    });
 
     const code = await pi.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
 
-    const models = readModels(sandbox);
-    expect(models.providers?.opper?.baseUrl).toBe(SESSION_URL);
-    expect(models.providers?.opper?.apiKey).toBe("op_live_run");
+    expect(midRun?.providers?.opper?.baseUrl).toBe(SESSION_URL);
+    expect(midRun?.providers?.opper?.apiKey).toBe("op_live_run");
+  });
 
-    const raw = readFileSync(
-      join(sandbox, ".pi", "agent", "models.json"),
-      "utf8",
-    );
-    expect(raw).not.toContain('"baseUrl": "https://api.opper.ai/v3/compat"');
+  it("spawn restores the pre-launch config so direct `pi` runs don't inherit the session URL", async () => {
+    // User has run `opper agents add pi` previously — config has the
+    // default compat URL baked in. After `opper launch pi` exits, that
+    // file must be back to what the user had.
+    await pi.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await pi.spawn!([], ROUTING);
+
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("spawn deletes the config it created when none existed before", async () => {
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    expect(existsSync(cfgPath)).toBe(false);
+
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await pi.spawn!([], ROUTING);
+
+    expect(existsSync(cfgPath)).toBe(false);
+  });
+
+  it("spawn restores the pre-launch config even on non-zero exit", async () => {
+    await pi.configure({ apiKey: "op_user_key" });
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    const before = readFileSync(cfgPath, "utf8");
+
+    spawnSyncMock.mockReturnValue({ status: 17 });
+    const code = await pi.spawn!([], ROUTING);
+    expect(code).toBe(17);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
   });
 
   it("spawn places the launch model at models[0] even when it isn't opus", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+    // Read mid-spawn — snapshot/restore wipes the config on exit when
+    // there was no pre-launch config.
+    let midRun: ReturnType<typeof readModels> | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = readModels(sandbox);
+      return { status: 0 };
+    });
     await pi.spawn!([], { ...ROUTING, model: "claude-haiku-4-5" });
 
-    const models = readModels(sandbox) as {
+    const list = (midRun as {
       providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
-    };
-    const list = models.providers?.opper?.models ?? [];
+    } | undefined)?.providers?.opper?.models ?? [];
     expect(list[0]?.id).toBe("claude-haiku-4-5");
     expect(list[0]?._launch).toBe(true);
     // Other curated models still present after the launch entry.
@@ -109,13 +150,16 @@ describe("pi adapter", () => {
   });
 
   it("spawn prepends a non-curated --model id so it still appears in the picker", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+    let midRun: ReturnType<typeof readModels> | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = readModels(sandbox);
+      return { status: 0 };
+    });
     await pi.spawn!([], { ...ROUTING, model: "deepinfra/some-future-model" });
 
-    const models = readModels(sandbox) as {
+    const list = (midRun as {
       providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
-    };
-    const list = models.providers?.opper?.models ?? [];
+    } | undefined)?.providers?.opper?.models ?? [];
     expect(list[0]?.id).toBe("deepinfra/some-future-model");
     expect(list[0]?._launch).toBe(true);
   });
