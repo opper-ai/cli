@@ -175,7 +175,7 @@ export async function configureGitHubCopilotVSCode(
         existing = JSON.parse(raw) as Record<string, unknown>;
       } catch {
         throw new Error(
-          `Could not parse ${path} as JSON. If your settings file uses // comments or trailing commas, please add the Opper block manually for now (see docs/copilot-vscode/README.md).`,
+          `Could not parse ${path} as JSON. If your settings file uses // comments or trailing commas, please add the Opper provider block manually for now.`,
         );
       }
     }
