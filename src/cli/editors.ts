@@ -1,6 +1,8 @@
 import {
   editorsListCommand,
   editorsOpenCodeCommand,
+  editorsGitHubCopilotVSCodeCommand,
+  editorsGitHubCopilotVSCodeRemoveCommand,
 } from "../commands/editors.js";
 import type { RegisterFn } from "./types.js";
 
@@ -25,6 +27,20 @@ const register: RegisterFn = (program) => {
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
       });
+    });
+
+  editors
+    .command("github-copilot-vscode")
+    .description(
+      "Route VS Code Copilot Chat through Opper via the OAI Compatible community extension",
+    )
+    .option("--remove", "remove the Opper provider from VS Code settings")
+    .action(async (cmdOpts: { remove?: boolean }) => {
+      if (cmdOpts.remove) {
+        await editorsGitHubCopilotVSCodeRemoveCommand();
+        return;
+      }
+      await editorsGitHubCopilotVSCodeCommand();
     });
 };
 

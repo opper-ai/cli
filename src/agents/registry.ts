@@ -6,6 +6,7 @@ import { codex } from "./codex.js";
 import { hermes } from "./hermes.js";
 import { pi } from "./pi.js";
 import { openclaw } from "./openclaw.js";
+import { githubCopilotVSCode } from "./github-copilot-vscode.js";
 
 const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   opencode,
@@ -15,6 +16,7 @@ const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   hermes,
   pi,
   openclaw,
+  githubCopilotVSCode,
 ];
 
 export function listAdapters(): ReadonlyArray<AgentAdapter> {
