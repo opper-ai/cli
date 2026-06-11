@@ -107,7 +107,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     else process.env.OPPER_HOME = prevOpperHome;
   });
 
-  it("creates the Opper-managed hermes-home and writes a custom-provider config.yaml", async () => {
+  it("creates the Opper-managed hermes-home and writes an opper-provider config.yaml", async () => {
     runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
 
     const code = await hermes.spawn!(["chat"], ROUTING);
@@ -119,7 +119,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
       model?: Record<string, unknown>;
     };
     expect(written.model).toEqual({
-      provider: "custom",
+      provider: "opper",
       base_url: "https://api.opper.ai/v3/compat",
       default: "claude-opus-4-7",
     });
@@ -127,7 +127,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     expect(written.model).not.toHaveProperty("api_key");
   });
 
-  it("passes HERMES_HOME and OPENAI_API_KEY through to the hermes process env", async () => {
+  it("passes HERMES_HOME and OPPER_API_KEY through to the hermes process env", async () => {
     runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
 
     await hermes.spawn!([], ROUTING);
@@ -136,7 +136,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     const [, , runOpts] = runMock.mock.calls[0]!;
     const env = (runOpts as { env: Record<string, string> }).env;
     expect(env.HERMES_HOME).toBe(join(sandbox, ".opper", "hermes-home"));
-    expect(env.OPENAI_API_KEY).toBe("op_live_test");
+    expect(env.OPPER_API_KEY).toBe("op_live_test");
   });
 
   it("preserves non-model settings already present in the Opper-managed config.yaml", async () => {
@@ -167,7 +167,7 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
       toolsets?: unknown;
     };
     expect(after.model).toEqual({
-      provider: "custom",
+      provider: "opper",
       base_url: "https://api.opper.ai/v3/compat",
       default: "claude-opus-4-7",
     });
@@ -183,10 +183,12 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     const written = parse(readFileSync(configPath, "utf8")) as {
       providers?: { opper?: { name?: string; base_url?: string; key_env?: string; models?: Record<string, unknown> } };
     };
+    // The provider block is keyed "opper" to match model.provider, so Hermes
+    // resolves the api key from this provider's key_env.
     expect(written.providers?.opper).toBeDefined();
     expect(written.providers?.opper?.name).toBe("Opper");
     expect(written.providers?.opper?.base_url).toBe(SESSION_URL);
-    expect(written.providers?.opper?.key_env).toBe("OPENAI_API_KEY");
+    expect(written.providers?.opper?.key_env).toBe("OPPER_API_KEY");
     const ids = Object.keys(written.providers?.opper?.models ?? {});
     // Spot-check both ends: the curated 5 plus the 5 added later.
     expect(ids).toContain("claude-opus-4-7");
@@ -214,6 +216,21 @@ describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
     // the picker row keeps pointing at a stale session.
     expect(after.model?.base_url).toBe(SESSION_B);
     expect(after.providers?.opper?.base_url).toBe(SESSION_B);
+  });
+
+  it("installs the Opper provider plugin into HERMES_HOME on spawn", async () => {
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    await hermes.spawn!([], ROUTING);
+
+    const pluginDir = join(
+      sandbox, ".opper", "hermes-home", "plugins", "model-providers", "opper",
+    );
+    expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
+    expect(existsSync(join(pluginDir, "plugin.yaml"))).toBe(true);
+    // The plugin emits the headers that drive session grouping + affinity.
+    const src = readFileSync(join(pluginDir, "__init__.py"), "utf8");
+    expect(src).toContain("X-Opper-Trace-Id");
+    expect(src).toContain("X-Opper-Parent-Span-Id");
   });
 
   it("propagates non-zero exit codes from run()", async () => {
