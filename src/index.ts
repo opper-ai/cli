@@ -12,6 +12,7 @@ import registerSkills from "./cli/skills.js";
 import registerEditors from "./cli/editors.js";
 import registerAgents from "./cli/agents.js";
 import registerPlatform from "./cli/platform.js";
+import registerApps from "./cli/apps.js";
 import registerAsk from "./cli/ask.js";
 import { addGroupedHelpText } from "./cli/help.js";
 import { checkForUpdate } from "./util/update-check.js";
@@ -72,6 +73,7 @@ const registrars: RegisterFn[] = [
   registerSkills,
   registerEditors,
   registerAgents,
+  registerApps,
   registerPlatform,
 ];
 for (const register of registrars) register(program, ctx);

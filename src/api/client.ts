@@ -40,6 +40,17 @@ export class OpperApi {
     return this.parseJson<T>(res);
   }
 
+  async postMultipart<T>(path: string, form: FormData): Promise<T> {
+    const url = this.buildUrl(path);
+    // No Content-Type header — fetch derives the multipart boundary.
+    const res = await this.fetch(url, {
+      method: "POST",
+      headers: this.headers(),
+      body: form,
+    });
+    return this.parseJson<T>(res);
+  }
+
   async del(path: string): Promise<void> {
     const url = this.buildUrl(path);
     const res = await this.fetch(url, { method: "DELETE", headers: this.headers() });
@@ -57,6 +68,20 @@ export class OpperApi {
       }),
       body: JSON.stringify(body),
     });
+    yield* this.readSse(res);
+  }
+
+  /** SSE over GET — long-lived server push streams (e.g. app logs). */
+  async *streamGet(path: string): AsyncIterable<string> {
+    const url = this.buildUrl(path);
+    const res = await this.fetch(url, {
+      method: "GET",
+      headers: this.headers({ Accept: "text/event-stream" }),
+    });
+    yield* this.readSse(res);
+  }
+
+  private async *readSse(res: Response): AsyncIterable<string> {
     if (!res.ok) await this.throwApiError(res);
     if (!res.body) return;
 
