@@ -1,0 +1,4 @@
+name: opper
+kind: model-provider
+version: 1.0.0
+description: Opper — per-session trace grouping + provider-affinity headers
