@@ -76,6 +76,17 @@ describe("pi adapter", () => {
     expect(models.providers?.opper?.apiKey).toBe("op_live_test");
   });
 
+  it("configure does not bake trace headers into the persistent config", async () => {
+    // Per-launch trace headers belong only to a launch (set in spawn, reverted
+    // on exit). A fixed id baked into the saved config would make every later
+    // direct `pi` run share one trace forever.
+    await pi.configure({ apiKey: "op_live_test" });
+    const models = readModels(sandbox) as {
+      providers?: { opper?: { headers?: Record<string, string> } };
+    };
+    expect(models.providers?.opper?.headers).toBeUndefined();
+  });
+
   it("spawn writes routing.baseUrl (the session URL) into models.json mid-launch", async () => {
     // Mid-spawn the session URL is the active baseUrl — that's how Pi
     // picks it up. We capture inside the spawn callback because we
@@ -92,6 +103,46 @@ describe("pi adapter", () => {
 
     expect(midRun?.providers?.opper?.baseUrl).toBe(SESSION_URL);
     expect(midRun?.providers?.opper?.apiKey).toBe("op_live_run");
+  });
+
+  it("spawn emits per-launch X-Opper-Trace-Id == X-Opper-Parent-Span-Id (valid UUID) in the provider headers", async () => {
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    let midRun:
+      | { providers?: Record<string, { headers?: Record<string, string> }> }
+      | undefined;
+    spawnSyncMock.mockImplementation(() => {
+      midRun = JSON.parse(readFileSync(cfgPath, "utf8"));
+      return { status: 0 };
+    });
+
+    await pi.spawn!([], ROUTING);
+
+    const headers = midRun?.providers?.opper?.headers;
+    const trace = headers?.["X-Opper-Trace-Id"];
+    expect(trace).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    // Same value → task-api auto-creates one `session` root span for the launch.
+    expect(headers?.["X-Opper-Parent-Span-Id"]).toBe(trace);
+  });
+
+  it("spawn uses a fresh trace id per launch", async () => {
+    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
+    const seen: string[] = [];
+    spawnSyncMock.mockImplementation(() => {
+      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
+        providers?: { opper?: { headers?: Record<string, string> } };
+      };
+      const t = cur.providers?.opper?.headers?.["X-Opper-Trace-Id"];
+      if (t) seen.push(t);
+      return { status: 0 };
+    });
+
+    await pi.spawn!([], ROUTING);
+    await pi.spawn!([], ROUTING);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).not.toBe(seen[1]);
   });
 
   it("spawn restores the pre-launch config so direct `pi` runs don't inherit the session URL", async () => {

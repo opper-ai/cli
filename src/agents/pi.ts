@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
@@ -49,11 +50,21 @@ async function writeConfig(data: PiModelsFile): Promise<void> {
 /**
  * Idempotently install our `opper` provider entry. Other providers in the
  * same file (ollama, etc.) are preserved.
+ *
+ * When `traceId` is set (the launch path only), the provider carries
+ * per-launch `X-Opper-Trace-Id` / `X-Opper-Parent-Span-Id` headers — Pi sends
+ * provider `headers` verbatim on every request. Both hold the same value, which
+ * (a) groups the launch's calls into one Opper trace, (b) pins the launch to
+ * one provider for prompt-cache reuse, and (c) — because parent == trace —
+ * makes task-api auto-create a single `session` root span so the launch renders
+ * as one tree instead of N sibling roots. Omitted on the persistent `configure`
+ * path so no fixed trace id is baked into the user's saved config.
  */
 async function setOpperProvider(
   apiKey: string,
   launchModel: string,
   baseUrl: string,
+  traceId?: string,
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
@@ -64,6 +75,14 @@ async function setOpperProvider(
     api: "openai-completions",
     apiKey,
     baseUrl,
+    ...(traceId
+      ? {
+          headers: {
+            "X-Opper-Trace-Id": traceId,
+            "X-Opper-Parent-Span-Id": traceId,
+          },
+        }
+      : {}),
     models: pickerModelsForLaunch(launchModel).map((m) => ({
       id: m.id,
       contextWindow: m.contextWindow,
@@ -121,12 +140,17 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  // One trace id per launch: stable across the launch's turns (sticky provider
+  // + a single session-root span tree in Opper), fresh on the next launch.
+  // Mirrors the Hermes provider plugin's per-process fallback. It lives only
+  // inside the snapshot below, so direct `pi` runs afterwards never inherit it.
+  const sessionTraceId = randomUUID();
   // Snapshot just `providers.opper` so direct `pi` invocations after
   // the launch don't inherit this session's URL — and so any sibling
   // providers (or other top-level keys) the user/agent edited mid-spawn
   // survive intact.
   return withJsonKeys(piConfigPath(), [["providers", PROVIDER_KEY]], async () => {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl, sessionTraceId);
 
     // pi's CLI requires *both* --provider and --model to resolve a non-default
     // provider — passing only --provider falls through to the auto-resolver
