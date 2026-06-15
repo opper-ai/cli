@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { CliContext, RegisterFn } from "./types.js";
+import { appsShellCommand } from "../commands/apps-shell.js";
 import {
   appsListCommand,
   appsGetCommand,
@@ -95,6 +96,14 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
     .requiredOption("--input <text>", "input passed to the agent")
     .action(async (name: string, cmdOpts: { input: string }) => {
       await appsRunCommand({ name, input: cmdOpts.input, key: ctx.key() });
+    });
+
+  apps
+    .command("shell")
+    .description("Open an interactive terminal in the running app")
+    .argument("<name>", "app name")
+    .action(async (name: string) => {
+      await appsShellCommand({ name, key: ctx.key() });
     });
 
   const secrets = apps
