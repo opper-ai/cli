@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,14 +7,6 @@ const whichMock = vi.fn();
 const runMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
-
-const spawnSyncMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
-  );
-  return { ...actual, spawnSync: spawnSyncMock };
-});
 
 const { pi } = await import("../../src/agents/pi.js");
 
@@ -28,30 +20,45 @@ const ROUTING = {
   compatShape: "openai" as const,
 };
 
+function piHomeDir(sandbox: string): string {
+  return join(sandbox, ".opper", "pi-home");
+}
 function readModels(sandbox: string): {
-  providers?: Record<string, { baseUrl?: string; apiKey?: string }>;
+  providers?: Record<
+    string,
+    { api?: string; apiKey?: string; baseUrl?: string; headers?: unknown; models?: Array<{ id: string; _launch?: boolean }> }
+  >;
 } {
-  const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-  return JSON.parse(readFileSync(cfgPath, "utf8"));
+  return JSON.parse(readFileSync(join(piHomeDir(sandbox), "models.json"), "utf8"));
 }
 
 describe("pi adapter", () => {
   let sandbox: string;
   let prevHome: string | undefined;
+  let prevOpperHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
-    spawnSyncMock.mockReset();
+    // Installed by default; --version probe returns a version.
+    whichMock.mockResolvedValue("/usr/bin/pi");
+    runMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === "--version") return { code: 0, stdout: "pi 0.79.4" };
+      return { code: 0, stdout: "" };
+    });
     sandbox = mkdtempSync(join(tmpdir(), "opper-pi-"));
     prevHome = process.env.HOME;
+    prevOpperHome = process.env.OPPER_HOME;
     process.env.HOME = sandbox;
+    process.env.OPPER_HOME = join(sandbox, ".opper");
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevOpperHome === undefined) delete process.env.OPPER_HOME;
+    else process.env.OPPER_HOME = prevOpperHome;
   });
 
   it("metadata is correct", () => {
@@ -61,222 +68,77 @@ describe("pi adapter", () => {
     expect(typeof pi.install).toBe("function");
   });
 
-  it("configure (no apiKey) throws AUTH_REQUIRED", async () => {
-    await expect(pi.configure({})).rejects.toMatchObject({
-      code: "AUTH_REQUIRED",
-    });
+  it("configure throws AGENT_NOT_FOUND when pi is not installed", async () => {
+    whichMock.mockResolvedValue(null);
+    await expect(pi.configure({})).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 
-  it("configure with apiKey writes the default compat URL into models.json", async () => {
-    await pi.configure({ apiKey: "op_live_test" });
-    const models = readModels(sandbox);
-    expect(models.providers?.opper?.baseUrl).toBe(
-      "https://api.opper.ai/v3/compat",
-    );
-    expect(models.providers?.opper?.apiKey).toBe("op_live_test");
+  it("configure resolves when pi is installed", async () => {
+    await expect(pi.configure({})).resolves.toBeUndefined();
   });
 
-  it("configure does not bake trace headers into the persistent config", async () => {
-    // Per-launch trace headers belong only to a launch (set in spawn, reverted
-    // on exit). A fixed id baked into the saved config would make every later
-    // direct `pi` run share one trace forever.
-    await pi.configure({ apiKey: "op_live_test" });
-    const models = readModels(sandbox) as {
-      providers?: { opper?: { headers?: Record<string, string> } };
-    };
-    expect(models.providers?.opper?.headers).toBeUndefined();
-  });
-
-  it("spawn writes routing.baseUrl (the session URL) into models.json mid-launch", async () => {
-    // Mid-spawn the session URL is the active baseUrl — that's how Pi
-    // picks it up. We capture inside the spawn callback because we
-    // restore the file on exit.
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    let midRun: ReturnType<typeof readModels> | undefined;
-    spawnSyncMock.mockImplementation(() => {
-      midRun = JSON.parse(readFileSync(cfgPath, "utf8"));
-      return { status: 0 };
-    });
-
-    const code = await pi.spawn!(["chat"], ROUTING);
+  it("spawn writes the opper provider into the ISOLATED pi home (session URL, no key on disk)", async () => {
+    const code = await pi.spawn!([], ROUTING);
     expect(code).toBe(0);
 
-    expect(midRun?.providers?.opper?.baseUrl).toBe(SESSION_URL);
-    expect(midRun?.providers?.opper?.apiKey).toBe("op_live_run");
+    const models = readModels(sandbox);
+    const opper = models.providers?.opper;
+    expect(opper?.api).toBe("openai-completions");
+    expect(opper?.baseUrl).toBe(SESSION_URL);
+    // The real key never lands on disk — only the env reference does.
+    expect(opper?.apiKey).toBe("$OPPER_API_KEY");
+    expect(JSON.stringify(models)).not.toContain("op_live_run");
+    // No static trace headers in the config — the extension adds them per session.
+    expect(opper?.headers).toBeUndefined();
   });
 
-  it("spawn emits per-launch X-Opper-Trace-Id == X-Opper-Parent-Span-Id (valid UUID) in the provider headers", async () => {
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    let midRun:
-      | { providers?: Record<string, { headers?: Record<string, string> }> }
-      | undefined;
-    spawnSyncMock.mockImplementation(() => {
-      midRun = JSON.parse(readFileSync(cfgPath, "utf8"));
-      return { status: 0 };
-    });
-
+  it("spawn ships the session extension into the isolated home", async () => {
     await pi.spawn!([], ROUTING);
-
-    const headers = midRun?.providers?.opper?.headers;
-    const trace = headers?.["X-Opper-Trace-Id"];
-    expect(trace).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
-    // Same value → task-api auto-creates one `session` root span for the launch.
-    expect(headers?.["X-Opper-Parent-Span-Id"]).toBe(trace);
+    const extPath = join(piHomeDir(sandbox), "extensions", "opper-session.ts");
+    expect(existsSync(extPath)).toBe(true);
+    const ext = readFileSync(extPath, "utf8");
+    expect(ext).toContain("session_start");
+    expect(ext).toContain("registerProvider");
+    expect(ext).toContain("X-Opper-Trace-Id");
   });
 
-  it("spawn uses a fresh trace id per launch", async () => {
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    const seen: string[] = [];
-    spawnSyncMock.mockImplementation(() => {
-      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
-        providers?: { opper?: { headers?: Record<string, string> } };
-      };
-      const t = cur.providers?.opper?.headers?.["X-Opper-Trace-Id"];
-      if (t) seen.push(t);
-      return { status: 0 };
-    });
-
-    await pi.spawn!([], ROUTING);
-    await pi.spawn!([], ROUTING);
-
-    expect(seen).toHaveLength(2);
-    expect(seen[0]).not.toBe(seen[1]);
-  });
-
-  it("spawn restores the pre-launch config so direct `pi` runs don't inherit the session URL", async () => {
-    // User has run `opper agents add pi` previously — config has the
-    // default compat URL baked in. After `opper launch pi` exits, that
-    // file must be back to what the user had.
-    await pi.configure({ apiKey: "op_user_key" });
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    const before = readFileSync(cfgPath, "utf8");
-
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await pi.spawn!([], ROUTING);
-
-    expect(readFileSync(cfgPath, "utf8")).toBe(before);
-  });
-
-  it("spawn deletes the config it created when none existed before", async () => {
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    expect(existsSync(cfgPath)).toBe(false);
-
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await pi.spawn!([], ROUTING);
-
-    expect(existsSync(cfgPath)).toBe(false);
-  });
-
-  it("spawn restores the pre-launch config even on non-zero exit", async () => {
-    await pi.configure({ apiKey: "op_user_key" });
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-    const before = readFileSync(cfgPath, "utf8");
-
-    spawnSyncMock.mockReturnValue({ status: 17 });
-    const code = await pi.spawn!([], ROUTING);
-    expect(code).toBe(17);
-    expect(readFileSync(cfgPath, "utf8")).toBe(before);
-  });
-
-  it("spawn restore preserves sibling providers / top-level edits made mid-spawn", async () => {
-    // The user (or a concurrent edit) adds a non-opper provider while
-    // the launch is running. Narrow restore must reset only providers.opper
-    // and leave the new sibling alone.
-    await pi.configure({ apiKey: "op_user_key" });
-    const cfgPath = join(sandbox, ".pi", "agent", "models.json");
-
-    spawnSyncMock.mockImplementation(() => {
-      const cur = JSON.parse(readFileSync(cfgPath, "utf8")) as {
-        providers?: Record<string, unknown>;
-        somethingElse?: string;
-      };
-      cur.providers = cur.providers ?? {};
-      cur.providers["lmstudio"] = { baseUrl: "http://localhost:1234" };
-      cur.somethingElse = "user added this";
-      writeFileSync(cfgPath, JSON.stringify(cur, null, 2) + "\n", "utf8");
-      return { status: 0 };
-    });
-
-    await pi.spawn!([], ROUTING);
-
-    const after = JSON.parse(readFileSync(cfgPath, "utf8")) as {
-      providers?: Record<string, { baseUrl?: string }>;
-      somethingElse?: string;
-    };
-    expect(after.providers?.lmstudio).toEqual({ baseUrl: "http://localhost:1234" });
-    expect(after.somethingElse).toBe("user added this");
-    // Our opper provider is reverted to the pre-launch (compat) URL.
-    expect(after.providers?.opper?.baseUrl).toBe("https://api.opper.ai/v3/compat");
-  });
-
-  it("spawn places the launch model at models[0] even when it isn't opus", async () => {
-    // Read mid-spawn — snapshot/restore wipes the config on exit when
-    // there was no pre-launch config.
-    let midRun: ReturnType<typeof readModels> | undefined;
-    spawnSyncMock.mockImplementation(() => {
-      midRun = readModels(sandbox);
-      return { status: 0 };
-    });
+  it("spawn places the launch model at models[0] with _launch", async () => {
     await pi.spawn!([], { ...ROUTING, model: "claude-haiku-4-5" });
-
-    const list = (midRun as {
-      providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
-    } | undefined)?.providers?.opper?.models ?? [];
+    const list = readModels(sandbox).providers?.opper?.models ?? [];
     expect(list[0]?.id).toBe("claude-haiku-4-5");
     expect(list[0]?._launch).toBe(true);
-    // Other curated models still present after the launch entry.
     expect(list.length).toBeGreaterThan(1);
-    expect(list.some((m) => m.id === "claude-opus-4-7")).toBe(true);
   });
 
-  it("spawn prepends a non-curated --model id so it still appears in the picker", async () => {
-    let midRun: ReturnType<typeof readModels> | undefined;
-    spawnSyncMock.mockImplementation(() => {
-      midRun = readModels(sandbox);
-      return { status: 0 };
-    });
-    await pi.spawn!([], { ...ROUTING, model: "deepinfra/some-future-model" });
-
-    const list = (midRun as {
-      providers?: { opper?: { models?: Array<{ id: string; _launch?: boolean }> } };
-    } | undefined)?.providers?.opper?.models ?? [];
-    expect(list[0]?.id).toBe("deepinfra/some-future-model");
-    expect(list[0]?._launch).toBe(true);
-  });
-
-  it("spawn auto-injects --provider opper and --model when user doesn't pass --model", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+  it("spawn runs pi against the isolated home with key + base url in the env", async () => {
     await pi.spawn!([], ROUTING);
-    const call = spawnSyncMock.mock.calls[0]!;
-    expect(call[0]).toBe("pi");
-    expect(call[1]).toEqual([
-      "--provider",
-      "opper",
-      "--model",
-      "claude-opus-4-7",
-    ]);
+    const call = runMock.mock.calls.find((c) => c[0] === "pi" && c[1]?.[0] !== "--version");
+    expect(call).toBeDefined();
+    const [, args, opts] = call!;
+    expect(args).toEqual(["--provider", "opper", "--model", "claude-opus-4-7"]);
+    expect(opts.inherit).toBe(true);
+    expect(opts.env.PI_CODING_AGENT_DIR).toBe(piHomeDir(sandbox));
+    expect(opts.env.OPPER_API_KEY).toBe("op_live_run");
+    expect(opts.env.OPPER_BASE_URL).toBe(SESSION_URL);
   });
 
-  it("spawn does not auto-inject --model when user already passes one", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
+  it("spawn does not auto-inject --model when the user passes one", async () => {
     await pi.spawn!(["--model", "claude-haiku-4-5"], ROUTING);
-    const call = spawnSyncMock.mock.calls[0]!;
-    expect(call[1]).toEqual(["--provider", "opper", "--model", "claude-haiku-4-5"]);
+    const call = runMock.mock.calls.find((c) => c[0] === "pi" && c[1]?.[0] !== "--version");
+    expect(call![1]).toEqual(["--provider", "opper", "--model", "claude-haiku-4-5"]);
+  });
+
+  it("spawn never touches the user's real ~/.pi", async () => {
+    await pi.spawn!([], ROUTING);
+    expect(existsSync(join(sandbox, ".pi"))).toBe(false);
   });
 
   it("spawn propagates non-zero exit codes", async () => {
-    spawnSyncMock.mockReturnValue({ status: 2 });
+    runMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === "--version") return { code: 0, stdout: "pi 0.79.4" };
+      return { code: 17, stdout: "" };
+    });
     const code = await pi.spawn!([], ROUTING);
-    expect(code).toBe(2);
-  });
-
-  it("unconfigure removes the opper provider", async () => {
-    await pi.configure({ apiKey: "op_live_test" });
-    expect(existsSync(join(sandbox, ".pi", "agent", "models.json"))).toBe(true);
-    await pi.unconfigure();
-    const models = readModels(sandbox);
-    expect(models.providers?.opper).toBeUndefined();
+    expect(code).toBe(17);
   });
 });

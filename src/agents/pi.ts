@@ -1,97 +1,33 @@
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
-import { join, dirname } from "node:path";
-import { existsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
+import { opperHome } from "../auth/paths.js";
 import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
-import { withJsonKeys } from "../util/config-snapshot.js";
+import { pickerModelsForLaunch } from "../config/models.js";
+import { assetPath } from "../util/assets.js";
 import type {
   AgentAdapter,
-  ConfigureOptions,
   DetectResult,
   OpperRouting,
 } from "./types.js";
 
-// The provider key we own inside ~/.pi/agent/models.json. Anything outside
-// this key is the user's own configuration and stays untouched.
+// The provider key we own inside the isolated pi home's models.json.
 const PROVIDER_KEY = "opper";
 
-interface PiModelsFile {
-  providers?: Record<string, unknown>;
-  [k: string]: unknown;
+/**
+ * Opper-managed PI_CODING_AGENT_DIR. Each `opper launch pi` runs against this
+ * isolated home: the user's real ~/.pi/agent is never read or mutated. The
+ * `opper` provider config and the session extension live here, so there's no
+ * snapshot/restore dance and no risk to the user's own pi setup.
+ */
+function piHome(): string {
+  return join(opperHome(), "pi-home");
 }
 
 function piConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "models.json");
-}
-
-async function readConfig(): Promise<PiModelsFile> {
-  const cfg = piConfigPath();
-  if (!existsSync(cfg)) return {};
-  try {
-    return JSON.parse(await readFile(cfg, "utf8")) as PiModelsFile;
-  } catch {
-    return {};
-  }
-}
-
-async function writeConfig(data: PiModelsFile): Promise<void> {
-  const cfg = piConfigPath();
-  await mkdir(dirname(cfg), { recursive: true });
-  await writeFile(cfg, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-}
-
-/**
- * Idempotently install our `opper` provider entry. Other providers in the
- * same file (ollama, etc.) are preserved.
- *
- * When `traceId` is set (the launch path only), the provider carries
- * per-launch `X-Opper-Trace-Id` / `X-Opper-Parent-Span-Id` headers — Pi sends
- * provider `headers` verbatim on every request. Both hold the same value, which
- * (a) groups the launch's calls into one Opper trace, (b) pins the launch to
- * one provider for prompt-cache reuse, and (c) — because parent == trace —
- * makes task-api auto-create a single `session` root span so the launch renders
- * as one tree instead of N sibling roots. Omitted on the persistent `configure`
- * path so no fixed trace id is baked into the user's saved config.
- */
-async function setOpperProvider(
-  apiKey: string,
-  launchModel: string,
-  baseUrl: string,
-  traceId?: string,
-): Promise<void> {
-  const cfg = await readConfig();
-  cfg.providers = cfg.providers ?? {};
-  // The launch model is reordered to index 0 (Pi treats the first entry as
-  // the active default in its picker UI). `_launch: true` is the explicit
-  // marker the runtime reads.
-  cfg.providers[PROVIDER_KEY] = {
-    api: "openai-completions",
-    apiKey,
-    baseUrl,
-    ...(traceId
-      ? {
-          headers: {
-            "X-Opper-Trace-Id": traceId,
-            "X-Opper-Parent-Span-Id": traceId,
-          },
-        }
-      : {}),
-    models: pickerModelsForLaunch(launchModel).map((m) => ({
-      id: m.id,
-      contextWindow: m.contextWindow,
-      input: ["text"],
-      reasoning: m.reasoning,
-      ...(m.id === launchModel ? { _launch: true } : {}),
-    })),
-  };
-  await writeConfig(cfg);
+  return join(piHome(), "models.json");
 }
 
 async function detect(): Promise<DetectResult> {
@@ -116,54 +52,103 @@ async function install(): Promise<void> {
 }
 
 async function isConfigured(): Promise<boolean> {
-  const cfg = await readConfig();
-  return Boolean(cfg.providers && cfg.providers[PROVIDER_KEY]);
+  // Routing is applied at launch into the isolated home, so "configured"
+  // collapses to "installed" (mirrors the Hermes adapter).
+  return (await detect()).installed;
 }
 
-async function configure(opts: ConfigureOptions): Promise<void> {
-  if (!opts.apiKey) {
+async function configure(): Promise<void> {
+  if (!(await detect()).installed) {
     throw new OpperError(
-      "AUTH_REQUIRED",
-      "Pi configuration needs an Opper API key.",
-      "Run `opper login` first, or set OPPER_API_KEY.",
+      "AGENT_NOT_FOUND",
+      "Pi is not installed",
+      "Run `opper launch pi --install`, or install manually from https://pi.dev.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, OPPER_COMPAT_URL);
 }
 
 async function unconfigure(): Promise<void> {
-  const cfg = await readConfig();
-  if (cfg.providers && cfg.providers[PROVIDER_KEY]) {
-    delete cfg.providers[PROVIDER_KEY];
-    await writeConfig(cfg);
-  }
+  // Nothing persistent in the user's environment — the Opper-managed
+  // PI_CODING_AGENT_DIR is only touched at launch time.
+}
+
+/**
+ * Write the minimum config pi needs to talk to Opper into the isolated home: a
+ * single `opper` provider (openai-completions shape) with the launch models.
+ * The api key stays in OPPER_API_KEY (exported at spawn) — referenced here as
+ * `$OPPER_API_KEY` so the secret never lands on disk. Per-session trace headers
+ * are added by the shipped extension (writeOpperExtension), not baked in here.
+ */
+async function writeOpperConfig(routing: OpperRouting): Promise<void> {
+  const home = piHome();
+  await mkdir(home, { recursive: true });
+
+  // The launch model sits at index 0 (pi treats the first entry as the active
+  // default in its picker) and is marked with `_launch: true`.
+  const cfg = {
+    providers: {
+      [PROVIDER_KEY]: {
+        api: "openai-completions",
+        apiKey: "$OPPER_API_KEY",
+        baseUrl: routing.baseUrl,
+        models: pickerModelsForLaunch(routing.model).map((m) => ({
+          id: m.id,
+          contextWindow: m.contextWindow,
+          input: ["text"],
+          reasoning: m.reasoning,
+          ...(m.id === routing.model ? { _launch: true } : {}),
+        })),
+      },
+    },
+  };
+  await writeFile(piConfigPath(), JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+}
+
+/**
+ * Install the Opper session extension into the isolated home so pi
+ * auto-discovers it. It re-registers the `opper` provider on each session
+ * boundary with per-session `X-Opper-Trace-Id` / `X-Opper-Parent-Span-Id`
+ * headers — so every pi session (a /new, /resume, /fork, /reset, or a child pi
+ * process) becomes its own session-root tree. Rewritten each launch so CLI
+ * upgrades ship extension changes.
+ */
+async function writeOpperExtension(home: string): Promise<void> {
+  const dir = join(home, "extensions");
+  await mkdir(dir, { recursive: true });
+  const contents = await readFile(
+    assetPath(join("pi-opper-extension", "opper-session.ts")),
+    "utf8",
+  );
+  await writeFile(join(dir, "opper-session.ts"), contents, { mode: 0o644 });
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // One trace id per launch: stable across the launch's turns (sticky provider
-  // + a single session-root span tree in Opper), fresh on the next launch.
-  // Mirrors the Hermes provider plugin's per-process fallback. It lives only
-  // inside the snapshot below, so direct `pi` runs afterwards never inherit it.
-  const sessionTraceId = randomUUID();
-  // Snapshot just `providers.opper` so direct `pi` invocations after
-  // the launch don't inherit this session's URL — and so any sibling
-  // providers (or other top-level keys) the user/agent edited mid-spawn
-  // survive intact.
-  return withJsonKeys(piConfigPath(), [["providers", PROVIDER_KEY]], async () => {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl, sessionTraceId);
+  await writeOpperConfig(routing);
+  await writeOpperExtension(piHome());
 
-    // pi's CLI requires *both* --provider and --model to resolve a non-default
-    // provider — passing only --provider falls through to the auto-resolver
-    // and silently picks the first available provider (usually ollama).
-    const userPicked = args.some(
-      (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
-    );
-    const piArgs = userPicked
-      ? ["--provider", PROVIDER_KEY, ...args]
-      : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
-    const result = spawnSync("pi", piArgs, { stdio: "inherit" });
-    return result.status ?? -1;
+  // pi's CLI requires *both* --provider and --model to resolve a non-default
+  // provider — passing only --provider falls through to the auto-resolver and
+  // silently picks the first available provider.
+  const userPicked = args.some(
+    (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
+  );
+  const piArgs = userPicked
+    ? ["--provider", PROVIDER_KEY, ...args]
+    : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
+
+  // PI_CODING_AGENT_DIR points pi at the isolated home; OPPER_API_KEY /
+  // OPPER_BASE_URL feed both the config's `$OPPER_API_KEY` and the extension's
+  // per-session provider re-registration. The key never lands on disk.
+  const result = run("pi", piArgs, {
+    inherit: true,
+    env: {
+      ...process.env,
+      PI_CODING_AGENT_DIR: piHome(),
+      OPPER_API_KEY: routing.apiKey,
+      OPPER_BASE_URL: routing.baseUrl,
+    },
   });
+  return result.code;
 }
 
 export const pi: AgentAdapter = {
