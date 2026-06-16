@@ -44,6 +44,10 @@ let procSeed = "";
 
 export default function (pi: any) {
   pi.on("session_start", (_event: any, ctx: any) => {
+    // No-op unless this is an `opper launch pi` (which exports both). Keeps the
+    // extension from touching the `opper` provider in the user's own pi sessions.
+    if (!process.env.OPPER_API_KEY || !process.env.OPPER_BASE_URL) return;
+
     let sid: string | undefined;
     try {
       sid = ctx?.sessionManager?.getSessionFile?.() ?? undefined;
