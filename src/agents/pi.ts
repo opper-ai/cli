@@ -176,7 +176,10 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // don't inherit this session's URL, and the user's other providers / top-level
   // keys survive intact. The extension is snapshot/restored separately.
   return withJsonKeys(piConfigPath(), [["providers", PROVIDER_KEY]], async () => {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    // Write the api key as the `$OPPER_API_KEY` env reference, not the literal —
+    // pi resolves it from the env we export below, and the extension re-registers
+    // from the same env, so the real key never lands in the user's config on disk.
+    await setOpperProvider("$OPPER_API_KEY", routing.model, routing.baseUrl);
     const restoreExtension = await installExtension();
     try {
       // pi's CLI requires *both* --provider and --model to resolve a non-default

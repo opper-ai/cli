@@ -93,6 +93,9 @@ describe("pi adapter", () => {
     const code = await pi.spawn!([], ROUTING);
     expect(code).toBe(0);
     expect(mid?.models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+    // The real key is never written to disk — only the env reference is.
+    expect(mid?.models.providers?.opper?.apiKey).toBe("$OPPER_API_KEY");
+    expect(JSON.stringify(mid?.models)).not.toContain("op_live_run");
     expect(mid?.extExists).toBe(true);
     expect(mid?.ext).toContain("session_start");
     expect(mid?.ext).toContain("registerProvider");
