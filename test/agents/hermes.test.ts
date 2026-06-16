@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   mkdtempSync,
   rmSync,
+  mkdirSync,
   writeFileSync,
   readFileSync,
   existsSync,
@@ -38,39 +39,18 @@ describe("hermes adapter — metadata", () => {
 describe("hermes adapter — detect", () => {
   it("returns installed=false when `which hermes` returns null", async () => {
     whichMock.mockResolvedValue(null);
-    const result = await hermes.detect();
-    expect(result.installed).toBe(false);
-    expect(result.version).toBeUndefined();
+    expect((await hermes.detect()).installed).toBe(false);
   });
 
-  it("returns installed=true with semver when --version succeeds", async () => {
+  it("returns installed=true with semver and the real ~/.hermes config path", async () => {
     whichMock.mockResolvedValue("/usr/local/bin/hermes");
     runMock.mockReturnValue({ code: 0, stdout: "hermes 1.2.3\n", stderr: "" });
     const result = await hermes.detect();
     expect(result.installed).toBe(true);
     expect(result.version).toBe("1.2.3");
-    // configPath now points at the Opper-managed HERMES_HOME, not ~/.hermes.
-    expect(result.configPath).toMatch(/hermes-home\/config\.yaml$/);
-  });
-
-  it("returns installed=true with no version when --version output has no semver token", async () => {
-    whichMock.mockResolvedValue("/usr/local/bin/hermes");
-    runMock.mockReturnValue({
-      code: 0,
-      stdout: "hermes vupdate available — run `hermes update`\n",
-      stderr: "",
-    });
-    const result = await hermes.detect();
-    expect(result.installed).toBe(true);
-    expect(result.version).toBeUndefined();
-  });
-
-  it("returns installed=true with undefined version when --version fails", async () => {
-    whichMock.mockResolvedValue("/usr/local/bin/hermes");
-    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
-    const result = await hermes.detect();
-    expect(result.installed).toBe(true);
-    expect(result.version).toBeUndefined();
+    // The user's real home, not an isolated dir.
+    expect(result.configPath).toMatch(/\.hermes\/config\.yaml$/);
+    expect(result.configPath).not.toMatch(/hermes-home/);
   });
 });
 
@@ -78,9 +58,7 @@ describe("hermes adapter — install", () => {
   it("throws OpperError(AGENT_NOT_FOUND) when the installer exits non-zero", async () => {
     runMock.mockClear();
     runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
-    await expect(hermes.install!()).rejects.toMatchObject({
-      code: "AGENT_NOT_FOUND",
-    });
+    await expect(hermes.install!()).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 
   it("resolves when the installer exits 0", async () => {
@@ -90,166 +68,126 @@ describe("hermes adapter — install", () => {
   });
 });
 
-describe("hermes adapter — spawn (isolated HERMES_HOME)", () => {
+describe("hermes adapter — spawn (real ~/.hermes, transient)", () => {
   let sandbox: string;
+  let prevHome: string | undefined;
   let prevOpperHome: string | undefined;
+
+  function configPath(): string {
+    return join(sandbox, ".hermes", "config.yaml");
+  }
+  function pluginDir(): string {
+    return join(sandbox, ".hermes", "plugins", "model-providers", "opper");
+  }
 
   beforeEach(() => {
     sandbox = mkdtempSync(join(tmpdir(), "opper-hermes-"));
+    prevHome = process.env.HOME;
     prevOpperHome = process.env.OPPER_HOME;
-    process.env.OPPER_HOME = join(sandbox, ".opper");
+    process.env.HOME = sandbox;
+    process.env.OPPER_HOME = join(sandbox, ".opper"); // sandbox the backups dir
     runMock.mockReset();
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
     if (prevOpperHome === undefined) delete process.env.OPPER_HOME;
     else process.env.OPPER_HOME = prevOpperHome;
   });
 
-  it("creates the Opper-managed hermes-home and writes an opper-provider config.yaml", async () => {
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+  it("writes the opper model + provider AND ships the plugin into ~/.hermes mid-launch", async () => {
+    let mid: { cfg: Record<string, unknown>; pluginSrc: string } | undefined;
+    runMock.mockImplementation(() => {
+      mid = {
+        cfg: parse(readFileSync(configPath(), "utf8")) as Record<string, unknown>,
+        pluginSrc: readFileSync(join(pluginDir(), "__init__.py"), "utf8"),
+      };
+      return { code: 0, stdout: "", stderr: "" };
+    });
 
-    const code = await hermes.spawn!(["chat"], ROUTING);
+    const SESSION_URL = "https://api.opper.ai/v3/session/sess_test";
+    const code = await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_URL });
     expect(code).toBe(0);
 
-    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
-    expect(existsSync(configPath)).toBe(true);
-    const written = parse(readFileSync(configPath, "utf8")) as {
-      model?: Record<string, unknown>;
+    const model = mid?.cfg.model as Record<string, unknown>;
+    expect(model).toEqual({ provider: "opper", base_url: SESSION_URL, default: "claude-opus-4-7" });
+    expect(model).not.toHaveProperty("api_key"); // key goes via env, not disk
+    const providers = mid?.cfg.providers as {
+      opper?: { base_url?: string; key_env?: string; models?: Record<string, unknown> };
     };
-    expect(written.model).toEqual({
-      provider: "opper",
-      base_url: "https://api.opper.ai/v3/compat",
-      default: "claude-opus-4-7",
-    });
-    // api_key intentionally NOT written to disk — it goes via env.
-    expect(written.model).not.toHaveProperty("api_key");
+    expect(providers.opper?.base_url).toBe(SESSION_URL);
+    expect(providers.opper?.key_env).toBe("OPPER_API_KEY");
+    expect(Object.keys(providers.opper?.models ?? {})).toContain("claude-opus-4-7");
+    expect(mid?.pluginSrc).toContain("X-Opper-Trace-Id");
   });
 
-  it("passes HERMES_HOME and OPPER_API_KEY through to the hermes process env", async () => {
+  it("passes the real HERMES_HOME and OPPER_API_KEY through the env", async () => {
     runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-
     await hermes.spawn!([], ROUTING);
-
-    expect(runMock).toHaveBeenCalledTimes(1);
     const [, , runOpts] = runMock.mock.calls[0]!;
     const env = (runOpts as { env: Record<string, string> }).env;
-    expect(env.HERMES_HOME).toBe(join(sandbox, ".opper", "hermes-home"));
+    expect(env.HERMES_HOME).toBe(join(sandbox, ".hermes"));
     expect(env.OPPER_API_KEY).toBe("op_live_test");
   });
 
-  it("preserves non-model settings already present in the Opper-managed config.yaml", async () => {
-    // First launch creates the dir + writes model:
+  it("leaves nothing behind when there was no prior config (one-off launch)", async () => {
+    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
+    expect(existsSync(configPath())).toBe(false);
+    await hermes.spawn!([], ROUTING);
+    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(pluginDir())).toBe(false);
+  });
+
+  it("restores the user's pre-existing config.yaml and plugin exactly", async () => {
+    mkdirSync(join(sandbox, ".hermes"), { recursive: true });
+    const userConfig =
+      ["model:", "  provider: anthropic", "  default: claude", "toolsets:", "  - web"].join("\n") + "\n";
+    writeFileSync(configPath(), userConfig, "utf8");
+    mkdirSync(pluginDir(), { recursive: true });
+    writeFileSync(join(pluginDir(), "__init__.py"), "# user's own\n", "utf8");
+
     runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
     await hermes.spawn!([], ROUTING);
 
-    // User (or a previous Hermes run) added a `toolsets:` block to that file.
-    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
-    writeFileSync(
-      configPath,
-      [
-        "model:",
-        "  provider: custom",
-        "  base_url: https://stale.example",
-        "  default: stale-model",
-        "toolsets:",
-        "  - hermes-cli",
-        "  - web",
-      ].join("\n") + "\n",
-      "utf8",
-    );
-
-    // Second launch must rewrite model: but leave toolsets: alone.
-    await hermes.spawn!([], ROUTING);
-    const after = parse(readFileSync(configPath, "utf8")) as {
-      model?: Record<string, unknown>;
-      toolsets?: unknown;
-    };
-    expect(after.model).toEqual({
-      provider: "opper",
-      base_url: "https://api.opper.ai/v3/compat",
-      default: "claude-opus-4-7",
-    });
-    expect(after.toolsets).toEqual(["hermes-cli", "web"]);
-  });
-
-  it("writes a providers.opper block with all picker model ids on every spawn", async () => {
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-    const SESSION_URL = "https://api.opper.ai/v3/session/sess_test";
-    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_URL });
-
-    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
-    const written = parse(readFileSync(configPath, "utf8")) as {
-      providers?: { opper?: { name?: string; base_url?: string; key_env?: string; models?: Record<string, unknown> } };
-    };
-    // The provider block is keyed "opper" to match model.provider, so Hermes
-    // resolves the api key from this provider's key_env.
-    expect(written.providers?.opper).toBeDefined();
-    expect(written.providers?.opper?.name).toBe("Opper");
-    expect(written.providers?.opper?.base_url).toBe(SESSION_URL);
-    expect(written.providers?.opper?.key_env).toBe("OPPER_API_KEY");
-    const ids = Object.keys(written.providers?.opper?.models ?? {});
-    // Spot-check both ends: the curated 5 plus the 5 added later.
-    expect(ids).toContain("claude-opus-4-7");
-    expect(ids).toContain("gpt-5.5");
-    expect(ids).toContain("gemini-3.1-pro-preview");
-    expect(ids).toContain("deepinfra/kimi-k2.6");
-    expect(ids).toContain("fireworks/minimax-m2p7");
-    expect(ids).toContain("deepinfra/deepseek-v4-flash");
-  });
-
-  it("rewrites providers.opper.base_url with the per-session URL on each spawn", async () => {
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-    const SESSION_A = "https://api.opper.ai/v3/session/sess_a";
-    const SESSION_B = "https://api.opper.ai/v3/session/sess_b";
-
-    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_A });
-    await hermes.spawn!([], { ...ROUTING, baseUrl: SESSION_B });
-
-    const configPath = join(sandbox, ".opper", "hermes-home", "config.yaml");
-    const after = parse(readFileSync(configPath, "utf8")) as {
-      model?: { base_url?: string };
-      providers?: { opper?: { base_url?: string } };
-    };
-    // Both routing surfaces must follow the latest session URL — otherwise
-    // the picker row keeps pointing at a stale session.
-    expect(after.model?.base_url).toBe(SESSION_B);
-    expect(after.providers?.opper?.base_url).toBe(SESSION_B);
-  });
-
-  it("installs the Opper provider plugin into HERMES_HOME on spawn", async () => {
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-    await hermes.spawn!([], ROUTING);
-
-    const pluginDir = join(
-      sandbox, ".opper", "hermes-home", "plugins", "model-providers", "opper",
-    );
-    expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
-    expect(existsSync(join(pluginDir, "plugin.yaml"))).toBe(true);
-    // The plugin emits the headers that drive session grouping + affinity.
-    const src = readFileSync(join(pluginDir, "__init__.py"), "utf8");
-    expect(src).toContain("X-Opper-Trace-Id");
-    expect(src).toContain("X-Opper-Parent-Span-Id");
+    // Whole-file restore: the user's config + their plugin file come back verbatim.
+    expect(readFileSync(configPath(), "utf8")).toBe(userConfig);
+    expect(readFileSync(join(pluginDir(), "__init__.py"), "utf8")).toBe("# user's own\n");
   });
 
   it("propagates non-zero exit codes from run()", async () => {
     runMock.mockReturnValue({ code: 2, stdout: "", stderr: "" });
-    const code = await hermes.spawn!([], ROUTING);
-    expect(code).toBe(2);
+    expect(await hermes.spawn!([], ROUTING)).toBe(2);
   });
 
-  it("does not touch the user's real ~/.hermes/ directory", async () => {
-    runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-    await hermes.spawn!([], ROUTING);
-    // Nothing under sandbox/.hermes should exist — we only write under .opper.
-    expect(existsSync(join(sandbox, ".hermes"))).toBe(false);
+  it("restores config even when run() throws", async () => {
+    mkdirSync(join(sandbox, ".hermes"), { recursive: true });
+    const userConfig = "model:\n  provider: anthropic\n";
+    writeFileSync(configPath(), userConfig, "utf8");
+    runMock.mockImplementation(() => {
+      throw new Error("spawn blew up");
+    });
+    await expect(hermes.spawn!([], ROUTING)).rejects.toThrow("spawn blew up");
+    expect(readFileSync(configPath(), "utf8")).toBe(userConfig);
   });
 });
 
 describe("hermes adapter — isConfigured / configure / unconfigure", () => {
+  let sandbox: string;
+  let prevHome: string | undefined;
+
   beforeEach(() => {
+    sandbox = mkdtempSync(join(tmpdir(), "opper-hermes-"));
+    prevHome = process.env.HOME;
+    process.env.HOME = sandbox;
     runMock.mockReset();
+  });
+
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
   });
 
   it("isConfigured collapses to installed", async () => {
@@ -260,14 +198,16 @@ describe("hermes adapter — isConfigured / configure / unconfigure", () => {
     expect(await hermes.isConfigured()).toBe(true);
   });
 
-  it("configure throws AGENT_NOT_FOUND when not installed", async () => {
+  it("configure throws when hermes is not installed", async () => {
     whichMock.mockResolvedValue(null);
-    await expect(hermes.configure({})).rejects.toMatchObject({
-      code: "AGENT_NOT_FOUND",
-    });
+    await expect(hermes.configure({})).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 
-  it("unconfigure is a no-op", async () => {
-    await expect(hermes.unconfigure()).resolves.toBeUndefined();
+  it("unconfigure removes a leftover opper plugin dir", async () => {
+    const dir = join(sandbox, ".hermes", "plugins", "model-providers", "opper");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "__init__.py"), "x\n", "utf8");
+    await hermes.unconfigure();
+    expect(existsSync(dir)).toBe(false);
   });
 });

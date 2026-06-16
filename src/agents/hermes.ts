@@ -1,13 +1,15 @@
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { parse, stringify } from "yaml";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
-import { opperHome } from "../auth/paths.js";
+import { takeSnapshot, restoreSnapshot, rotateBackups } from "../util/backup.js";
 import { OpperError } from "../errors.js";
 import { PICKER_MODELS } from "../config/models.js";
 import { assetPath } from "../util/assets.js";
+import type { SnapshotHandle } from "../util/backup.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -15,16 +17,22 @@ import type {
 } from "./types.js";
 
 /**
- * Opper-managed HERMES_HOME root. Each `opper launch hermes` runs against
- * this isolated directory: the user's main `~/.hermes/` is never read or
- * mutated. Skills, sessions, and caches persist across launches inside it.
+ * The user's real Hermes home. We run `opper launch hermes` against it — not an
+ * isolated dir — so the user's own skills, toolsets, agent preferences, and
+ * other providers all load. The Opper bits (the `opper` model/provider block and
+ * the provider plugin) are added transiently and restored on exit, so a launch
+ * leaves the user's config exactly as it was.
  */
 function hermesHome(): string {
-  return join(opperHome(), "hermes-home");
+  return process.env.HERMES_HOME ?? join(homedir(), ".hermes");
 }
 
 function hermesConfigPath(): string {
   return join(hermesHome(), "config.yaml");
+}
+
+function opperPluginDir(home: string): string {
+  return join(home, "plugins", "model-providers", "opper");
 }
 
 async function detect(): Promise<DetectResult> {
@@ -76,25 +84,19 @@ async function configure(): Promise<void> {
 }
 
 async function unconfigure(): Promise<void> {
-  // Nothing persistent in the user's environment — the Opper-managed
-  // HERMES_HOME is only touched at launch time.
+  // Launch does snapshot → write → restore, so there's normally nothing to undo.
+  // Drop the provider plugin defensively in case a previous launch was killed
+  // before its restore ran.
+  await rm(opperPluginDir(hermesHome()), { recursive: true, force: true });
 }
 
 /**
- * Writes the minimum config Hermes needs to talk to Opper. Hermes (since
- * v0.5+) refuses to honour `OPENAI_BASE_URL` from the environment — the
- * base URL must live in config.yaml — so we bake it into our isolated
- * HERMES_HOME before each launch. The api key is passed via OPPER_API_KEY
- * env at spawn time so the secret never lands on disk.
+ * Write the Opper `model` + `providers.opper` blocks into the user's real
+ * config.yaml, preserving every other key. Restored on exit by the spawn
+ * snapshot.
  */
 async function writeOpperConfig(routing: OpperRouting): Promise<void> {
-  const home = hermesHome();
-  await mkdir(home, { recursive: true });
-
   const path = hermesConfigPath();
-  // Preserve any non-model settings the user might have customised in this
-  // Opper-managed home (toolsets, agent preferences, …). Only the model
-  // block is owned by us.
   const existing: Record<string, unknown> = existsSync(path)
     ? ((parse(await readFile(path, "utf8")) as Record<string, unknown>) ?? {})
     : {};
@@ -104,19 +106,13 @@ async function writeOpperConfig(routing: OpperRouting): Promise<void> {
     default: routing.model,
   };
 
-  // `model.provider` and the providers entry must share the same key. Hermes
-  // resolves the request-time api key from the ACTIVE provider's `key_env`, so
-  // a mismatch (e.g. provider "custom" but config under "opper") leaves the
-  // active provider with no key and Hermes sends a "no-key-required" placeholder
-  // that Opper rejects with 401. The shipped `opper` provider plugin
-  // (writeOpperPlugin) registers a matching profile so this name resolves and
-  // the session/affinity headers are emitted; it also makes the `/model` picker
-  // show "Opper (N models)".
-  //
-  // The curated `models:` dict is the fallback Hermes uses when live discovery
-  // from `<base_url>/v1/models` fails. `key_env: OPPER_API_KEY` matches the env
-  // we export at spawn, so no api key lands on disk. We use a dedicated env name
-  // (not OPENAI_API_KEY) so the launch never clobbers the user's real OpenAI key.
+  // `model.provider` and the providers entry must share the same key — Hermes
+  // resolves the request-time api key from the ACTIVE provider's `key_env`. The
+  // shipped `opper` plugin registers a matching profile and emits the
+  // session/affinity headers. `key_env: OPPER_API_KEY` matches the env we export
+  // at spawn, so no api key lands on disk; the dedicated name avoids clobbering
+  // the user's real OPENAI_API_KEY. The curated `models:` dict is the fallback
+  // when live discovery from `<base_url>/v1/models` fails.
   const opperModels: Record<string, Record<string, never>> = {};
   for (const m of PICKER_MODELS) opperModels[m.id] = {};
   const providers = (existing.providers as Record<string, unknown> | undefined) ?? {};
@@ -132,34 +128,92 @@ async function writeOpperConfig(routing: OpperRouting): Promise<void> {
 }
 
 /**
- * Install the Opper provider plugin into the isolated HERMES_HOME. It registers
- * the `opper` provider (the one `writeOpperConfig` selects) and emits the
- * per-session `X-Opper-Trace-Id` / `X-Opper-Parent-Span-Id` headers that drive
- * provider affinity and the session-root span tree. Rewritten each launch so
- * CLI upgrades ship plugin changes.
+ * Ship the Opper provider plugin into the real Hermes home so Hermes loads it,
+ * and return a restore fn. The plugin registers the `opper` provider and emits
+ * the per-session `X-Opper-Trace-Id` / `X-Opper-Parent-Span-Id` headers that
+ * drive provider affinity and the session-root span tree. Any pre-existing files
+ * are captured and put back; a dir we created is removed — so a one-off launch
+ * leaves the user's plugins untouched.
  */
-async function writeOpperPlugin(home: string): Promise<void> {
-  const dir = join(home, "plugins", "model-providers", "opper");
-  await mkdir(dir, { recursive: true });
-  for (const file of ["__init__.py", "plugin.yaml"]) {
-    const contents = await readFile(assetPath(join("hermes-opper-plugin", file)), "utf8");
-    await writeFile(join(dir, file), contents, { mode: 0o644 });
+async function installPlugin(home: string): Promise<() => Promise<void>> {
+  const dir = opperPluginDir(home);
+  const files = ["__init__.py", "plugin.yaml"];
+  const dirExisted = existsSync(dir);
+  const prior: Record<string, string | null> = {};
+  for (const f of files) {
+    const p = join(dir, f);
+    prior[f] = existsSync(p) ? await readFile(p, "utf8") : null;
   }
+
+  await mkdir(dir, { recursive: true });
+  for (const f of files) {
+    const contents = await readFile(assetPath(join("hermes-opper-plugin", f)), "utf8");
+    await writeFile(join(dir, f), contents, { mode: 0o644 });
+  }
+
+  return async () => {
+    try {
+      if (!dirExisted) {
+        await rm(dir, { recursive: true, force: true });
+        // Best-effort: drop now-empty parents we may have created.
+        await rm(join(home, "plugins", "model-providers"), { recursive: false, force: true }).catch(() => {});
+        await rm(join(home, "plugins"), { recursive: false, force: true }).catch(() => {});
+      } else {
+        for (const f of files) {
+          const p = join(dir, f);
+          if (prior[f] !== null) await writeFile(p, prior[f]!, { mode: 0o644 });
+          else await rm(p, { force: true });
+        }
+      }
+    } catch (err) {
+      process.stderr.write(
+        `opper: failed to restore Hermes plugin after launch: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  };
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  await writeOpperConfig(routing);
-  await writeOpperPlugin(hermesHome());
+  const home = hermesHome();
+  const path = hermesConfigPath();
+  await mkdir(home, { recursive: true });
 
-  const result = run("hermes", args, {
-    inherit: true,
-    env: {
-      ...process.env,
-      HERMES_HOME: hermesHome(),
-      OPPER_API_KEY: routing.apiKey,
-    },
-  });
-  return result.code;
+  // Snapshot the real config.yaml (whole-file backup) so the user's settings
+  // come back exactly; if there was none, we delete the one we write.
+  const configExisted = existsSync(path);
+  let snapshot: SnapshotHandle | undefined;
+  if (configExisted) {
+    snapshot = await takeSnapshot("hermes", path);
+    await rotateBackups("hermes", 20);
+  }
+  const restorePlugin = await installPlugin(home);
+
+  try {
+    await writeOpperConfig(routing);
+    const result = run("hermes", args, {
+      inherit: true,
+      env: {
+        ...process.env,
+        HERMES_HOME: home,
+        OPPER_API_KEY: routing.apiKey,
+      },
+    });
+    return result.code;
+  } finally {
+    try {
+      if (configExisted && snapshot) await restoreSnapshot(snapshot, path);
+      else await rm(path, { force: true });
+    } catch (err) {
+      process.stderr.write(
+        `opper: failed to restore ${path} after launch${
+          snapshot ? ` — recover with: cp "${snapshot.backupPath}" "${path}"` : ""
+        }: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+    await restorePlugin();
+  }
 }
 
 export const hermes: AgentAdapter = {
