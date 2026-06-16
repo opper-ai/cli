@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
@@ -10,6 +9,7 @@ import { npmInstallGlobal } from "./npm-install.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
 import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
+import { assetPath } from "../util/assets.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -17,17 +17,24 @@ import type {
   OpperRouting,
 } from "./types.js";
 
-// The provider key we own inside ~/.pi/agent/models.json. Anything outside
-// this key is the user's own configuration and stays untouched.
+// The provider key we own inside ~/.pi/agent/models.json. Everything else in
+// the user's pi home — skills, settings, MCP servers, other providers — is
+// theirs and is loaded normally; we never run pi against an isolated home.
 const PROVIDER_KEY = "opper";
+
+function piAgentDir(): string {
+  return join(homedir(), ".pi", "agent");
+}
+function piConfigPath(): string {
+  return join(piAgentDir(), "models.json");
+}
+function piExtensionPath(): string {
+  return join(piAgentDir(), "extensions", "opper-session.ts");
+}
 
 interface PiModelsFile {
   providers?: Record<string, unknown>;
   [k: string]: unknown;
-}
-
-function piConfigPath(): string {
-  return join(homedir(), ".pi", "agent", "models.json");
 }
 
 async function readConfig(): Promise<PiModelsFile> {
@@ -47,8 +54,9 @@ async function writeConfig(data: PiModelsFile): Promise<void> {
 }
 
 /**
- * Idempotently install our `opper` provider entry. Other providers in the
- * same file (ollama, etc.) are preserved.
+ * Idempotently install our `opper` provider entry. Other providers in the same
+ * file (ollama, etc.) are preserved. Per-session trace headers are added by the
+ * shipped extension (writeExtension), not baked in here.
  */
 async function setOpperProvider(
   apiKey: string,
@@ -57,9 +65,8 @@ async function setOpperProvider(
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
-  // The launch model is reordered to index 0 (Pi treats the first entry as
-  // the active default in its picker UI). `_launch: true` is the explicit
-  // marker the runtime reads.
+  // The launch model is reordered to index 0 (pi treats the first entry as the
+  // active default in its picker UI). `_launch: true` is the explicit marker.
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
@@ -118,27 +125,87 @@ async function unconfigure(): Promise<void> {
     delete cfg.providers[PROVIDER_KEY];
     await writeConfig(cfg);
   }
+  // Drop the session extension if a previous launch left it behind.
+  await rm(piExtensionPath(), { force: true });
+}
+
+/**
+ * Ship the Opper session extension into the user's real pi home so pi
+ * auto-discovers it, and return a restore fn. The extension re-registers the
+ * `opper` provider on each session boundary with per-session trace headers — so
+ * every pi session (a /new, /resume, /fork, /reset, or a child pi process) gets
+ * its own session-root tree. It is a no-op unless OPPER_API_KEY / OPPER_BASE_URL
+ * are set, so it can't disturb the user's own pi sessions.
+ *
+ * Snapshot/restore mirrors the provider's: a one-off `opper launch pi` leaves
+ * nothing behind, and any pre-existing file of the same name is put back.
+ */
+async function installExtension(): Promise<() => Promise<void>> {
+  const file = piExtensionPath();
+  const dir = dirname(file);
+  const dirExisted = existsSync(dir);
+  const prior = existsSync(file) ? await readFile(file, "utf8") : null;
+
+  await mkdir(dir, { recursive: true });
+  const contents = await readFile(
+    assetPath(join("pi-opper-extension", "opper-session.ts")),
+    "utf8",
+  );
+  await writeFile(file, contents, { mode: 0o644 });
+
+  return async () => {
+    try {
+      if (prior !== null) {
+        await writeFile(file, prior, { mode: 0o644 });
+      } else {
+        await rm(file, { force: true });
+        if (!dirExisted) await rm(dir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      process.stderr.write(
+        `opper: failed to restore ${file} after launch: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    }
+  };
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // Snapshot just `providers.opper` so direct `pi` invocations after
-  // the launch don't inherit this session's URL — and so any sibling
-  // providers (or other top-level keys) the user/agent edited mid-spawn
-  // survive intact.
+  // Snapshot just `providers.opper` so direct `pi` invocations after the launch
+  // don't inherit this session's URL, and the user's other providers / top-level
+  // keys survive intact. The extension is snapshot/restored separately.
   return withJsonKeys(piConfigPath(), [["providers", PROVIDER_KEY]], async () => {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    // Write the api key as the `$OPPER_API_KEY` env reference, not the literal —
+    // pi resolves it from the env we export below, and the extension re-registers
+    // from the same env, so the real key never lands in the user's config on disk.
+    await setOpperProvider("$OPPER_API_KEY", routing.model, routing.baseUrl);
+    const restoreExtension = await installExtension();
+    try {
+      // pi's CLI requires *both* --provider and --model to resolve a non-default
+      // provider — passing only --provider falls through to the auto-resolver.
+      const userPicked = args.some(
+        (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
+      );
+      const piArgs = userPicked
+        ? ["--provider", PROVIDER_KEY, ...args]
+        : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
 
-    // pi's CLI requires *both* --provider and --model to resolve a non-default
-    // provider — passing only --provider falls through to the auto-resolver
-    // and silently picks the first available provider (usually ollama).
-    const userPicked = args.some(
-      (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
-    );
-    const piArgs = userPicked
-      ? ["--provider", PROVIDER_KEY, ...args]
-      : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
-    const result = spawnSync("pi", piArgs, { stdio: "inherit" });
-    return result.status ?? -1;
+      // OPPER_API_KEY / OPPER_BASE_URL feed the extension's per-session provider
+      // re-registration (a partial { headers } registration drops apiKey/baseUrl,
+      // so it re-supplies both from the env).
+      const result = run("pi", piArgs, {
+        inherit: true,
+        env: {
+          ...process.env,
+          OPPER_API_KEY: routing.apiKey,
+          OPPER_BASE_URL: routing.baseUrl,
+        },
+      });
+      return result.code;
+    } finally {
+      await restoreExtension();
+    }
   });
 }
 
