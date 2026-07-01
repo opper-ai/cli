@@ -52,17 +52,17 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 
 ## Agents
 
-`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. After the session, the CLI prints a summary with duration, model, and a traces link.
+`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch — except Claude Desktop (see the table below) — runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link.
 
 ```bash
 opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
-opper launch claude              # Anthropic Messages compat → /v3/compat
-opper launch claude-desktop      # rewire Claude Desktop (GUI) → /v3/compat
-opper launch opencode            # OpenAI Chat Completions compat → /v3/compat
-opper launch codex               # OpenAI Responses compat → /v3/compat
-opper launch hermes              # OpenAI Chat Completions compat → /v3/compat
-opper launch openclaw            # OpenAI Chat Completions compat → /v3/compat (background gateway)
-opper launch pi                  # OpenAI Chat Completions compat → /v3/compat
+opper launch claude              # Anthropic Messages shape → /v3/session/<id>/v1/messages
+opper launch claude-desktop      # rewire Claude Desktop (GUI) → /v3/compat (persistent GUI profile)
+opper launch opencode            # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
+opper launch codex               # OpenAI Responses shape → /v3/session/<id>/responses
+opper launch hermes              # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
+opper launch openclaw            # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions (background gateway)
+opper launch pi                  # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
 
 # Anything after the agent name is forwarded to its CLI — handy for
 # scripting / cron with non-interactive flags.
@@ -91,6 +91,76 @@ opper agents remove claude-desktop   # works for any registered adapter
 ```
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
+
+## Routing through a session without the CLI
+
+For every launchable agent except Claude Desktop, `opper launch` is a thin convenience wrapper. Under the hood it does one thing: it mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required. (Claude Desktop is the exception — it rewires a persistent `/v3/compat` GUI profile instead, so it doesn't get a per-launch session.)
+
+### The endpoint
+
+```
+https://api.opper.ai/v3/session/<session-id>[/<tag>:<value>…]/<native-path>
+```
+
+- **`<session-id>`** — a stable id of the form `sess_<uuid>` (e.g. `sess_3c0a79fd-e8e1-49c5-bc19-62ddd85f00c7`). Reuse the same id for every call in one logical run to group them into a single session. The server validates the format — an id that doesn't start with `sess_` is rejected with `400 {"error":"invalid session id"}`.
+- **`<tag>:<value>`** — optional attribution tags, added as extra path segments (e.g. `/team:growth/env:prod`). URL-encode values; keep keys to `[A-Za-z][A-Za-z0-9_.-]*` and avoid the reserved `opper.` prefix.
+- **`<native-path>`** — whatever path your client's SDK already appends. It also selects the compatibility shape:
+
+| Client speaks | SDK appends | Full session URL |
+|---|---|---|
+| OpenAI Chat Completions | `/chat/completions` | `…/v3/session/<id>/chat/completions` |
+| OpenAI Responses | `/responses` | `…/v3/session/<id>/responses` |
+| Anthropic Messages | `/v1/messages` | `…/v3/session/<id>/v1/messages` |
+
+It's the same behaviour as the `/v3/compat/...` endpoints, just scoped to a session: the `/v3/session/<id>` prefix takes the place of `/v3/compat`, and the native tail still picks the wire shape.
+
+### Auth
+
+Standard Opper bearer token, identical on every shape:
+
+```
+Authorization: Bearer $OPPER_API_KEY
+```
+
+(Anthropic SDKs default to `x-api-key` — set `Authorization` explicitly, or use `ANTHROPIC_AUTH_TOKEN`.)
+
+### Example — a raw call, no CLI
+
+```bash
+SID="sess_$(uuidgen | tr '[:upper:]' '[:lower:]')"
+
+curl -s "https://api.opper.ai/v3/session/$SID/chat/completions" \
+  -H "Authorization: Bearer $OPPER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+The response is an ordinary chat completion, with `cost`, `usage`, and a `meta.trace_uuid` for the call. Every request you send to the same `$SID` — any model, any wire shape — lands in that one session.
+
+### Point a client at it
+
+Set the client's base URL to the session endpoint (without the native path — the SDK adds that) and use your Opper key. How you set it depends on the client:
+
+**Env-var clients** — any OpenAI-compatible SDK, and env-var-driven agents like Claude Code, read the base URL from the environment:
+
+```bash
+SID="sess_$(uuidgen | tr '[:upper:]' '[:lower:]')"
+
+# OpenAI-compatible SDKs / clients
+export OPENAI_BASE_URL="https://api.opper.ai/v3/session/$SID"
+export OPENAI_API_KEY="$OPPER_API_KEY"
+
+# Claude Code (Anthropic-shaped)
+export ANTHROPIC_BASE_URL="https://api.opper.ai/v3/session/$SID"
+export ANTHROPIC_AUTH_TOKEN="$OPPER_API_KEY"
+```
+
+**Config-file agents** — OpenCode, Hermes, Pi, and OpenClaw don't read those env vars; they take the base URL from their own provider config (`opencode.json`, Hermes' `base_url`, `~/.pi/agent/models.json`, …). Point that provider's base URL at `https://api.opper.ai/v3/session/<id>` and use your Opper key.
+
+Either way, that is exactly what `opper launch` does for you — plus a fresh id per run and an end-of-session cost summary.
 
 ## Ask — built-in support agent
 
