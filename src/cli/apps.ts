@@ -45,6 +45,7 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
     .option("--repo <url>", "git repo to clone and deploy (instead of --dir)")
     .option("--ref <branch|tag>", "branch or tag to clone (with --repo)")
     .option("--config <json>", 'config overrides, e.g. {"cpu":1,"memory":2048}')
+    .option("--wait", "wait for the build to finish; exit non-zero if it fails")
     .action(
       async (cmdOpts: {
         name?: string;
@@ -52,6 +53,7 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
         repo?: string;
         ref?: string;
         config?: string;
+        wait?: boolean;
       }) => {
         await appsCreateCommand({
           ...(cmdOpts.name ? { name: cmdOpts.name } : {}),
@@ -59,6 +61,7 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
           ...(cmdOpts.repo ? { repo: cmdOpts.repo } : {}),
           ...(cmdOpts.ref ? { ref: cmdOpts.ref } : {}),
           ...(cmdOpts.config ? { config: cmdOpts.config } : {}),
+          ...(cmdOpts.wait ? { wait: true } : {}),
           key: ctx.key(),
         });
       },
@@ -69,16 +72,27 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
     .description("Upload new source and roll the app")
     .argument("<name>", "app name")
     .option("--dir <path>", "source directory", ".")
-    .action(async (name: string, cmdOpts: { dir: string }) => {
-      await appsRedeployCommand({ name, dir: cmdOpts.dir, key: ctx.key() });
+    .option("--wait", "wait for the build to finish; exit non-zero if it fails")
+    .action(async (name: string, cmdOpts: { dir: string; wait?: boolean }) => {
+      await appsRedeployCommand({
+        name,
+        dir: cmdOpts.dir,
+        ...(cmdOpts.wait ? { wait: true } : {}),
+        key: ctx.key(),
+      });
     });
 
   apps
     .command("delete")
     .description("Stop and remove an app")
     .argument("<name>", "app name")
-    .action(async (name: string) => {
-      await appsDeleteCommand({ name, key: ctx.key() });
+    .option("-y, --yes", "skip the confirmation prompt")
+    .action(async (name: string, cmdOpts: { yes?: boolean }) => {
+      await appsDeleteCommand({
+        name,
+        ...(cmdOpts.yes ? { yes: true } : {}),
+        key: ctx.key(),
+      });
     });
 
   apps
@@ -123,10 +137,29 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
     .description("Set or update a secret")
     .argument("<app>", "app name")
     .argument("<name>", "secret name, e.g. OPPER_API_KEY")
-    .argument("<value>", "secret value")
-    .action(async (app: string, name: string, value: string) => {
-      await appsSecretsSetCommand({ app, name, value, key: ctx.key() });
-    });
+    .argument(
+      "[value]",
+      "secret value; omit and use --from-stdin/--from-file to keep it off argv",
+    )
+    .option("--from-stdin", "read the value from stdin")
+    .option("--from-file <path>", "read the value from a file")
+    .action(
+      async (
+        app: string,
+        name: string,
+        value: string | undefined,
+        cmdOpts: { fromStdin?: boolean; fromFile?: string },
+      ) => {
+        await appsSecretsSetCommand({
+          app,
+          name,
+          ...(value !== undefined ? { value } : {}),
+          ...(cmdOpts.fromStdin ? { fromStdin: true } : {}),
+          ...(cmdOpts.fromFile ? { fromFile: cmdOpts.fromFile } : {}),
+          key: ctx.key(),
+        });
+      },
+    );
 
   secrets
     .command("delete")

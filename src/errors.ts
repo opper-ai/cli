@@ -7,6 +7,7 @@ export type OpperErrorCode =
   | "API_ERROR"
   | "NETWORK_ERROR"
   | "INVALID_ARGUMENT"
+  | "DEPLOY_FAILED"
   | "USER_CANCELLED";
 
 export const EXIT_CODES: Record<OpperErrorCode, number> = {
@@ -18,6 +19,7 @@ export const EXIT_CODES: Record<OpperErrorCode, number> = {
   API_ERROR: 6,
   NETWORK_ERROR: 7,
   INVALID_ARGUMENT: 8,
+  DEPLOY_FAILED: 9,
   USER_CANCELLED: 0,
 };
 

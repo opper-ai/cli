@@ -100,7 +100,6 @@ describe("apps create", () => {
         id: "a2",
         name: "my-agent",
         status: "pending",
-        deploy_token: "tok",
       });
       const log = captureLog();
       try {
@@ -204,10 +203,105 @@ describe("apps run / secrets / delete", () => {
     delMock.mockResolvedValue(undefined);
     const log = captureLog();
     try {
-      await appsDeleteCommand({ name: "hermes", key: "default" });
+      await appsDeleteCommand({ name: "hermes", yes: true, key: "default" });
       expect(delMock).toHaveBeenCalledWith("/v3/apps/hermes");
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe("apps --wait / delete guard / secrets input", () => {
+  beforeEach(() => {
+    postMultipartMock.mockReset();
+    getMock.mockReset();
+    postMock.mockReset();
+    delMock.mockReset();
+  });
+
+  it("--wait polls the app until it is running", async () => {
+    await setSlot("default", { apiKey: "k" });
+    const dir = await mkdtemp(join(tmpdir(), "opper-app-src-"));
+    try {
+      await writeFile(join(dir, "agent.py"), "x\n");
+      postMultipartMock.mockResolvedValue({ id: "a", name: "w", status: "pending" });
+      getMock.mockResolvedValue({ id: "a", name: "w", status: "running" });
+      const log = captureLog();
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await appsCreateCommand({ name: "w", dir, wait: true, key: "default" });
+        expect(getMock).toHaveBeenCalledWith("/v3/apps/w");
+      } finally {
+        err.mockRestore();
+        log.mockRestore();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("--wait fails with DEPLOY_FAILED when the build fails", async () => {
+    await setSlot("default", { apiKey: "k" });
+    const dir = await mkdtemp(join(tmpdir(), "opper-app-src-"));
+    try {
+      await writeFile(join(dir, "agent.py"), "x\n");
+      postMultipartMock.mockResolvedValue({ id: "a", name: "w", status: "pending" });
+      getMock.mockResolvedValue({ id: "a", name: "w", status: "failed" });
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const log = captureLog();
+      try {
+        await expect(
+          appsCreateCommand({ name: "w", dir, wait: true, key: "default" }),
+        ).rejects.toMatchObject({ code: "DEPLOY_FAILED" });
+      } finally {
+        err.mockRestore();
+        log.mockRestore();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("delete refuses without --yes in a non-interactive shell", async () => {
+    await setSlot("default", { apiKey: "k" });
+    await expect(
+      appsDeleteCommand({ name: "hermes", key: "default" }),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("secrets set reads the value from --from-file (off argv)", async () => {
+    await setSlot("default", { apiKey: "k" });
+    postMock.mockResolvedValue({});
+    const dir = await mkdtemp(join(tmpdir(), "opper-secret-"));
+    try {
+      const f = join(dir, "val");
+      await writeFile(f, "s3cr3t");
+      const log = captureLog();
+      try {
+        await appsSecretsSetCommand({
+          app: "hermes",
+          name: "TOKEN",
+          fromFile: f,
+          key: "default",
+        });
+        expect(postMock).toHaveBeenCalledWith("/v3/apps/hermes/secrets", {
+          name: "TOKEN",
+          value: "s3cr3t",
+        });
+      } finally {
+        log.mockRestore();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("secrets set errors when no value is provided", async () => {
+    await setSlot("default", { apiKey: "k" });
+    await expect(
+      appsSecretsSetCommand({ app: "hermes", name: "TOKEN", key: "default" }),
+    ).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(postMock).not.toHaveBeenCalled();
   });
 });
