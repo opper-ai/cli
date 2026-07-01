@@ -52,7 +52,7 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 
 ## Agents
 
-`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link.
+`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch — except Claude Desktop (see the table below) — runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link.
 
 ```bash
 opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
@@ -94,7 +94,7 @@ This is the non-interactive equivalent of the menu's "Remove Opper integration" 
 
 ## Routing through a session without the CLI
 
-`opper launch` is a thin convenience wrapper. Under the hood it does one thing: it mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required.
+For every launchable agent except Claude Desktop, `opper launch` is a thin convenience wrapper. Under the hood it does one thing: it mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required. (Claude Desktop is the exception — it rewires a persistent `/v3/compat` GUI profile instead, so it doesn't get a per-launch session.)
 
 ### The endpoint
 
