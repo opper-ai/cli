@@ -140,23 +140,27 @@ curl -s "https://api.opper.ai/v3/session/$SID/chat/completions" \
 
 The response is an ordinary chat completion, with `cost`, `usage`, and a `meta.trace_uuid` for the call. Every request you send to the same `$SID` — any model, any wire shape — lands in that one session.
 
-### Point any agent at it
+### Point a client at it
 
-Set the agent's base URL to the session endpoint (without the native path — the SDK adds that) and use your Opper key:
+Set the client's base URL to the session endpoint (without the native path — the SDK adds that) and use your Opper key. How you set it depends on the client:
+
+**Env-var clients** — any OpenAI-compatible SDK, and env-var-driven agents like Claude Code, read the base URL from the environment:
 
 ```bash
 SID="sess_$(uuidgen | tr '[:upper:]' '[:lower:]')"
 
-# OpenAI-shaped agents (OpenCode, Hermes, Pi, …)
+# OpenAI-compatible SDKs / clients
 export OPENAI_BASE_URL="https://api.opper.ai/v3/session/$SID"
 export OPENAI_API_KEY="$OPPER_API_KEY"
 
-# Anthropic-shaped agents (Claude Code)
+# Claude Code (Anthropic-shaped)
 export ANTHROPIC_BASE_URL="https://api.opper.ai/v3/session/$SID"
 export ANTHROPIC_AUTH_TOKEN="$OPPER_API_KEY"
 ```
 
-That is exactly what `opper launch` does for you — plus a fresh id per run and an end-of-session cost summary.
+**Config-file agents** — OpenCode, Hermes, Pi, and OpenClaw don't read those env vars; they take the base URL from their own provider config (`opencode.json`, Hermes' `base_url`, `~/.pi/agent/models.json`, …). Point that provider's base URL at `https://api.opper.ai/v3/session/<id>` and use your Opper key.
+
+Either way, that is exactly what `opper launch` does for you — plus a fresh id per run and an end-of-session cost summary.
 
 ## Ask — built-in support agent
 
