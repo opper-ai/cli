@@ -22,7 +22,6 @@ const {
   appsListCommand,
   appsGetCommand,
   appsCreateCommand,
-  appsRunCommand,
   appsSecretsSetCommand,
   appsDeleteCommand,
 } = await import("../../src/commands/apps.js");
@@ -156,26 +155,10 @@ describe("apps create", () => {
   });
 });
 
-describe("apps run / secrets / delete", () => {
+describe("apps secrets / delete", () => {
   beforeEach(() => {
     postMock.mockReset();
     delMock.mockReset();
-  });
-
-  it("run posts {input} and prints the data string", async () => {
-    await setSlot("default", { apiKey: "k" });
-    postMock.mockResolvedValue({ data: "Hello, Opper team!" });
-    const log = captureLog();
-    try {
-      await appsRunCommand({ name: "hermes", input: "hi", key: "default" });
-      expect(postMock).toHaveBeenCalledWith("/v3/apps/hermes/run", {
-        input: "hi",
-      });
-      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(out).toContain("Hello, Opper team!");
-    } finally {
-      log.mockRestore();
-    }
   });
 
   it("secrets set posts name+value", async () => {

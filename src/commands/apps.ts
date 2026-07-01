@@ -295,26 +295,6 @@ export async function appsLogsCommand(opts: AppsLogsOptions): Promise<void> {
   }
 }
 
-// ---- run --------------------------------------------------------------------
-
-export interface AppsRunOptions {
-  name: string;
-  input: string;
-  key: string;
-}
-
-export async function appsRunCommand(opts: AppsRunOptions): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
-  const api = new OpperApi(ctx);
-  const resp = await api.post<{ data?: unknown }>(
-    `/v3/apps/${encodeURIComponent(opts.name)}/run`,
-    { input: opts.input },
-  );
-  const out = resp.data;
-  if (typeof out === "string") console.log(out);
-  else console.log(JSON.stringify(resp, null, 2));
-}
-
 // ---- secrets ------------------------------------------------------------------
 
 export interface AppsSecretsListOptions {

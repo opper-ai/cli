@@ -8,7 +8,6 @@ import {
   appsRedeployCommand,
   appsDeleteCommand,
   appsLogsCommand,
-  appsRunCommand,
   appsSecretsListCommand,
   appsSecretsSetCommand,
   appsSecretsDeleteCommand,
@@ -101,15 +100,6 @@ const register: RegisterFn = (program: Command, ctx: CliContext) => {
     .argument("<name>", "app name")
     .action(async (name: string) => {
       await appsLogsCommand({ name, key: ctx.key() });
-    });
-
-  apps
-    .command("run")
-    .description("Invoke the app once")
-    .argument("<name>", "app name")
-    .requiredOption("--input <text>", "input passed to the agent")
-    .action(async (name: string, cmdOpts: { input: string }) => {
-      await appsRunCommand({ name, input: cmdOpts.input, key: ctx.key() });
     });
 
   apps
