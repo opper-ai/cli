@@ -41,19 +41,48 @@ export async function appsShellCommand(opts: AppsShellOptions): Promise<void> {
   });
 
   let raw = false;
+  let restored = false;
   const enterRaw = () => {
     if (!raw) {
       stdin.setRawMode(true);
       raw = true;
     }
   };
+  // Undo everything the remote PTY (ttyd + whatever ran in it) may have turned
+  // on, so it doesn't persist after we disconnect and clobber the user's shell.
+  // setRawMode(false) alone is not enough: the remote enables terminal modes via
+  // output bytes we forwarded to stdout — most painfully the kitty keyboard
+  // protocol, which then turns every keypress into CSI-u byte soup (";1:3u").
+  // These are all "disable" sequences and are no-ops on modes that weren't set.
   const restore = () => {
+    if (restored) return;
+    restored = true;
     if (raw) {
       stdin.setRawMode(false);
       raw = false;
     }
+    if (stdout.isTTY) {
+      stdout.write(
+        "\x1b[<u" + // pop kitty keyboard protocol flags (the ";1:3u" garble)
+          "\x1b[?2004l" + // bracketed paste off
+          "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // mouse reporting off
+          "\x1b[?25h" + // show cursor
+          "\x1b>", // normal keypad (DECPNM)
+      );
+    }
     stdin.pause();
   };
+  // Safety net: the .finally() below restores on a normal disconnect, but an
+  // abrupt exit (Ctrl-\, SIGTERM, terminal hang-up) would otherwise strand the
+  // terminal in the broken mode. restore() is idempotent and sync-safe.
+  const onExitSignal = () => {
+    restore();
+    process.exit(0);
+  };
+  process.once("exit", restore);
+  process.once("SIGINT", onExitSignal);
+  process.once("SIGTERM", onExitSignal);
+  process.once("SIGHUP", onExitSignal);
 
   const onStdin = (chunk: Buffer) => {
     // INPUT frame: command byte + raw bytes (binary-safe, so Ctrl chars
