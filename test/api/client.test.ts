@@ -83,6 +83,23 @@ describe("OpperApi", () => {
     });
   });
 
+  // POST /v3/images returns {"error":"model gpt-5.5 not found"} — a bare string,
+  // not the {message} object other surfaces use. Without the string arm the
+  // user gets the raw JSON blob instead of the sentence.
+  it("extracts a string-valued error body", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ error: "model gpt-5.5 not found" }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      ),
+    ) as unknown as typeof fetch;
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k" });
+    await expect(api.post("/v3/images", {})).rejects.toMatchObject({
+      code: "API_ERROR",
+      message: "HTTP 400: model gpt-5.5 not found",
+    });
+  });
+
   it("maps fetch rejection to NETWORK_ERROR", async () => {
     globalThis.fetch = vi.fn(async () => {
       throw new TypeError("network down");

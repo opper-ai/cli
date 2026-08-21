@@ -285,17 +285,25 @@ opper usage list --from-date=2026-04-01 --group-by=customer_id --out=csv > april
 
 ### Generating an image
 
+Runs against `POST /v3/images`, so any model from `opper models list image`
+works — including dedicated image models like `openai/gpt-image-2`. The
+default is `gemini/gemini-3.1-flash-lite-image` (fast, ~$0.03/image).
+
 ```bash
-# Save to image_<ts>.png in cwd
+# Save to image_<ts>.<ext> in cwd — the extension follows the bytes the
+# model returned (gemini emits JPEG, gpt-image emits PNG)
 opper image generate "a serene mountain lake at dawn"
 
 # Specific output, specific model
 opper image generate "logo concept" -o ./out/logo.png \
-  -m vertexai/imagen-4.0-fast-generate-001-eu
+  -m openai/gpt-image-2
 
 # Print raw base64 (for piping)
 opper image generate "icon" --base64 | base64 -d > icon.png
 ```
+
+Generated images are not persisted to `/v3/files` — you get the bytes and
+nothing counts against the org's storage quota.
 
 ### Routing an agent through Opper for a one-shot job
 

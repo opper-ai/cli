@@ -330,7 +330,7 @@ const register: RegisterFn = (program, ctx) => {
     .command("generate")
     .description("Generate an image from a prompt")
     .argument("<prompt>", "text prompt")
-    .option("-o, --output <path>", "output file path (default: image_<ts>.png in cwd)")
+    .option("-o, --output <path>", "output file path (default: image_<ts>.<ext> in cwd)")
     .option("--base64", "print raw base64 to stdout instead of saving a file")
     .option("-m, --model <id>", "image model identifier")
     .action(async (

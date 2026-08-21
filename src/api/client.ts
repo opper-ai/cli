@@ -6,7 +6,10 @@ export interface OpperApiConfig {
 }
 
 interface ErrorBody {
-  error?: { message?: string; type?: string };
+  // `error` is an object on most surfaces ({message, type}) but a bare string
+  // on some (e.g. POST /v3/images' validation 400s). Without the string arm we
+  // fall through to printing the raw JSON body at the user.
+  error?: { message?: string; type?: string } | string;
   detail?: string;
   message?: string;
 }
@@ -162,7 +165,9 @@ export class OpperApi {
         /* leave body null */
       }
     }
-    const detail = body?.error?.message ?? body?.detail ?? body?.message ?? text;
+    const err = body?.error;
+    const errMessage = typeof err === "string" ? err : err?.message;
+    const detail = errMessage ?? body?.detail ?? body?.message ?? text;
     throw new OpperError(
       "API_ERROR",
       `HTTP ${res.status}${detail ? `: ${detail}` : ""}`,
