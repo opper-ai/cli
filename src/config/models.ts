@@ -16,8 +16,14 @@ export const DEFAULT_MODELS = {
   haiku: "claude-haiku-4-5",
   gpt: "gpt-5.5",
   gemini: "gemini-3.1-pro-preview",
-  /** Image generation default (Imagen via Opper). */
-  image: "vertexai/imagen-4.0-fast-generate-001-eu",
+  /**
+   * Image generation default for `opper image generate` (POST /v3/images).
+   * Gemini 3.1 Flash Lite Image — fast (~7s for 1024px) and cheap
+   * (~$0.03/image). Replaces vertexai/imagen-4.0-fast-generate-001-eu,
+   * which Google retired 2026-06-30. Note this row is US-region; the
+   * retired one was EU.
+   */
+  image: "gemini/gemini-3.1-flash-lite-image",
 } as const;
 
 /**

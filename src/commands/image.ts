@@ -16,22 +16,36 @@ export interface ImageGenerateOptions {
   base64?: boolean;
 }
 
-interface CallResponse {
-  data?: unknown;
+/** One entry of POST /v3/images' `data[]`. */
+interface ImageData {
+  b64_json?: string;
+  mime_type?: string;
+  revised_prompt?: string;
 }
 
-function timestampName(): string {
-  return `image_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+interface ImagesResponse {
+  data?: ImageData[];
+  usage?: { cost?: number; images?: number };
 }
 
-function extractBase64(raw: unknown): string | null {
-  if (typeof raw === "string") return raw;
-  if (raw && typeof raw === "object") {
-    const obj = raw as Record<string, unknown>;
-    if (typeof obj.base64 === "string") return obj.base64;
-    if (typeof obj.image === "string") return obj.image;
+/**
+ * File extension for the bytes the gateway returned. Models don't all emit
+ * PNG — gemini's image models return JPEG — so naming every file `.png`
+ * writes a mislabelled image.
+ */
+function extensionFor(mimeType: string | undefined): string {
+  switch (mimeType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    default:
+      return "png";
   }
-  return null;
+}
+
+function timestampName(ext: string): string {
+  return `image_${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
 }
 
 export async function imageGenerateCommand(
@@ -47,20 +61,24 @@ export async function imageGenerateCommand(
 
   const ctx = await resolveApiContext(opts.key);
   const api = new OpperApi(ctx);
-  const body = {
-    name: "cli/image-generate",
-    instructions: "Generate an image for the user's prompt.",
-    input: opts.prompt,
+  // POST /v3/images is the image endpoint. /v3/call is the *function* API:
+  // it only reaches image-output chat models, and a dedicated image model
+  // (openai/gpt-image-2 et al., type "image") fails model resolution there
+  // with a 500. `store: false` keeps a throwaway CLI generation out of the
+  // org's /v3/files quota — we hand the caller the bytes right here.
+  const result = await api.post<ImagesResponse>("/v3/images", {
     model: opts.model ?? DEFAULT_IMAGE_MODEL,
-  };
-  const result = await api.post<CallResponse>("/v3/call", body);
+    prompt: opts.prompt,
+    store: false,
+  });
 
-  const b64 = extractBase64(result.data);
+  const image = result.data?.[0];
+  const b64 = image?.b64_json;
   if (!b64) {
     throw new OpperError(
       "API_ERROR",
       "Upstream did not return image bytes",
-      "Check the model supports image generation.",
+      "Check the model supports image generation (`opper models list image`).",
     );
   }
 
@@ -69,8 +87,12 @@ export async function imageGenerateCommand(
     return;
   }
 
-  const target = opts.output ?? join(process.cwd(), timestampName());
+  const target =
+    opts.output ?? join(process.cwd(), timestampName(extensionFor(image.mime_type)));
   const bytes = Buffer.from(b64, "base64");
   await writeFile(target, bytes);
-  console.log(brand.accent(`✓ Saved image to ${target}`));
+
+  const cost = result.usage?.cost;
+  const suffix = typeof cost === "number" ? brand.dim(` ($${cost.toFixed(4)})`) : "";
+  console.log(brand.accent(`✓ Saved image to ${target}`) + suffix);
 }
