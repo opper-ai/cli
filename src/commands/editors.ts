@@ -1,4 +1,5 @@
 import { configureOpenCode } from "../setup/opencode.js";
+import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import {
   configureGitHubCopilotVSCode,
   unconfigureGitHubCopilotVSCode,
@@ -41,9 +42,11 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  const models = await resolveOpenCodeModels();
   const result = await configureOpenCode({
     location: opts.location,
     ...(opts.overwrite ? { overwrite: true } : {}),
+    ...(models ? { models } : {}),
   });
   if (!result.wrote && result.reason === "exists") {
     console.log(

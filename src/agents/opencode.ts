@@ -7,7 +7,8 @@ import {
   configureOpenCode,
   readProjectConfigState,
 } from "../setup/opencode.js";
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
+import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
@@ -46,11 +47,18 @@ async function isConfigured(): Promise<boolean> {
 }
 
 async function configure(): Promise<void> {
-  // overwrite: true so a re-run pulls in the latest template (model list,
-  // costs, defaults). Without it, an existing `provider.opper` block from
-  // an older CLI version would be left in place and the new models would
-  // never appear in OpenCode's picker.
-  await configureOpenCode({ location: "global", overwrite: true });
+  // Prefer the live catalogue over the bundled list. `/v3/compat/models` is
+  // scoped to the key, so this is also the only way the user's own pools and
+  // `dynamic/<name>` routes reach OpenCode's picker. A null result (no key,
+  // gateway unreachable) falls back to the template rather than failing the
+  // launch — OpenCode still merges with models.dev either way.
+  const models = await resolveOpenCodeModels();
+
+  // overwrite: true so a re-run pulls in the latest models, costs and
+  // defaults. Without it, an existing `provider.opper` block from an older
+  // CLI version would be left in place and the new models would never
+  // appear in OpenCode's picker.
+  await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 }
 
 async function unconfigure(): Promise<void> {
@@ -122,12 +130,34 @@ function readBaseUrl(location: "global" | "local"): string | undefined {
   }
 }
 
+/**
+ * The baseURL to put back after a launch.
+ *
+ * A hand-edited self-hosted gateway must survive, which is why the pre-launch
+ * value is restored at all. But an OPPER url that is not the current compat
+ * endpoint is not a preference, it is rot: anyone who followed the old docs
+ * has `/v2/openai` pinned, and restoring it verbatim every launch means they
+ * are never upgraded. A leftover `/v3/session/<id>` from a killed run is the
+ * same problem. Both point at our own host, so both are safe to replace;
+ * anything on another host is the user's own and is left alone.
+ */
+export function restoreTarget(stored: string | undefined): string {
+  if (!stored) return OPPER_COMPAT_URL;
+  if (stored === OPPER_COMPAT_URL) return stored;
+  return stored.startsWith(OPPER_HOST) ? OPPER_COMPAT_URL : stored;
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
   opts: SpawnOptions = {},
 ): Promise<number> {
   const scope = opts.configScope ?? "user";
+  // spawn() rewrites the config on EVERY launch (both scopes below), so
+  // resolving the catalogue here is what makes `opper launch opencode`
+  // pick up new models, changed policy, and newly deployed routes without
+  // the user doing anything. Resolved once and shared by both branches.
+  const models = await resolveOpenCodeModels();
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project
@@ -140,8 +170,8 @@ async function spawn(
     // `overwrite: true` replaces provider.opper with template values
     // (compat URL) — capturing after would discard a hand-edited
     // self-hosted baseURL.
-    const restoreUrl = readBaseUrl("local") ?? OPPER_COMPAT_URL;
-    await configureOpenCode({ location: "local", overwrite: true });
+    const restoreUrl = restoreTarget(readBaseUrl("local"));
+    await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
       const env: NodeJS.ProcessEnv = {
@@ -167,7 +197,7 @@ async function spawn(
     opencodeConfigPath("global"),
     [["provider", "opper"], ["model"], ["$schema"]],
     async () => {
-      await configureOpenCode({ location: "global", overwrite: true });
+      await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 
       // OpenCode reads `./opencode.json` if present and uses it instead
       // of the user-level config. If one exists without an Opper

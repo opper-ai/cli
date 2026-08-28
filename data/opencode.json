@@ -9,65 +9,298 @@
         "apiKey": "{env:OPPER_API_KEY}"
       },
       "models": {
-        "claude-opus-4-7": {
-          "name": "Claude Opus 4.7",
-          "cost": { "input": 5.00, "output": 25.00 },
-          "limit": { "context": 1000000, "output": 128000 }
-        },
-        "claude-sonnet-4-6": {
-          "name": "Claude Sonnet 4.6",
-          "cost": { "input": 3.00, "output": 15.00 },
-          "limit": { "context": 1000000, "output": 64000 }
-        },
-        "claude-haiku-4-5": {
-          "name": "Claude Haiku 4.5",
-          "cost": { "input": 1.00, "output": 5.00 },
-          "limit": { "context": 200000, "output": 64000 }
-        },
-        "gpt-5.5": {
-          "name": "GPT 5.5",
-          "cost": { "input": 5.00, "output": 30.00 },
-          "limit": { "context": 1050000, "output": 128000 },
+        "claude-opus-5": {
+          "name": "Claude Opus 5",
+          "tool_call": true,
           "reasoning": true,
-          "variants": {
-            "xhigh": {
-              "reasoningEffort": "xhigh",
-              "reasoningSummary": "auto"
-            }
+          "attachment": true,
+          "cost": {
+            "input": 5.5,
+            "output": 27.5,
+            "cache_read": 0.55,
+            "cache_write": 6.875
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
           }
         },
-        "gemini-3.1-pro-preview": {
-          "name": "Gemini 3.1 Pro Preview",
-          "cost": { "input": 2.00, "output": 12.00 },
-          "limit": { "context": 1048576, "output": 65536 }
+        "claude-sonnet-5": {
+          "name": "Claude Sonnet 5",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "cost": {
+            "input": 2.2,
+            "output": 11,
+            "cache_read": 0.22,
+            "cache_write": 2.75
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         },
-        "deepinfra/kimi-k2.6": {
-          "name": "Kimi K2.6",
-          "cost": { "input": 0.75, "output": 3.50 },
-          "limit": { "context": 262144, "output": 65536 }
+        "claude-sonnet-4-6": {
+          "name": "Claude Sonnet 4 6",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "cost": {
+            "input": 3.3,
+            "output": 16.5,
+            "cache_read": 0.33,
+            "cache_write": 4.125
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         },
-        "deepinfra/glm-5.1": {
-          "name": "GLM 5.1",
-          "cost": { "input": 1.05, "output": 3.50 },
-          "limit": { "context": 202752, "output": 65536 }
+        "claude-haiku-4-5": {
+          "name": "Claude Haiku 4 5",
+          "tool_call": true,
+          "reasoning": false,
+          "attachment": true,
+          "cost": {
+            "input": 1.1,
+            "output": 5.5,
+            "cache_read": 0.11,
+            "cache_write": 1.375
+          },
+          "limit": {
+            "context": 200000,
+            "output": 64000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         },
-        "fireworks/minimax-m2p7": {
-          "name": "MiniMax M2.7",
-          "cost": { "input": 0.30, "output": 1.20 },
-          "limit": { "context": 196608, "output": 65536 }
+        "gpt-5.5": {
+          "name": "Gpt 5.5",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "cost": {
+            "input": 5,
+            "output": 30,
+            "cache_read": 0.5
+          },
+          "limit": {
+            "context": 1050000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         },
-        "deepinfra/deepseek-v4-pro": {
-          "name": "DeepSeek V4 Pro",
-          "cost": { "input": 1.74, "output": 3.48 },
-          "limit": { "context": 1048576, "output": 65536 }
+        "gpt-5.6-sol": {
+          "name": "Gpt 5.6 Sol",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "cost": {
+            "input": 5,
+            "output": 30,
+            "cache_read": 0.5,
+            "cache_write": 6.25
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 128000
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         },
-        "deepinfra/deepseek-v4-flash": {
-          "name": "DeepSeek V4 Flash",
-          "cost": { "input": 0.14, "output": 0.28 },
-          "limit": { "context": 1048576, "output": 65536 }
+        "gemini-3.5-flash": {
+          "name": "Gemini 3.5 Flash",
+          "tool_call": true,
+          "reasoning": false,
+          "attachment": true,
+          "cost": {
+            "input": 1.5,
+            "output": 9,
+            "cache_read": 0.15
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 65536
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image",
+              "pdf"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "kimi-k3": {
+          "name": "Kimi k3",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": false,
+          "cost": {
+            "input": 3,
+            "output": 15
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 1048576
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "glm-5.2": {
+          "name": "Glm 5.2",
+          "tool_call": true,
+          "reasoning": false,
+          "attachment": false,
+          "cost": {
+            "input": 1.6303,
+            "output": 5.8225
+          },
+          "limit": {
+            "context": 1040000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "deepseek-v4-pro": {
+          "name": "Deepseek v4 Pro",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": false,
+          "cost": {
+            "input": 1.7856,
+            "output": 3.5712
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 65536
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "deepseek-v4-flash": {
+          "name": "Deepseek v4 Flash",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": false,
+          "cost": {
+            "input": 0.25,
+            "output": 0.66
+          },
+          "limit": {
+            "context": 1048576,
+            "output": 393216
+          },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "minimax-m3": {
+          "name": "Minimax m3",
+          "tool_call": true,
+          "reasoning": true,
+          "attachment": true,
+          "cost": {
+            "input": 0.6,
+            "output": 2.4,
+            "cache_read": 0.12
+          },
+          "limit": {
+            "context": 1000000,
+            "output": 131072
+          },
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
         }
       }
     }
-  },
-  "model": "opper/claude-opus-4-7"
+  }
 }

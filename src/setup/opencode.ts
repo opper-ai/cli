@@ -33,6 +33,14 @@ export interface ConfigureOpenCodeOptions {
   location: Location;
   /** If the destination already has an Opper provider, rewrite it. */
   overwrite?: boolean;
+  /**
+   * Model map to write instead of the template's. Supplied by the caller from
+   * `/v3/compat/models` so the block reflects the live, key-scoped catalogue —
+   * including the user's pools and dynamic routes, which no static list can
+   * carry. Omitted (or undefined) keeps the bundled template, which is what
+   * happens when the gateway is unreachable or no key is configured.
+   */
+  models?: Record<string, unknown>;
 }
 
 export interface ConfigureOpenCodeResult {
@@ -55,8 +63,18 @@ export async function configureOpenCode(
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
-    provider: { opper: unknown };
+    provider: { opper: { models?: Record<string, unknown> } };
   };
+  if (opts.models) {
+    templateConfig.provider.opper.models = opts.models;
+  }
+  // The fresh-install path below writes the asset verbatim to preserve its
+  // formatting, so a models override has to be re-serialised — otherwise it
+  // applies only when a config already exists, which is the opposite of the
+  // case that matters most.
+  const serialised = opts.models
+    ? `${JSON.stringify(templateConfig, null, 2)}\n`
+    : template;
 
   await mkdir(dirname(path), { recursive: true });
 
@@ -90,6 +108,6 @@ export async function configureOpenCode(
     }
   }
 
-  await writeFile(path, template, "utf8");
+  await writeFile(path, serialised, "utf8");
   return { path, wrote: true };
 }

@@ -3,7 +3,15 @@ import { useTempOpperHome } from "../helpers/temp-home.js";
 
 const mocks = {
   configureOpenCode: vi.fn(),
+  resolveOpenCodeModels: vi.fn(),
 };
+
+// Stubbed so the suite makes no network call: resolveOpenCodeModels fetches
+// the live catalogue, and a unit test must not depend on a reachable gateway
+// or an ambient OPPER_API_KEY.
+vi.mock("../../src/setup/opencode-models.js", () => ({
+  resolveOpenCodeModels: mocks.resolveOpenCodeModels,
+}));
 
 vi.mock("../../src/setup/opencode.js", () => ({
   configureOpenCode: mocks.configureOpenCode,
@@ -41,6 +49,22 @@ describe("editors commands", () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("opencode writes the live catalogue when it resolves", async () => {
+    // `opper editors opencode` is the config-only entry point; it must not
+    // quietly fall back to the bundled list while `launch` stays current.
+    const models = { "dynamic/my-route": { name: "My Route (route)" } };
+    mocks.resolveOpenCodeModels.mockResolvedValue(models);
+    mocks.configureOpenCode.mockResolvedValue({
+      path: "/tmp/opencode.json",
+      wrote: true,
+    });
+    await editorsOpenCodeCommand({ location: "global", overwrite: false });
+    expect(mocks.configureOpenCode).toHaveBeenCalledWith(
+      expect.objectContaining({ models }),
+    );
+    mocks.resolveOpenCodeModels.mockReset();
   });
 
   it("opencode forwards --overwrite", async () => {
