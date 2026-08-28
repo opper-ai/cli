@@ -8,9 +8,7 @@ import {
   readProjectConfigState,
 } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { OpperApi } from "../api/client.js";
-import { resolveApiContext } from "../api/resolve.js";
-import { fetchOpenCodeModels } from "../setup/opencode-models.js";
+import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
@@ -54,14 +52,7 @@ async function configure(): Promise<void> {
   // `dynamic/<name>` routes reach OpenCode's picker. A null result (no key,
   // gateway unreachable) falls back to the template rather than failing the
   // launch — OpenCode still merges with models.dev either way.
-  let models: Record<string, unknown> | undefined;
-  try {
-    const { apiKey, baseUrl } = await resolveApiContext("default");
-    const fetched = await fetchOpenCodeModels(new OpperApi({ apiKey, baseUrl }));
-    if (fetched) models = fetched;
-  } catch {
-    // No configured key — the template's list is the honest fallback.
-  }
+  const models = await resolveOpenCodeModels();
 
   // overwrite: true so a re-run pulls in the latest models, costs and
   // defaults. Without it, an existing `provider.opper` block from an older

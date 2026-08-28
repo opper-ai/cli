@@ -23,6 +23,11 @@ vi.mock("../../src/setup/opencode.js", () => ({
   readProjectConfigState: readProjectConfigStateMock,
 }));
 
+// configure() resolves the live catalogue; stub it so this suite stays offline.
+vi.mock("../../src/setup/opencode-models.js", () => ({
+  resolveOpenCodeModels: vi.fn().mockResolvedValue(undefined),
+}));
+
 const spawnSyncMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(

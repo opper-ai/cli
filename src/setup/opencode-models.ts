@@ -20,7 +20,8 @@
  * omitted for want of pricing is not thereby removed from the picker.
  */
 
-import type { OpperApi } from "../api/client.js";
+import { OpperApi } from "../api/client.js";
+import { resolveApiContext } from "../api/resolve.js";
 
 /** One entry of `/v3/compat/models`. Only the fields this mapping reads. */
 export interface CompatModel {
@@ -187,6 +188,26 @@ function routeEntry(id: string): OpenCodeModel {
  * an expired key must not leave the user with an empty picker, and OpenCode
  * merges with models.dev regardless.
  */
+/**
+ * The live model map for a config write, or undefined to keep the template.
+ *
+ * Both entry points that write OpenCode's config — `opper launch opencode` and
+ * `opper editors opencode` — go through here, so neither can quietly fall back
+ * to the frozen bundled list while the other stays current.
+ */
+export async function resolveOpenCodeModels(): Promise<
+  Record<string, OpenCodeModel> | undefined
+> {
+  try {
+    const { apiKey, baseUrl } = await resolveApiContext("default");
+    const fetched = await fetchOpenCodeModels(new OpperApi({ apiKey, baseUrl }));
+    return fetched ?? undefined;
+  } catch {
+    // No configured key — the bundled list is the honest fallback.
+    return undefined;
+  }
+}
+
 export async function fetchOpenCodeModels(
   api: OpperApi,
 ): Promise<Record<string, OpenCodeModel> | null> {
