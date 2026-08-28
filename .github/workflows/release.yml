@@ -1,44 +1,48 @@
+# Releases are tag-driven.
+#
+#   1. bump the version in a PR:  npm version <patch|minor|major> --no-git-tag-version
+#   2. merge it
+#   3. tag that commit:           git tag v0.1.30 && git push origin v0.1.30
+#
+# The tag is the trigger and the contract: it names the version, and
+# package.json must already agree (step 4 below fails loudly if it does not).
+#
+# Nothing here pushes to main. The `require-pr-main` ruleset forbids direct
+# pushes to the default branch with no bypass list, which is what broke every
+# release between 2026-07-07 and 2026-08-28: the old workflow bumped the version,
+# committed `release: X` and pushed it to main, and GitHub rejected the push
+# (GH013) before npm was ever contacted. Branch rulesets do not cover tags, so
+# pushing refs/tags/v* needs no exemption and the PR rule stays fully intact.
+#
+# Publishing uses npm OIDC trusted publishing (hence `id-token: write` and the
+# absence of an NPM_TOKEN). That config pins org, repo AND this workflow's
+# filename, so renaming this file breaks publishing.
 name: Release to NPM
 
 on:
   push:
-    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
-      bump:
-        description: 'Version bump'
-        type: choice
-        options: [patch, minor, major]
-        default: patch
-      dry_run:
-        description: 'Dry run (build only, no push or publish)'
-        type: boolean
-        default: false
+      tag:
+        description: 'Existing tag to (re)publish, e.g. v0.1.30'
+        required: true
 
 permissions:
   contents: write
   id-token: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   release:
-    # Skip the bot's own release commit (avoid loops) and any commit that opts out via [skip release].
-    # head_commit.message is only used in `if:` (evaluated by Actions, not shell-interpolated).
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (
-        !startsWith(github.event.head_commit.message, 'release:') &&
-        !contains(github.event.head_commit.message, '[skip release]')
-      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v5
         with:
@@ -46,10 +50,27 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      - name: Configure git
+      # A mismatch means the bump PR was never merged, or the wrong commit got
+      # tagged. Publishing anyway would ship a package whose version came from
+      # neither the tag nor the reviewed diff, so stop before building.
+      - name: Check the tag matches package.json
+        id: version
+        env:
+          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          set -euo pipefail
+          case "$RAW_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$RAW_TAG' is not a vMAJOR.MINOR.PATCH tag"; exit 1 ;;
+          esac
+          VERSION="${RAW_TAG#v}"
+          PKG=$(node -p "require('./package.json').version")
+          if [ "$PKG" != "$VERSION" ]; then
+            echo "::error::tag $RAW_TAG does not match package.json ($PKG). Bump package.json in a PR, merge it, then tag that commit."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Install
         run: npm ci
@@ -60,131 +81,12 @@ jobs:
           npm run build
           npm test
 
-      # Always-run preview so dry-runs (and real runs' logs) surface what
-      # version *would* be cut, even though the bump-and-push step does its
-      # own compute internally for race recovery.
-      - name: Show planned version
-        env:
-          BUMP: ${{ github.event.inputs.bump || 'patch' }}
-        run: |
-          set -euo pipefail
-          git fetch origin --tags --prune --force >/dev/null
-          pkg=$(node -p "require('./package.json').version")
-          tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
-          : "${tag:=0.0.0}"
-          base=$(printf '%s\n%s\n' "$pkg" "$tag" | sort -V | tail -1)
-          NEXT=$(awk -v v="$base" -v k="$BUMP" 'BEGIN {
-            split(v, p, ".")
-            if (k == "major") { p[1]++; p[2]=0; p[3]=0 }
-            else if (k == "minor") { p[2]++; p[3]=0 }
-            else { p[3]++ }
-            print p[1] "." p[2] "." p[3]
-          }')
-          echo "package.json: $pkg, highest tag: $tag"
-          echo "Baseline: $base, bump: $BUMP, planned: v$NEXT"
-
-      # Bump-and-push live in one step so a race (another commit landed on main
-      # between checkout and push) can be resolved by resetting to origin/main
-      # and recomputing the version, instead of trying to rebase a package.json
-      # bump that would conflict with the new HEAD.
-      - name: Bump, tag, and push (atomic, recompute on race)
-        id: release
-        if: github.event.inputs.dry_run != 'true'
-        env:
-          BUMP: ${{ github.event.inputs.bump || 'patch' }}
-        run: |
-          set -euo pipefail
-
-          git fetch origin --tags --prune --force >/dev/null
-
-          # Take the higher of (local package.json) and (highest published v* tag)
-          # so we never collide with a version another (possibly racing) run cut.
-          compute_next() {
-            local pkg tag base
-            pkg=$(node -p "require('./package.json').version")
-            tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
-            : "${tag:=0.0.0}"
-            base=$(printf '%s\n%s\n' "$pkg" "$tag" | sort -V | tail -1)
-            awk -v v="$base" -v k="$BUMP" 'BEGIN {
-              split(v, p, ".")
-              if (k == "major") { p[1]++; p[2]=0; p[3]=0 }
-              else if (k == "minor") { p[2]++; p[3]=0 }
-              else { p[3]++ }
-              print p[1] "." p[2] "." p[3]
-            }'
-          }
-
-          apply_bump_local() {
-            npm version "$1" --no-git-tag-version >/dev/null
-          }
-
-          apply_bump_with_commit() {
-            apply_bump_local "$1"
-            git add package.json package-lock.json
-            git commit -m "release: $1"
-            git tag -a "v$1" -m "release: $1"
-          }
-
-          # Rerun idempotency: if a prior attempt for THIS trigger SHA already
-          # pushed a release tag (because npm publish or gh release create
-          # failed afterwards), reuse that version instead of cutting a new one.
-          # We re-apply the version bump locally so npm publish picks up the
-          # right package.json, but skip the push entirely. The publish and
-          # gh-release steps are idempotent.
-          EXISTING_TAG=""
-          if [ -n "${GITHUB_SHA:-}" ]; then
-            while read -r t; do
-              [ -z "$t" ] && continue
-              c=$(git rev-list -n 1 "$t")
-              p=$(git log -1 --format=%P "$c" | awk '{print $1}')
-              if [ "$p" = "$GITHUB_SHA" ]; then
-                EXISTING_TAG="$t"
-                break
-              fi
-            done < <(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname)
-          fi
-
-          if [ -n "$EXISTING_TAG" ]; then
-            VER="${EXISTING_TAG#v}"
-            echo "Rerun detected for $GITHUB_SHA: reusing $EXISTING_TAG (skipping bump and push)"
-            apply_bump_local "$VER"
-            echo "version=$VER" >> "$GITHUB_OUTPUT"
-            echo "tag=$EXISTING_TAG" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          NEXT=$(compute_next)
-          echo "Computed next version: $NEXT"
-          apply_bump_with_commit "$NEXT"
-
-          attempts=3
-          for attempt in $(seq 1 $attempts); do
-            if git push origin "HEAD:refs/heads/main" "refs/tags/v$NEXT" --atomic; then
-              echo "Pushed v$NEXT on attempt $attempt"
-              echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-              echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "Push failed (attempt $attempt of $attempts)"
-            if [ "$attempt" -eq "$attempts" ]; then
-              exit 1
-            fi
-            echo "Resetting to origin/main and recomputing..."
-            git fetch origin main
-            git tag -d "v$NEXT" 2>/dev/null || true
-            git reset --hard origin/main
-            NEXT=$(compute_next)
-            echo "Recomputed next version: $NEXT"
-            apply_bump_with_commit "$NEXT"
-          done
-          exit 1
-
-      # Idempotent: skip if the version is already on npm (e.g. a previous
-      # run published successfully but failed at the gh-release step).
+      # Both remaining steps are idempotent so a re-run after a half-finished
+      # release (published to npm but failed to cut the GitHub release, or the
+      # reverse) completes it instead of failing.
       - name: Publish to npm
-        if: github.event.inputs.dry_run != 'true'
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           if npm view "@opperai/cli@$VERSION" version >/dev/null 2>&1; then
             echo "@opperai/cli@$VERSION already published; skipping."
@@ -193,10 +95,9 @@ jobs:
           fi
 
       - name: Create GitHub release
-        if: github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; skipping."

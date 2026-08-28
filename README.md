@@ -334,6 +334,34 @@ opper launch codex --model claude-sonnet-4-6 -- "implement this feature"
 - Node.js ≥20.12 (for `util.styleText`, used by interactive prompts).
 - macOS, Linux, or WSL. Native Windows shells aren't tested.
 
+## Releasing
+
+Releases are driven by a tag. Nothing publishes on a merge to `main`.
+
+```bash
+# 1. bump the version on a branch, and open a PR
+npm version patch --no-git-tag-version   # or minor / major
+
+# 2. merge it
+
+# 3. tag the merge commit
+git checkout main && git pull
+git tag v0.1.30 && git push origin v0.1.30
+```
+
+Pushing the tag runs `.github/workflows/release.yml`, which builds, tests,
+publishes to npm and cuts the GitHub release.
+
+The tag and `package.json` must name the same version; the workflow checks this
+before building and fails if they disagree. Both the npm publish and the GitHub
+release are idempotent, so re-running a half-finished release completes it
+rather than erroring.
+
+Two things not to change without care: the workflow's **filename**, which npm's
+trusted-publishing config pins alongside the org and repo, and the fact that it
+never pushes to `main` — the `require-pr-main` ruleset has no bypass list, and a
+workflow that pushes a commit there is rejected before it reaches npm.
+
 ## Source
 
 [github.com/opper-ai/cli](https://github.com/opper-ai/cli)
