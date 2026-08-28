@@ -23,9 +23,11 @@ vi.mock("../../src/setup/opencode.js", () => ({
   readProjectConfigState: readProjectConfigStateMock,
 }));
 
-// configure() resolves the live catalogue; stub it so this suite stays offline.
+// spawn() and configure() resolve the live catalogue; stub it so this suite
+// stays offline, and so a test can vary what the gateway "returns".
+const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/setup/opencode-models.js", () => ({
-  resolveOpenCodeModels: vi.fn().mockResolvedValue(undefined),
+  resolveOpenCodeModels: resolveOpenCodeModelsMock,
 }));
 
 const spawnSyncMock = vi.fn();
@@ -158,6 +160,19 @@ describe("opencode adapter", () => {
     expect(call[1]).toEqual(["chat"]);
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
+  });
+
+  it("spawn writes the live catalogue, so every launch refreshes the model list", async () => {
+    // spawn() rewrites the config on every launch. If it did not pass the
+    // fetched models through, `opper launch opencode` would keep writing the
+    // frozen bundled list while `editors opencode` went dynamic.
+    const models = { "dynamic/my-route": { name: "My Route (route)" } };
+    resolveOpenCodeModelsMock.mockResolvedValueOnce(models);
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn([], { apiKey: "k", baseUrl: "https://api.opper.ai/v3/compat" });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ models }),
+    );
   });
 
   it("spawn rewrites provider.opper.options.baseURL to routing.baseUrl mid-launch", async () => {

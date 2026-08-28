@@ -136,6 +136,11 @@ async function spawn(
   opts: SpawnOptions = {},
 ): Promise<number> {
   const scope = opts.configScope ?? "user";
+  // spawn() rewrites the config on EVERY launch (both scopes below), so
+  // resolving the catalogue here is what makes `opper launch opencode`
+  // pick up new models, changed policy, and newly deployed routes without
+  // the user doing anything. Resolved once and shared by both branches.
+  const models = await resolveOpenCodeModels();
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project
@@ -149,7 +154,7 @@ async function spawn(
     // (compat URL) — capturing after would discard a hand-edited
     // self-hosted baseURL.
     const restoreUrl = readBaseUrl("local") ?? OPPER_COMPAT_URL;
-    await configureOpenCode({ location: "local", overwrite: true });
+    await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
       const env: NodeJS.ProcessEnv = {
@@ -175,7 +180,7 @@ async function spawn(
     opencodeConfigPath("global"),
     [["provider", "opper"], ["model"], ["$schema"]],
     async () => {
-      await configureOpenCode({ location: "global", overwrite: true });
+      await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 
       // OpenCode reads `./opencode.json` if present and uses it instead
       // of the user-level config. If one exists without an Opper
