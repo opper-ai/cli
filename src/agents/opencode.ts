@@ -8,6 +8,9 @@ import {
   readProjectConfigState,
 } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { OpperApi } from "../api/client.js";
+import { resolveApiContext } from "../api/resolve.js";
+import { fetchOpenCodeModels } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
 import { brand } from "../ui/colors.js";
@@ -46,11 +49,25 @@ async function isConfigured(): Promise<boolean> {
 }
 
 async function configure(): Promise<void> {
-  // overwrite: true so a re-run pulls in the latest template (model list,
-  // costs, defaults). Without it, an existing `provider.opper` block from
-  // an older CLI version would be left in place and the new models would
-  // never appear in OpenCode's picker.
-  await configureOpenCode({ location: "global", overwrite: true });
+  // Prefer the live catalogue over the bundled list. `/v3/compat/models` is
+  // scoped to the key, so this is also the only way the user's own pools and
+  // `dynamic/<name>` routes reach OpenCode's picker. A null result (no key,
+  // gateway unreachable) falls back to the template rather than failing the
+  // launch — OpenCode still merges with models.dev either way.
+  let models: Record<string, unknown> | undefined;
+  try {
+    const { apiKey, baseUrl } = await resolveApiContext("default");
+    const fetched = await fetchOpenCodeModels(new OpperApi({ apiKey, baseUrl }));
+    if (fetched) models = fetched;
+  } catch {
+    // No configured key — the template's list is the honest fallback.
+  }
+
+  // overwrite: true so a re-run pulls in the latest models, costs and
+  // defaults. Without it, an existing `provider.opper` block from an older
+  // CLI version would be left in place and the new models would never
+  // appear in OpenCode's picker.
+  await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 }
 
 async function unconfigure(): Promise<void> {
