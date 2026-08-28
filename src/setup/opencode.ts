@@ -68,6 +68,13 @@ export async function configureOpenCode(
   if (opts.models) {
     templateConfig.provider.opper.models = opts.models;
   }
+  // The fresh-install path below writes the asset verbatim to preserve its
+  // formatting, so a models override has to be re-serialised — otherwise it
+  // applies only when a config already exists, which is the opposite of the
+  // case that matters most.
+  const serialised = opts.models
+    ? `${JSON.stringify(templateConfig, null, 2)}\n`
+    : template;
 
   await mkdir(dirname(path), { recursive: true });
 
@@ -101,6 +108,6 @@ export async function configureOpenCode(
     }
   }
 
-  await writeFile(path, template, "utf8");
+  await writeFile(path, serialised, "utf8");
   return { path, wrote: true };
 }

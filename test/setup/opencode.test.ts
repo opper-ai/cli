@@ -200,4 +200,28 @@ describe("configureOpenCode", () => {
       "https://api.opper.ai/v3/compat",
     );
   });
+
+  it("writes a models override on a FRESH install, not just when merging", async () => {
+    // The fresh-install path wrote the asset verbatim, so an override applied
+    // only when a config already existed — backwards from the common case.
+    const models = { "dynamic/my-route": { name: "My Route (route)" } };
+    const res = await configureOpenCode({ location: "global", overwrite: true, models });
+    const cfg = JSON.parse(readFileSync(res.path, "utf8"));
+    expect(Object.keys(cfg.provider.opper.models)).toEqual(["dynamic/my-route"]);
+  });
+
+  it("applies the override again when a config already exists", async () => {
+    const models = { "claude-sonnet-5": { name: "Claude Sonnet 5" } };
+    await configureOpenCode({ location: "global", overwrite: true });
+    const res = await configureOpenCode({ location: "global", overwrite: true, models });
+    const cfg = JSON.parse(readFileSync(res.path, "utf8"));
+    expect(Object.keys(cfg.provider.opper.models)).toEqual(["claude-sonnet-5"]);
+  });
+
+  it("keeps the bundled list when no override is supplied", async () => {
+    const res = await configureOpenCode({ location: "global", overwrite: true });
+    const cfg = JSON.parse(readFileSync(res.path, "utf8"));
+    expect(Object.keys(cfg.provider.opper.models).length).toBeGreaterThan(0);
+    expect(cfg.provider.opper.options.baseURL).toBe("https://api.opper.ai/v3/compat");
+  });
 });
