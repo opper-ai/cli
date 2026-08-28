@@ -84,6 +84,18 @@ describe("toOpenCodeModels", () => {
     expect(m!.limit.context).toBe(128_000);
   });
 
+  it("uses a route's reported bounds when the gateway resolves all candidates", () => {
+    const route: CompatModel = {
+      id: "dynamic/bounded",
+      context_length: 200_000,
+      opper: { kind: "dynamic_route", max_output_tokens: 32_000 },
+    };
+    expect(toOpenCodeModels([route])["dynamic/bounded"]!.limit).toEqual({
+      context: 200_000,
+      output: 32_000,
+    });
+  });
+
   it("keeps pools, which are ordinary priced entries under a bare name", () => {
     const pool = model({ id: "claude-sonnet-5", opper: { kind: "pool", type: "llm", capabilities: ["tools"] } });
     expect(Object.keys(toOpenCodeModels([pool]))).toEqual(["claude-sonnet-5"]);

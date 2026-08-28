@@ -120,7 +120,7 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
     // per request. Skipping it on those grounds would drop the one thing a
     // static list could never carry, so it is admitted on route defaults.
     if (e.opper?.kind === "dynamic_route") {
-      out[e.id] = routeEntry(e.id);
+      out[e.id] = routeEntry(e);
       continue;
     }
 
@@ -169,14 +169,20 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
  * reason the VS Code extension defaults it on: most routes land on tool-capable
  * models, and a route excluded from agent mode is a route nobody can use.
  */
-function routeEntry(id: string): OpenCodeModel {
+function routeEntry(e: CompatModel): OpenCodeModel {
   return {
-    name: displayName(id),
+    name: displayName(e.id),
     tool_call: true,
     reasoning: false,
     attachment: false,
     cost: { input: 0, output: 0 },
-    limit: { context: FALLBACK_CONTEXT, output: FALLBACK_OUTPUT },
+    // The gateway DOES report bounds for a route whose candidates it can all
+    // resolve — the floor every branch can honour. Use them; the constants are
+    // only for the case where one candidate is opaque server-side.
+    limit: {
+      context: e.context_length || FALLBACK_CONTEXT,
+      output: e.opper?.max_output_tokens || FALLBACK_OUTPUT,
+    },
     modalities: { input: ["text"], output: ["text"] },
   };
 }
