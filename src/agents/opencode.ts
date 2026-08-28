@@ -7,7 +7,7 @@ import {
   configureOpenCode,
   readProjectConfigState,
 } from "../setup/opencode.js";
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
 import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
@@ -130,6 +130,23 @@ function readBaseUrl(location: "global" | "local"): string | undefined {
   }
 }
 
+/**
+ * The baseURL to put back after a launch.
+ *
+ * A hand-edited self-hosted gateway must survive, which is why the pre-launch
+ * value is restored at all. But an OPPER url that is not the current compat
+ * endpoint is not a preference, it is rot: anyone who followed the old docs
+ * has `/v2/openai` pinned, and restoring it verbatim every launch means they
+ * are never upgraded. A leftover `/v3/session/<id>` from a killed run is the
+ * same problem. Both point at our own host, so both are safe to replace;
+ * anything on another host is the user's own and is left alone.
+ */
+export function restoreTarget(stored: string | undefined): string {
+  if (!stored) return OPPER_COMPAT_URL;
+  if (stored === OPPER_COMPAT_URL) return stored;
+  return stored.startsWith(OPPER_HOST) ? OPPER_COMPAT_URL : stored;
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
@@ -153,7 +170,7 @@ async function spawn(
     // `overwrite: true` replaces provider.opper with template values
     // (compat URL) — capturing after would discard a hand-edited
     // self-hosted baseURL.
-    const restoreUrl = readBaseUrl("local") ?? OPPER_COMPAT_URL;
+    const restoreUrl = restoreTarget(readBaseUrl("local"));
     await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
