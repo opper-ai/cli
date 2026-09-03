@@ -31,6 +31,13 @@ vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const { claudeDesktop } = await import("../../src/agents/claude-desktop.js");
 
+const CURRENT_CLAUDE_MODELS = [
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "claude-haiku-4-5",
+  "claude-fable-5-1",
+];
+
 function makeTempHome(): string {
   return mkdtempSync(join(tmpdir(), "opper-claude-desktop-"));
 }
@@ -133,6 +140,23 @@ describe("claude-desktop adapter — isConfigured", () => {
   it("returns true after configure()", async () => {
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     expect(await claudeDesktop.isConfigured()).toBe(true);
+  });
+
+  it("returns false for a stale profile containing a non-Claude model", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profilePath = join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude-3p",
+      "configLibrary",
+      "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+    );
+    const profile = JSON.parse(readFileSyncReal(profilePath, "utf8"));
+    profile.inferenceModels.push({ name: "gpt-5.5" });
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    expect(await claudeDesktop.isConfigured()).toBe(false);
   });
 
   it("returns false when only the normal config is in 3p mode (incomplete)", async () => {
@@ -265,7 +289,7 @@ describe("claude-desktop adapter — configure", () => {
     expect(mode).toBe(0o600);
   });
 
-  it("writes inferenceModels with DEFAULT_MODELS.opus first when configured via configure()", async () => {
+  it("writes only the current Claude models with Opus first", async () => {
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     const profile = readJSON(
       join(
@@ -277,12 +301,36 @@ describe("claude-desktop adapter — configure", () => {
         "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
       ),
     );
-    expect(profile.inferenceModels).toBeInstanceOf(Array);
-    expect(profile.inferenceModels[0]).toMatchObject({ name: "claude-opus-4-7" });
-    // List should also include sonnet and haiku for picker convenience.
     const names = (profile.inferenceModels as Array<{name: string}>).map(m => m.name);
-    expect(names).toContain("claude-sonnet-4-6");
-    expect(names).toContain("claude-haiku-4-5");
+    expect(names).toEqual(CURRENT_CLAUDE_MODELS);
+    expect(names).not.toContain("gpt-5.5");
+    expect(names).not.toContain("gemini-3.1-pro-preview");
+  });
+
+  it("reconfigure repairs a stale model list", async () => {
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const profilePath = join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude-3p",
+      "configLibrary",
+      "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
+    );
+    const profile = readJSON(profilePath);
+    profile.inferenceModels = [
+      { name: "claude-opus-4-7" },
+      { name: "claude-sonnet-4-6" },
+      { name: "claude-haiku-4-5" },
+    ];
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+    await claudeDesktop.configure({ apiKey: "op_test_key" });
+    const repaired = readJSON(profilePath);
+    expect(repaired.inferenceModels.map((model: { name: string }) => model.name))
+      .toEqual(CURRENT_CLAUDE_MODELS);
+    expect(await claudeDesktop.isConfigured()).toBe(true);
   });
 
   it("idempotent — running twice produces the same inferenceModels list with no duplicates", async () => {
@@ -418,6 +466,49 @@ describe("claude-desktop adapter — install / spawn arg guards", () => {
       message: expect.stringContaining("does not accept"),
     });
   });
+
+  it("accepts Claude routes from supported providers but not dynamic routes", () => {
+    expect(claudeDesktop.supportsModel?.("claude-fable-5-1")).toBe(true);
+    expect(claudeDesktop.supportsModel?.("anthropic/claude-sonnet-5")).toBe(true);
+    expect(claudeDesktop.supportsModel?.("aws/claude-sonnet-5")).toBe(true);
+    expect(claudeDesktop.supportsModel?.("azure/claude-sonnet-5")).toBe(true);
+    expect(claudeDesktop.supportsModel?.("vertexai/claude-sonnet-5")).toBe(true);
+    expect(claudeDesktop.supportsModel?.("dynamic/claude-sonnet-5")).toBe(false);
+    expect(claudeDesktop.supportsModel?.("gpt-5.5")).toBe(false);
+  });
+
+  it("spawn rejects a non-Claude model before writing or launching", async () => {
+    const home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+    const routing = {
+      baseUrl: "https://api.opper.ai/v3/compat",
+      apiKey: "op_test_key",
+      model: "gpt-5.5",
+      compatShape: "openai" as const,
+    };
+
+    await expect(claudeDesktop.spawn!([], routing)).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: expect.stringContaining("gpt-5.5"),
+    });
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("spawn accepts a provider-qualified Claude route", async () => {
+    runMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") return ok("");
+      return ok();
+    });
+    const home = makeTempHome();
+    homedirMock.mockReturnValue(home);
+    await expect(claudeDesktop.spawn!([], {
+      baseUrl: "https://api.opper.ai/v3/compat",
+      apiKey: "op_test_key",
+      model: "vertexai/claude-sonnet-5",
+      compatShape: "openai",
+    })).resolves.toBe(0);
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+  });
 });
 
 import type { RunResult } from "../../src/util/run.js";
@@ -429,7 +520,7 @@ function ok(stdout = ""): RunResult {
 const ROUTING = {
   baseUrl: "https://api.opper.ai/v3/compat",
   apiKey: "op_test_key",
-  model: "claude-opus-4-7",
+  model: "claude-opus-5",
   compatShape: "openai" as const,
 };
 
@@ -525,7 +616,7 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
     const customRouting = {
       baseUrl: "https://api.opper.ai/v3/compat",
       apiKey: "op_test_key",
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       compatShape: "openai" as const,
     };
     await claudeDesktop.spawn!([], customRouting);
@@ -539,7 +630,7 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
       "727f05c8-a429-43cc-b1c6-36d8883d98b8.json",
     );
     const profile = JSON.parse(readFileSyncReal(profilePath, "utf8"));
-    expect(profile.inferenceModels[0]).toMatchObject({ name: "claude-sonnet-4-6" });
+    expect(profile.inferenceModels[0]).toMatchObject({ name: "claude-sonnet-5" });
   });
 
   it("errors when Claude fails to quit within the timeout", async () => {

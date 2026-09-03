@@ -11,9 +11,10 @@
  * providers / regions when one is degraded.
  */
 export const DEFAULT_MODELS = {
-  opus: "claude-opus-4-7",
-  sonnet: "claude-sonnet-4-6",
+  opus: "claude-opus-5",
+  sonnet: "claude-sonnet-5",
   haiku: "claude-haiku-4-5",
+  fable: "claude-fable-5-1",
   gpt: "gpt-5.5",
   gemini: "gemini-3.1-pro-preview",
   /**
@@ -28,9 +29,9 @@ export const DEFAULT_MODELS = {
 
 /**
  * The set of models we expose by default in adapter pickers (Pi, OpenClaw,
- * Claude Desktop, Codex). Claude Code and OpenCode pull their lists from
- * elsewhere (the gateway's /v1/models endpoint and the OpenCode template,
- * respectively).
+ * Codex). Claude Desktop derives its restricted list below; Claude Code and
+ * OpenCode pull their lists from elsewhere (the gateway's /v1/models endpoint
+ * and the OpenCode template, respectively).
  *
  * TODO: replace this hardcoded list with a fetch from /v3/models filtered
  * to a "featured" set once the platform exposes it.
@@ -48,6 +49,7 @@ export const PICKER_MODELS: ReadonlyArray<PickerModel> = [
   { id: DEFAULT_MODELS.opus,           contextWindow: 1_000_000, reasoning: true,  codexProfile: "opus" },
   { id: DEFAULT_MODELS.sonnet,         contextWindow: 1_000_000, reasoning: true,  codexProfile: "sonnet" },
   { id: DEFAULT_MODELS.haiku,          contextWindow:   200_000, reasoning: false, codexProfile: "haiku" },
+  { id: DEFAULT_MODELS.fable,          contextWindow: 1_000_000, reasoning: true,  codexProfile: "fable" },
   { id: DEFAULT_MODELS.gpt,            contextWindow: 1_050_000, reasoning: true,  codexProfile: "gpt" },
   { id: DEFAULT_MODELS.gemini,         contextWindow: 1_048_576, reasoning: true,  codexProfile: "gemini" },
   { id: "deepinfra/kimi-k2.6",         contextWindow:   262_144, reasoning: true,  codexProfile: "kimi" },
@@ -56,6 +58,30 @@ export const PICKER_MODELS: ReadonlyArray<PickerModel> = [
   { id: "deepinfra/deepseek-v4-pro",   contextWindow: 1_048_576, reasoning: true,  codexProfile: "deepseek-pro" },
   { id: "deepinfra/deepseek-v4-flash", contextWindow: 1_048_576, reasoning: true,  codexProfile: "deepseek-flash" },
 ];
+
+/**
+ * Claude Desktop's third-party gateway only accepts routes backed by
+ * Anthropic models. Keep this separate from PICKER_MODELS: other agents can
+ * use every provider that Opper exposes, while Desktop must receive a strict
+ * Claude-only list.
+ */
+export const CLAUDE_DESKTOP_MODEL_IDS: readonly string[] = [
+  DEFAULT_MODELS.opus,
+  DEFAULT_MODELS.sonnet,
+  DEFAULT_MODELS.haiku,
+  DEFAULT_MODELS.fable,
+];
+
+/**
+ * Claude Desktop accepts provider routes and gateway pools named after their
+ * Claude backing model. Dynamic routes are rejected by Desktop even if their
+ * final segment says Claude.
+ */
+export function isClaudeDesktopModelId(modelId: string): boolean {
+  return /^(?!dynamic\/)(?:[a-z0-9][a-z0-9-]*\/)*claude-[a-z0-9][a-z0-9-]*$/.test(
+    modelId,
+  );
+}
 
 /**
  * Return PICKER_MODELS reordered so `launchModel` is at index 0. When the

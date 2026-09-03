@@ -118,6 +118,46 @@ describe("launchCommand", () => {
     );
   });
 
+  it("uses Claude Opus 5 as the default launch model", async () => {
+    await setSlot("default", { apiKey: "op_live_happy" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+
+    await launchCommand({ agent: "hermes", key: "default" });
+
+    expect(adapter.spawn).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ model: "claude-opus-5" }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects a model outside an adapter's declared supported list", async () => {
+    const restrictedAdapter = {
+      ...adapter,
+      name: "claude-desktop",
+      displayName: "Claude Desktop",
+      supportsModel: (modelId: string) => /^(?!dynamic\/)(?:[^/]+\/)*claude-/.test(modelId),
+      modelSupportHint: "Use a claude-* pool or provider/claude-* route (not dynamic/*).",
+    };
+    getAdapterMock.mockImplementationOnce((name: string) =>
+      name === "claude-desktop" ? restrictedAdapter : null,
+    );
+    await setSlot("default", { apiKey: "op_live_happy" });
+    restrictedAdapter.detect.mockResolvedValue({ installed: true });
+
+    await expect(launchCommand({
+      agent: "claude-desktop",
+      key: "default",
+      model: "gpt-5.5",
+    })).rejects.toMatchObject({
+      code: "INVALID_ARGUMENT",
+      message: expect.stringContaining("gpt-5.5"),
+      hint: expect.stringContaining("provider/claude-*"),
+    });
+    expect(restrictedAdapter.spawn).not.toHaveBeenCalled();
+  });
+
   it("forwards configScope=project to spawn", async () => {
     await setSlot("default", { apiKey: "op_live_p" });
     adapter.detect.mockResolvedValue({ installed: true });

@@ -24,7 +24,7 @@ const SESSION_URL =
 const ROUTING = {
   baseUrl: SESSION_URL,
   apiKey: "op_live_run",
-  model: "claude-opus-4-7",
+  model: "claude-opus-5",
   compatShape: "openai" as const,
 };
 
@@ -174,7 +174,7 @@ describe("openclaw adapter", () => {
     // OpenClaw has no _launch marker — position 0 is the only signal.
     expect(list[0]?.id).toBe("gpt-5.5");
     expect(list.length).toBeGreaterThan(1);
-    expect(list.some((m) => m.id === "claude-opus-4-7")).toBe(true);
+    expect(list.some((m) => m.id === "claude-opus-5")).toBe(true);
   });
 
   it("spawn defaults to `gateway start` when no args are passed", async () => {

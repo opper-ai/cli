@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  adapterSupportsModel,
+  filterModelsForAdapter,
   isLaunchable,
   type AgentAdapter,
   type DetectResult,
@@ -54,5 +56,35 @@ describe("AgentAdapter interface", () => {
     if (isLaunchable(launchable)) {
       expect(typeof launchable.spawn).toBe("function");
     }
+  });
+
+  it("filters and validates models only when an adapter declares a restriction", () => {
+    const restricted: AgentAdapter = {
+      name: "restricted",
+      displayName: "Restricted",
+      docsUrl: "https://example.com",
+      supportsModel: (modelId) => /^(?!dynamic\/)(?:[^/]+\/)*claude-/.test(modelId),
+      async detect() { return { installed: true }; },
+      async isConfigured() { return true; },
+      async configure() { return; },
+      async unconfigure() { return; },
+    };
+    const models = [
+      { id: "claude-opus-5" },
+      { id: "gpt-5.5" },
+      { id: "claude-sonnet-5" },
+    ];
+
+    expect(adapterSupportsModel(restricted, "claude-opus-5")).toBe(true);
+    expect(adapterSupportsModel(restricted, "anthropic/claude-sonnet-5")).toBe(true);
+    expect(adapterSupportsModel(restricted, "vertexai/claude-sonnet-5")).toBe(true);
+    expect(adapterSupportsModel(restricted, "dynamic/claude-sonnet-5")).toBe(false);
+    expect(adapterSupportsModel(restricted, "gpt-5.5")).toBe(false);
+    expect(filterModelsForAdapter(restricted, models)).toEqual([
+      { id: "claude-opus-5" },
+      { id: "claude-sonnet-5" },
+    ]);
+    const { supportsModel: _supportsModel, ...unrestricted } = restricted;
+    expect(adapterSupportsModel(unrestricted, "gpt-5.5")).toBe(true);
   });
 });

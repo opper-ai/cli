@@ -82,7 +82,7 @@ opper launch claude --resume
 
 `opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported). Claude Desktop is GUI-only on macOS/Windows and has no scripted installer — install it from <https://claude.ai/download> first.
 
-The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default.
+The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default. Claude Desktop's picker is restricted to Claude-backed routes because its third-party gateway rejects non-Anthropic models; the generated profile defaults to Claude Opus 5 and also includes Sonnet 5, Haiku 4.5, and Fable 5.1.
 
 To remove an agent's Opper integration without uninstalling the agent itself:
 
@@ -168,7 +168,7 @@ Either way, that is exactly what `opper launch` does for you — plus a fresh id
 
 ```bash
 opper ask "how do I create an index?"
-opper ask --model claude-opus-4-7 "compare the v2 and v3 APIs"
+opper ask --model claude-opus-5 "compare the v2 and v3 APIs"
 ```
 
 The answer streams in, then prints a token / request count. Requires Opper skills to be installed first (`opper skills install`).
@@ -229,7 +229,7 @@ echo "what is 2+2?" | opper call myfunction "respond in kind"
 echo '{"name":"Johnny","age":41}' | opper call myfunction "only print age"
 
 # Override the model for one call
-opper call --model claude-sonnet-4-6 myfunction "summarise" "long text…"
+opper call --model claude-sonnet-5 myfunction "summarise" "long text…"
 ```
 
 ### Registering a custom model
@@ -312,10 +312,10 @@ nothing counts against the org's storage quota.
 opper launch pi -p "summarise the latest PR title and body"
 
 # Claude Code with a specific model and resumed session
-opper launch claude --model claude-opus-4-7 --resume
+opper launch claude --model claude-opus-5 --resume
 
 # Codex with Sonnet for a single ask
-opper launch codex --model claude-sonnet-4-6 -- "implement this feature"
+opper launch codex --model claude-sonnet-5 -- "implement this feature"
 ```
 
 ## Global flags

@@ -4,7 +4,11 @@ import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS, PICKER_MODELS } from "../config/models.js";
+import {
+  CLAUDE_DESKTOP_MODEL_IDS,
+  DEFAULT_MODELS,
+  isClaudeDesktopModelId,
+} from "../config/models.js";
 import { run } from "../util/run.js";
 import type {
   AgentAdapter,
@@ -206,7 +210,18 @@ async function profileIsOpperGateway(target: ThirdPartyPaths): Promise<boolean> 
   const key = typeof profile.inferenceGatewayApiKey === "string"
     ? profile.inferenceGatewayApiKey.trim()
     : "";
-  return key.length > 0;
+  if (key.length === 0) return false;
+  if (!Array.isArray(profile.inferenceModels)) return false;
+  const names = profile.inferenceModels.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const name = (entry as { name?: unknown }).name;
+    return typeof name === "string" ? name : null;
+  });
+  if (names.some((name) => name === null)) return false;
+  const uniqueNames = new Set(names);
+  return uniqueNames.size === names.length &&
+    names.every((name) => name !== null && isClaudeDesktopModelId(name)) &&
+    CLAUDE_DESKTOP_MODEL_IDS.every((name) => uniqueNames.has(name));
 }
 
 async function writeDeploymentMode(path: string, mode: "1p" | "3p"): Promise<void> {
@@ -239,12 +254,12 @@ async function writeGatewayProfile(
   cfg.inferenceGatewayApiKey = apiKey;
   cfg.inferenceGatewayAuthScheme = "bearer";
   cfg.disableDeploymentModeChooser = true;
-  // First entry is the picker default. Dedupe in case primaryModel
-  // equals one of the catalog ids.
-  const names = Array.from(new Set([
+  // First entry is the picker default. Claude Desktop rejects gateway routes
+  // that are not backed by Anthropic models, so do not reuse PICKER_MODELS.
+  const names = [
     primaryModel,
-    ...PICKER_MODELS.map((m) => m.id),
-  ]));
+    ...CLAUDE_DESKTOP_MODEL_IDS.filter((name) => name !== primaryModel),
+  ];
   cfg.inferenceModels = names.map((name) => ({ name }));
   await writeJson(path, cfg);
 }
@@ -457,6 +472,13 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
       "claude-desktop does not accept passthrough arguments.",
     );
   }
+  if (!isClaudeDesktopModelId(routing.model)) {
+    throw new OpperError(
+      "INVALID_ARGUMENT",
+      `Claude Desktop does not support model "${routing.model}"`,
+      `Choose one of: ${CLAUDE_DESKTOP_MODEL_IDS.join(", ")}.`,
+    );
+  }
   await applyOpperProfile(routing.apiKey, routing.model);
 
   if (isClaudeRunning()) {
@@ -478,6 +500,9 @@ export const claudeDesktop: AgentAdapter = {
   name: "claude-desktop",
   displayName: "Claude Desktop",
   docsUrl: "https://claude.ai/download",
+  supportsModel: isClaudeDesktopModelId,
+  modelSupportHint:
+    "Use a claude-* pool or provider/claude-* route (not dynamic/*).",
   detect,
   isConfigured,
   configure,
