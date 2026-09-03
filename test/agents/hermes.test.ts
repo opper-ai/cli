@@ -22,7 +22,7 @@ const { hermes } = await import("../../src/agents/hermes.js");
 const ROUTING = {
   baseUrl: "https://api.opper.ai/v3/compat",
   apiKey: "op_live_test",
-  model: "claude-opus-4-7",
+  model: "claude-opus-5",
   compatShape: "openai" as const,
 };
 
@@ -112,14 +112,14 @@ describe("hermes adapter — spawn (real ~/.hermes, transient)", () => {
     expect(code).toBe(0);
 
     const model = mid?.cfg.model as Record<string, unknown>;
-    expect(model).toEqual({ provider: "opper", base_url: SESSION_URL, default: "claude-opus-4-7" });
+    expect(model).toEqual({ provider: "opper", base_url: SESSION_URL, default: "claude-opus-5" });
     expect(model).not.toHaveProperty("api_key"); // key goes via env, not disk
     const providers = mid?.cfg.providers as {
       opper?: { base_url?: string; key_env?: string; models?: Record<string, unknown> };
     };
     expect(providers.opper?.base_url).toBe(SESSION_URL);
     expect(providers.opper?.key_env).toBe("OPPER_API_KEY");
-    expect(Object.keys(providers.opper?.models ?? {})).toContain("claude-opus-4-7");
+    expect(Object.keys(providers.opper?.models ?? {})).toContain("claude-opus-5");
     expect(mid?.pluginSrc).toContain("X-Opper-Trace-Id");
   });
 

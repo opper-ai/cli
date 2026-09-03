@@ -1,5 +1,5 @@
 import { getAdapter } from "../agents/registry.js";
-import { isLaunchable } from "../agents/types.js";
+import { adapterSupportsModel, isLaunchable } from "../agents/types.js";
 import { getSlot } from "../auth/config.js";
 import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
@@ -37,6 +37,13 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       "AGENT_NOT_FOUND",
       `${adapter.displayName} is a configure-only integration and cannot be launched`,
       `Configure it via the agents menu (\`opper\` → Agents → ${adapter.displayName}).`,
+    );
+  }
+  if (opts.model && !adapterSupportsModel(adapter, opts.model)) {
+    throw new OpperError(
+      "INVALID_ARGUMENT",
+      `${adapter.displayName} does not support model "${opts.model}"`,
+      adapter.modelSupportHint,
     );
   }
 

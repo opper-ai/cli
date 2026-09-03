@@ -1,5 +1,9 @@
 import { log, autocomplete, isCancel, spinner } from "@clack/prompts";
-import { isLaunchable } from "../../agents/types.js";
+import {
+  filterModelsForAdapter,
+  isLaunchable,
+  type AgentAdapter,
+} from "../../agents/types.js";
 import { getSlot } from "../../auth/config.js";
 import { launchCommand } from "../launch.js";
 import { fetchModels, type OpperModel } from "../models.js";
@@ -111,7 +115,7 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
           await launchCommand({ agent: adapter.name, key: opts.key });
           break;
         case "launch-with-model": {
-          const model = await pickModel(opts.key);
+          const model = await pickModel(opts.key, adapter);
           if (!model) break;
           await launchCommand({ agent: adapter.name, key: opts.key, model });
           break;
@@ -153,7 +157,10 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
  * Claude Opus models, "gpt" to OpenAI, etc. Returns the model id, or null
  * on cancel / when the catalog is empty.
  */
-async function pickModel(key: string): Promise<string | null> {
+async function pickModel(
+  key: string,
+  adapter: AgentAdapter,
+): Promise<string | null> {
   if (!cachedModels) {
     const s = spinner();
     s.start("Fetching available models");
@@ -166,9 +173,10 @@ async function pickModel(key: string): Promise<string | null> {
     }
     s.stop(`Loaded ${cachedModels.length} models`);
   }
-  if (cachedModels.length === 0) return null;
+  const models = filterModelsForAdapter(adapter, cachedModels);
+  if (models.length === 0) return null;
 
-  const options = cachedModels.map((m) => {
+  const options = models.map((m) => {
     const opt: { value: string; label: string; hint?: string } = {
       value: m.id,
       label: m.name ? `${m.name}` : m.id,

@@ -48,6 +48,12 @@ export interface AgentAdapter {
   displayName: string;
   docsUrl: string;
 
+  /** Optional restriction for integrations that cannot use the full catalog. */
+  supportsModel?(modelId: string): boolean;
+
+  /** User-facing guidance shown when supportsModel rejects an explicit id. */
+  modelSupportHint?: string;
+
   detect(): Promise<DetectResult>;
 
   /**
@@ -94,4 +100,18 @@ export type LaunchableAgentAdapter = AgentAdapter & {
 /** Type guard — adapter is launchable iff it provides a `spawn` method. */
 export function isLaunchable(a: AgentAdapter): a is LaunchableAgentAdapter {
   return typeof a.spawn === "function";
+}
+
+export function adapterSupportsModel(
+  adapter: AgentAdapter,
+  modelId: string,
+): boolean {
+  return adapter.supportsModel?.(modelId) ?? true;
+}
+
+export function filterModelsForAdapter<T extends { id: string }>(
+  adapter: AgentAdapter,
+  models: readonly T[],
+): T[] {
+  return models.filter((model) => adapterSupportsModel(adapter, model.id));
 }

@@ -21,9 +21,10 @@ const DEFAULT_MAX_OUTPUT = 32_768;
 // Conservative vision allowlist — only flip true for models we know report
 // image input over Opper's compat endpoint. Users tweak by hand if needed.
 const VISION = new Set<string>([
-  "claude-opus-4-7",
-  "claude-sonnet-4-6",
+  "claude-opus-5",
+  "claude-sonnet-5",
   "claude-haiku-4-5",
+  "claude-fable-5-1",
   "gpt-5.5",
   "gemini-3.1-pro-preview",
 ]);
