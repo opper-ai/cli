@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { OpperError } from "../errors.js";
 
 /**
  * Snapshot the values at one or more `keyPaths` in a JSON file (or
@@ -50,12 +51,15 @@ function readJsonOrEmpty(path: string): Record<string, unknown> {
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
   } catch {
-    return {};
+    // The snapshot must not represent unreadable user data as an empty
+    // object: restoring it would silently destroy those original settings.
   }
+  throw new OpperError("AGENT_CONFIG_CONFLICT", `Cannot safely snapshot JSON config at ${path}.`,
+    "Existing content was preserved. Fix the JSON or configure and launch this agent directly if it uses JSONC.");
 }
 
 function readKey(obj: Record<string, unknown>, keyPath: string[]): unknown {

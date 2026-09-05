@@ -27,6 +27,17 @@ describe("withJsonKeys", () => {
     rmSync(sandbox, { recursive: true, force: true });
   });
 
+  it.each(['{broken', '{ // keep this comment\n "model": "other/model" }', '[]', 'null'])(
+    "refuses unsupported existing config before launch or restore can alter it (%s)", async (original) => {
+      const path = join(sandbox, "opencode.json");
+      writeFileSync(path, original);
+      let launched = false;
+      await expect(withJsonKeys(path, [["provider", "opper"]], async () => { launched = true; })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+      expect(launched).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe(original);
+    },
+  );
+
   it("restores the captured value at the keyPath when it pre-existed", async () => {
     const path = join(sandbox, "models.json");
     writeFileSync(

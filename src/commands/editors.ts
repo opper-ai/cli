@@ -14,6 +14,9 @@ import type { Location } from "../util/editor-paths.js";
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
+  mcp?: boolean;
+  mcpUrl?: string;
+  mcpScopes?: string;
 }
 
 
@@ -42,6 +45,30 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
+    throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
+  }
+  if (opts.mcp) {
+    const result = await configureOpenCode({
+      location: opts.location,
+      mcp: true,
+      ...(opts.mcpUrl !== undefined ? { mcpUrl: opts.mcpUrl } : {}),
+      ...(opts.mcpScopes !== undefined ? { mcpScopes: opts.mcpScopes } : {}),
+    });
+    console.log(brand.accent(result.wrote
+      ? `✓ Configured Opper MCP (${result.mcpName}) in ${result.path}.`
+      : `Opper MCP (${result.mcpName}) is already configured; existing settings were preserved.`));
+    if (result.mcpScopes !== undefined) console.log(`Requested permissions: ${result.mcpScopes}`);
+    if (result.mcpEnabled === false) {
+      console.log(`The ${result.mcpName} connection is disabled. Enable it in OpenCode when you want to connect.`);
+    } else {
+      console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and approve permissions in your browser.`);
+      const name = result.mcpName ?? "opper";
+      const shellName = /^[A-Za-z0-9_-]+$/.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;
+      console.log(`If your client needs manual authentication, run: opencode mcp auth ${shellName}`);
+    }
+    return;
+  }
   const models = await resolveOpenCodeModels();
   const result = await configureOpenCode({
     location: opts.location,

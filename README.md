@@ -189,7 +189,54 @@ opper skills uninstall   # remove + clean up legacy bundled-copy installs
 ```bash
 opper editors list
 opper editors opencode [--global|--local] [--overwrite]   # also exposed as `opper launch opencode`
+opper editors opencode --mcp                            # account MCP only, no inference changes
+opper editors opencode --mcp --local --mcp-url http://localhost:8080/mcp
 ```
+
+`--mcp` adds the remote `https://api.opper.ai/mcp` server as `opper`. It leaves
+your inference provider, model, tool permissions, and other MCP servers alone.
+It needs no API key and does not log in, launch OpenCode, or approve consent.
+Reopen OpenCode, connect the server, and approve access in your browser. If the
+client requires manual authentication, use `opencode mcp auth opper`, then
+reopen OpenCode to load the authenticated tools. New connections request
+`account:read projects:read` by default.
+Availability of the endpoint depends on the Opper MCP deployment.
+
+OpenCode 1.18.29 cannot automatically complete a permission upgrade after a tool
+reports insufficient scope. Choose the permissions needed for your workflow
+before connecting, or update the configured selection and authenticate again:
+
+```bash
+# Create projects and keys, inspect policy, call models, and inspect usage/traces.
+opper editors opencode --mcp --mcp-scopes 'account:read projects:read projects:write apikeys:read apikeys:write controls:read runtime:read runtime:call'
+
+# Full account workflow, including project deletion, policy changes, and routes.
+opper editors opencode --mcp --mcp-scopes 'account:read projects:read projects:write projects:delete apikeys:read apikeys:write controls:read controls:write dynamic_routes:read dynamic_routes:write runtime:read runtime:call'
+```
+
+`--mcp-scopes` replaces only the matched server's requested scope setting. It
+never adds unselected permissions, grants access, or changes existing tokens.
+Reopen OpenCode and use its native authentication flow to review and approve
+the selected permissions in the browser. For a later upgrade, include the
+permissions you still need along with the new ones. You can narrow the selection
+with the same option; to revoke an existing grant, disconnect it in the Opper
+app. Config changes alone do not revoke grants.
+
+The setup preserves JSONC comments and reads both `opencode.json` and
+`opencode.jsonc` (plus global `config.json`) in OpenCode's merge order. New MCP
+settings go into the existing JSONC file when present, otherwise the JSON file.
+An existing server with the same URL keeps its current name, auth settings,
+and enabled/disabled preference; an explicit `--mcp-scopes` updates only its
+OAuth scope. If OAuth is disabled, the command asks you to review that setting
+instead of enabling it. A conflicting `opper` entry, malformed config,
+or duplicate JSON keys produces an error without changing the files. `--overwrite`
+only affects inference provider setup. `--mcp-url` requires `--mcp` and accepts
+HTTPS endpoints or HTTP loopback addresses, without credentials, query parameters,
+or fragments.
+
+To use Opper for both account tools and model inference, run the plain provider
+setup command and the `--mcp` command separately. Inference authentication
+(`opper login` / `OPPER_API_KEY`) is independent of MCP browser authorization.
 
 ## Platform
 

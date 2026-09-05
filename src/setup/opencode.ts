@@ -3,6 +3,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
+import { configureOpenCodeMcp } from "./opencode-mcp.js";
+import { OpperError } from "../errors.js";
 
 export interface ProjectConfigState {
   exists: boolean;
@@ -41,12 +43,21 @@ export interface ConfigureOpenCodeOptions {
    * happens when the gateway is unreachable or no key is configured.
    */
   models?: Record<string, unknown>;
+  /** Add only the account-management MCP, preserving inference settings. */
+  mcp?: boolean;
+  /** Optional MCP development/staging endpoint; requires explicit mcp=true. */
+  mcpUrl?: string;
+  /** Explicit requested OAuth scopes; replaces only this MCP scope setting. */
+  mcpScopes?: string;
 }
 
 export interface ConfigureOpenCodeResult {
   path: string;
   wrote: boolean;
   reason?: "exists";
+  mcpName?: string;
+  mcpEnabled?: boolean;
+  mcpScopes?: string;
 }
 
 // NOTE: OpenCode's template uses `{env:OPPER_API_KEY}` placeholders so the
@@ -60,6 +71,10 @@ export interface ConfigureOpenCodeResult {
 export async function configureOpenCode(
   opts: ConfigureOpenCodeOptions,
 ): Promise<ConfigureOpenCodeResult> {
+  if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
+    throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
+  }
+  if (opts.mcp) return configureOpenCodeMcp(opts.location, opts.mcpUrl, opts.mcpScopes);
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
@@ -86,10 +101,15 @@ export async function configureOpenCode(
         unknown
       >;
     } catch {
-      // unparseable — fall through and replace with template
+      throw new OpperError("AGENT_CONFIG_CONFLICT", `Cannot parse OpenCode config at ${path}.`,
+        "Fix the config or merge the inference provider manually. Existing content was preserved; --mcp supports JSONC.");
     }
 
-    if (existing && typeof existing === "object") {
+    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+      if (existing.provider !== undefined &&
+        (!existing.provider || typeof existing.provider !== "object" || Array.isArray(existing.provider))) {
+        throw new OpperError("AGENT_CONFIG_CONFLICT", `Invalid provider settings in ${path}; existing content was preserved.`);
+      }
       const providers =
         existing.provider && typeof existing.provider === "object"
           ? (existing.provider as Record<string, unknown>)
@@ -106,6 +126,7 @@ export async function configureOpenCode(
       await writeFile(path, JSON.stringify(merged, null, 2), "utf8");
       return { path, wrote: true };
     }
+    throw new OpperError("AGENT_CONFIG_CONFLICT", `OpenCode config at ${path} must be an object; existing content was preserved.`);
   }
 
   await writeFile(path, serialised, "utf8");

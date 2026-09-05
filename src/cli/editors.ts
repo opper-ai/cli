@@ -18,14 +18,20 @@ const register: RegisterFn = (program) => {
 
   editors
     .command("opencode")
-    .description("Write the Opper provider block into OpenCode's config")
+    .description("Configure OpenCode inference, or add the account MCP with --mcp")
     .option("--global", "write to ~/.config/opencode/opencode.json", true)
     .option("--local", "write to ./opencode.json in the current directory")
     .option("--overwrite", "replace an existing Opper provider if present")
-    .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean }) => {
+    .option("--mcp", "add the Opper account MCP only; preserve inference settings")
+    .option("--mcp-url <url>", "MCP endpoint override (requires --mcp; default https://api.opper.ai/mcp)")
+    .option("--mcp-scopes <scopes>", "explicit space-separated OAuth scopes; replaces this server's scope setting (requires --mcp)")
+    .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean; mcp?: boolean; mcpUrl?: string; mcpScopes?: string }) => {
       await editorsOpenCodeCommand({
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
+        ...(cmdOpts.mcp ? { mcp: true } : {}),
+        ...(cmdOpts.mcpUrl !== undefined ? { mcpUrl: cmdOpts.mcpUrl } : {}),
+        ...(cmdOpts.mcpScopes !== undefined ? { mcpScopes: cmdOpts.mcpScopes } : {}),
       });
     });
 
