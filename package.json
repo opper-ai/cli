@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@opperai/agents": "^0.8.0",
     "@opperai/login": "^0.4.0",
     "commander": "^12.1.0",

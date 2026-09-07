@@ -1,0 +1,218 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createServer, type Server } from "node:http";
+import { createHash } from "node:crypto";
+import { connect } from "node:net";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { KEY_SETUP_SCOPES, withMcpKeyAuthorization } from "../../src/auth/mcp-key-flow.js";
+import { OpperError } from "../../src/errors.js";
+
+let server: Server;
+let origin: string;
+let directory: string;
+let authorization: URL;
+let registrations: number;
+let exchanges: number;
+let revoked: string[];
+let grantedScope: string;
+let registrationError: boolean;
+let revokeError: boolean;
+let requiresIssuer: boolean;
+const requests: { path: string; body: string }[] = [];
+
+beforeEach(async () => {
+  directory = await mkdtemp(join(tmpdir(), "opper-native-key-test-"));
+  vi.stubEnv("OPPER_HOME", directory);
+  registrations = 0; exchanges = 0; revoked = []; requests.length = 0;
+  grantedScope = KEY_SETUP_SCOPES; registrationError = false; revokeError = false; requiresIssuer = false;
+  server = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString();
+    requests.push({ path: request.url!, body });
+    const send = (data: unknown, status = 200) => response.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(data));
+    if (request.url === "/.well-known/oauth-protected-resource/mcp" || request.url === "/.well-known/oauth-protected-resource") {
+      send({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/oauth`] });
+    } else if (request.url === "/.well-known/oauth-authorization-server/oauth") {
+      send({ issuer: `${origin}/oauth`, authorization_endpoint: `${origin}/oauth/authorize`, token_endpoint: `${origin}/oauth/token`,
+        registration_endpoint: `${origin}/oauth/register`, revocation_endpoint: `${origin}/oauth/revoke`,
+        response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"],
+        scopes_supported: ["account:read", "projects:read", "projects:write", "projects:delete", "apikeys:read", "apikeys:write", "controls:read", "controls:write", "dynamic_routes:read", "dynamic_routes:write", "runtime:read", "runtime:call"],
+        authorization_response_iss_parameter_supported: requiresIssuer,
+      });
+    } else if (request.url === "/oauth/register") {
+      registrations += 1;
+      if (registrationError) send({ error: "invalid_client_metadata", error_description: "PRIVATE-SDK-SECRET" }, 400);
+      else send({ ...JSON.parse(body), client_id: "public-cli-client" }, 201);
+    } else if (request.url === "/oauth/token") {
+      exchanges += 1;
+      const form = new URLSearchParams(body);
+      expect(form.get("client_id")).toBe("public-cli-client");
+      expect(form.get("resource")).toBe(`${origin}/mcp`);
+      expect(createHash("sha256").update(form.get("code_verifier")!).digest("base64url")).toBe(authorization.searchParams.get("code_challenge"));
+      send({ access_token: "PRIVATE-ACCESS-TOKEN", refresh_token: "PRIVATE-REFRESH-TOKEN", token_type: "Bearer", expires_in: 300, scope: grantedScope });
+    } else if (request.url === "/oauth/revoke") {
+      revoked.push(new URLSearchParams(body).get("token")!);
+      send({}, revokeError ? 500 : 200);
+    } else send({ error: "not found" }, 404);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  origin = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+});
+afterEach(async () => {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  vi.unstubAllEnvs();
+  await rm(directory, { recursive: true, force: true });
+});
+
+async function approve(url: URL) {
+  authorization = url;
+  expect(url.searchParams.get("scope")).toBe(KEY_SETUP_SCOPES);
+  expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+  const callback = new URL(url.searchParams.get("redirect_uri")!);
+  callback.searchParams.set("state", url.searchParams.get("state")!);
+  callback.searchParams.set("code", "one-use-code");
+  const response = await fetch(callback);
+  expect(response.status).toBe(200);
+  expect(await response.text()).not.toContain("one-use-code");
+}
+
+describe("native SDK OAuth for private key setup", () => {
+  it("uses real SDK DCR/PKCE and revokes its temporary grant after the operation", async () => {
+    const operation = vi.fn().mockResolvedValue("done");
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
+    expect(operation).toHaveBeenCalledWith("PRIVATE-ACCESS-TOKEN");
+    expect(exchanges).toBe(1);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    const paths = await readdir(join(directory, "mcp-clients"));
+    expect(paths).toHaveLength(1);
+    const path = join(directory, "mcp-clients", paths[0]!);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    const stored = await readFile(path, "utf8");
+    expect(stored).toContain("public-cli-client");
+    expect(stored).not.toMatch(/PRIVATE-|code_verifier|state|code_challenge/);
+    expect(await readdir(directory)).toEqual(["mcp-clients"]);
+  });
+
+  it("reuses only public client registration across runs with fresh callback ports", async () => {
+    const operation = vi.fn().mockResolvedValue(undefined);
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve });
+    const first = authorization.searchParams.get("redirect_uri");
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve });
+    expect(registrations).toBe(1);
+    expect(exchanges).toBe(2);
+    expect(revoked).toHaveLength(2);
+    expect(authorization.searchParams.get("redirect_uri")).not.toBe(first);
+  });
+
+  it("ignores a callback with the wrong state before accepting the genuine callback", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: async (url) => {
+      const wrong = new URL(url.searchParams.get("redirect_uri")!);
+      wrong.search = "state=wrong&code=not-the-code";
+      expect((await fetch(wrong)).status).toBe(400);
+      expect(exchanges).toBe(0);
+      const duplicate = new URL(url.searchParams.get("redirect_uri")!);
+      duplicate.searchParams.set("state", url.searchParams.get("state")!);
+      duplicate.searchParams.append("code", "one");
+      duplicate.searchParams.append("code", "two");
+      expect((await fetch(duplicate)).status).toBe(400);
+      await approve(url);
+    } });
+    expect(exchanges).toBe(1);
+  });
+
+  it("rejects malformed HTTP callback targets without crashing the flow", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: async (url) => {
+      const callback = new URL(url.searchParams.get("redirect_uri")!);
+      const response = await new Promise<string>((resolve, reject) => {
+        const socket = connect(Number(callback.port), "127.0.0.1", () => socket.write("GET http://[ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
+        let data = "";
+        socket.on("data", (chunk) => { data += chunk.toString(); });
+        socket.on("end", () => resolve(data));
+        socket.on("error", reject);
+      });
+      expect(response).toContain("400 Bad Request");
+      await approve(url);
+    } });
+    expect(exchanges).toBe(1);
+  });
+
+  it("stops on denial without exchanging a code or running the operation", async () => {
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: async (url) => {
+      const callback = new URL(url.searchParams.get("redirect_uri")!);
+      callback.searchParams.set("state", url.searchParams.get("state")!);
+      callback.searchParams.set("error", "access_denied");
+      await fetch(callback);
+    } })).rejects.toThrow(/not approved/);
+    expect(operation).not.toHaveBeenCalled();
+    expect(exchanges).toBe(0);
+    expect(revoked).toEqual([]);
+  });
+
+  it("times out and closes its loopback callback without retrying consent", async () => {
+    let callbackUrl: string | null = null;
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, {
+      timeoutMs: 1000, onAuthorizationUrl: (url) => { callbackUrl = url.searchParams.get("redirect_uri"); },
+    })).rejects.toThrow(/cancelled or timed out/);
+    expect(callbackUrl).not.toBeNull();
+    await expect(fetch(callbackUrl!)).rejects.toThrow();
+    expect(registrations).toBe(1);
+  });
+
+  it.each(["projects:read", "projects:read apikeys:write runtime:call"])("revokes an insufficient or excessive grant without creating a key (%s)", async (scope) => {
+    grantedScope = scope;
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).rejects.toThrow(/explicitly select both/);
+    expect(operation).not.toHaveBeenCalled();
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+  });
+
+  it.each([undefined, "https://wrong-issuer.example"])("rejects a missing or mismatched iss before token exchange when advertised (%s)", async (iss) => {
+    requiresIssuer = true;
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: async (url) => {
+      authorization = url;
+      const callback = new URL(url.searchParams.get("redirect_uri")!);
+      callback.searchParams.set("state", url.searchParams.get("state")!);
+      callback.searchParams.set("code", "one-use-code");
+      if (iss) callback.searchParams.set("iss", iss);
+      await fetch(callback);
+    } })).rejects.toThrow("Browser authorization could not be completed. Start again from the CLI.");
+    expect(exchanges).toBe(0);
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("revokes on operation failure and redacts untrusted errors", async () => {
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => { throw new Error("PRIVATE-OPERATION-SECRET"); }, { onAuthorizationUrl: approve }))
+      .rejects.toThrow("The private key setup could not be completed.");
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+  });
+
+  it("redacts SDK server error text before returning an error", async () => {
+    registrationError = true;
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve }))
+      .rejects.toThrow("Browser authorization could not be completed. Start again from the CLI.");
+    expect(exchanges).toBe(0);
+  });
+
+  it("reports failed revocation without claiming the temporary connection was removed", async () => {
+    revokeError = true;
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve }))
+      .rejects.toThrow(/temporary CLI connection could not be revoked/);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+  });
+
+  it("preserves operation recovery instructions even if OAuth cleanup also fails", async () => {
+    revokeError = true;
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => {
+      throw new OpperError("NETWORK_ERROR", "Outcome uncertain.", "Reuse the original request UUID.");
+    }, { onAuthorizationUrl: approve })).rejects.toMatchObject({
+      message: expect.stringContaining("temporary CLI connection could not be revoked"), hint: "Reuse the original request UUID.",
+    });
+  });
+});
