@@ -86,6 +86,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
   const routing: OpperRouting = {
     baseUrl,
+    sessionId,
     apiKey: slot.apiKey,
     model: opts.model ?? DEFAULT_MODELS.opus,
     compatShape: "openai",

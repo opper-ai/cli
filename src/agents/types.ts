@@ -6,6 +6,13 @@ export interface DetectResult {
 
 export interface OpperRouting {
   baseUrl: string;
+  /**
+   * The `sess_<uuid>` this launch runs under — the same id embedded in
+   * `baseUrl`. Adapters that emit trace or session-affinity headers need it
+   * on its own rather than picking it back out of the URL. Absent for the
+   * session-less compat URL a plain `configure` writes.
+   */
+  sessionId?: string;
   apiKey: string;
   model: string;
   compatShape: "openai" | "anthropic" | "responses";

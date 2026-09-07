@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { Document, isCollection, parseDocument } from "yaml";
 
 /**
  * Snapshot the values at one or more `keyPaths` in a JSON file (or
@@ -137,6 +138,148 @@ async function restore(
     await mkdir(dirname(path), { recursive: true });
     const text = JSON.stringify(after, null, 2) + "\n";
     await writeFile(path, text, beforeMode !== undefined ? { mode: beforeMode } : undefined);
+    if (beforeMode !== undefined) await chmod(path, beforeMode);
+  } catch (err) {
+    process.stderr.write(
+      `opper: failed to restore ${path} after launch: ${
+        err instanceof Error ? err.message : String(err)
+      }\n`,
+    );
+  }
+}
+
+/**
+ * YAML sibling of {@link withJsonKeys}, for agents whose persistent config
+ * is YAML (DeepSeek Harness' `settings.yaml`). Same contract: capture the
+ * values at `keyPaths` (or their absence), run `fn`, restore just those.
+ *
+ * Edits go through the `yaml` Document API rather than parse → stringify,
+ * so comments, key order, and quoting style elsewhere in the user's file
+ * survive the round-trip — this is a file the agent's own docs tell users
+ * to hand-edit.
+ */
+export async function withYamlKeys<T>(
+  path: string,
+  keyPaths: string[][],
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (keyPaths.length === 0) throw new Error("keyPaths must be non-empty");
+  for (const kp of keyPaths) {
+    if (kp.length === 0) throw new Error("each keyPath must be non-empty");
+  }
+  const fileExistedBefore = existsSync(path);
+  let beforeMode: number | undefined;
+  if (fileExistedBefore) {
+    try {
+      beforeMode = statSync(path).mode & 0o777;
+    } catch {
+      beforeMode = undefined;
+    }
+  }
+  // A file that was ALREADY unparseable when we captured is one we can't have
+  // written to (patchSettings refuses it), so the restore has nothing to undo
+  // and no business warning about a block it never wrote.
+  const beforeDoc = readYamlDocOrNull(path);
+  const before = beforeDoc ?? new Document({});
+  const valuesBefore = keyPaths.map((kp) => before.getIn(kp));
+  try {
+    return await fn();
+  } finally {
+    await restoreYaml(path, keyPaths, valuesBefore, fileExistedBefore, beforeMode, beforeDoc !== null);
+  }
+}
+
+/**
+ * Parse `path` into a Document, or null when a file exists that we cannot
+ * read as a mapping. Use this for anything that writes the file back:
+ * treating an unparseable document as empty means the write replaces
+ * content we never saw — a hand-edited config with one typo in it would be
+ * silently reduced to whatever keys we happen to set.
+ */
+export function readYamlDocOrNull(path: string): Document | null {
+  if (!existsSync(path)) return new Document({});
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) return null;
+  if (doc.contents === null) return new Document({});
+  return isCollection(doc.contents) ? doc : null;
+}
+
+/**
+ * Parse `path` into a Document, falling back to an empty mapping for a
+ * missing, unparseable, or non-mapping file — the YAML counterpart of
+ * readJsonOrEmpty, and deliberately as forgiving. Read-only callers only;
+ * writers want readYamlDocOrNull.
+ */
+export function readYamlDoc(path: string): Document {
+  if (!existsSync(path)) return new Document({});
+  try {
+    const doc = parseDocument(readFileSync(path, "utf8"));
+    if (doc.errors.length > 0 || !isCollection(doc.contents)) return new Document({});
+    return doc;
+  } catch {
+    return new Document({});
+  }
+}
+
+function isEmptyCollection(node: unknown): boolean {
+  return isCollection(node) && node.items.length === 0;
+}
+
+// Walk back up the path and drop intermediate maps that are now empty —
+// same cleanliness rule as the JSON variant, so removing our provider
+// doesn't leave a bare `llm-pi-ai: providers: {}` husk behind.
+function pruneEmptyAlongYamlPath(doc: Document, keyPath: string[]): void {
+  for (let depth = keyPath.length - 1; depth >= 1; depth--) {
+    const parentPath = keyPath.slice(0, depth);
+    if (isEmptyCollection(doc.getIn(parentPath))) doc.deleteIn(parentPath);
+  }
+}
+
+async function restoreYaml(
+  path: string,
+  keyPaths: string[][],
+  valuesBefore: unknown[],
+  fileExistedBefore: boolean,
+  beforeMode: number | undefined,
+  parseableBefore: boolean,
+): Promise<void> {
+  try {
+    const after = readYamlDocOrNull(path);
+    // Whatever left the file unparseable — the agent mid-write, a user edit,
+    // an interrupted flush — rewriting it from an empty document would drop
+    // every section we did not snapshot. Our keys are worth less than the
+    // rest of the file, so leave it and say so.
+    if (after === null) {
+      if (parseableBefore) {
+        process.stderr.write(
+          `opper: ${path} is not readable as YAML after launch — leaving it untouched. ` +
+            `Remove the Opper provider block by hand if it is still there.\n`,
+        );
+      }
+      return;
+    }
+    for (let i = 0; i < keyPaths.length; i++) {
+      const value = valuesBefore[i];
+      if (value === undefined) after.deleteIn(keyPaths[i]!);
+      else after.setIn(keyPaths[i]!, value);
+    }
+    for (const kp of keyPaths) {
+      pruneEmptyAlongYamlPath(after, kp);
+    }
+
+    if (!fileExistedBefore && isEmptyCollection(after.contents)) {
+      await rm(path, { force: true });
+      return;
+    }
+
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, after.toString(), beforeMode !== undefined ? { mode: beforeMode } : undefined);
     if (beforeMode !== undefined) await chmod(path, beforeMode);
   } catch (err) {
     process.stderr.write(

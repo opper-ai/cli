@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -11,7 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { withJsonKeys } from "../../src/util/config-snapshot.js";
+import { parse } from "yaml";
+import { withJsonKeys, withYamlKeys } from "../../src/util/config-snapshot.js";
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -273,5 +274,199 @@ describe("withJsonKeys", () => {
     expect(readJson(path)).toEqual({
       providers: { opper: { baseUrl: "keep" } },
     });
+  });
+});
+
+describe("withYamlKeys", () => {
+  let sandbox: string;
+
+  beforeEach(() => {
+    sandbox = mkdtempSync(join(tmpdir(), "opper-yaml-snap-"));
+  });
+  afterEach(() => {
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it("restores the captured value at the keyPath when it pre-existed", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "llm-pi-ai:\n  providers:\n    opper:\n      baseURL: compat\n", "utf8");
+
+    await withYamlKeys(path, [["llm-pi-ai", "providers", "opper"]], async () => {
+      writeFileSync(
+        path,
+        "llm-pi-ai:\n  providers:\n    opper:\n      baseURL: session-url\n",
+        "utf8",
+      );
+    });
+
+    expect(parse(readFileSync(path, "utf8"))).toEqual({
+      "llm-pi-ai": { providers: { opper: { baseURL: "compat" } } },
+    });
+  });
+
+  it("removes the key (and its now-empty parents) when fn added it", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "telemetry: false\n", "utf8");
+
+    await withYamlKeys(path, [["llm-pi-ai", "providers", "opper"]], async () => {
+      writeFileSync(
+        path,
+        "telemetry: false\nllm-pi-ai:\n  providers:\n    opper:\n      baseURL: session-url\n",
+        "utf8",
+      );
+    });
+
+    expect(parse(readFileSync(path, "utf8"))).toEqual({ telemetry: false });
+  });
+
+  it("preserves comments and sibling edits made during fn", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(
+      path,
+      "# my settings\nllm-pi-ai:\n  providers:\n    opper:\n      baseURL: compat # ours\n",
+      "utf8",
+    );
+
+    await withYamlKeys(path, [["llm-pi-ai", "providers", "opper"]], async () => {
+      writeFileSync(
+        path,
+        "# my settings\nllm-pi-ai:\n  providers:\n    opper:\n      baseURL: session-url\n    mine:\n      baseURL: https://gateway.example/v1\nadded: 1\n",
+        "utf8",
+      );
+    });
+
+    const text = readFileSync(path, "utf8");
+    expect(text).toContain("# my settings");
+    expect(text).toContain("# ours");
+    const after = parse(text) as Record<string, any>;
+    expect(after["llm-pi-ai"].providers.opper).toEqual({ baseURL: "compat" });
+    expect(after["llm-pi-ai"].providers.mine).toEqual({
+      baseURL: "https://gateway.example/v1",
+    });
+    expect(after.added).toBe(1);
+  });
+
+  it("deletes the file when it didn't exist before and is empty after restore", async () => {
+    const path = join(sandbox, "settings.yaml");
+
+    await withYamlKeys(path, [["agent-default-model"]], async () => {
+      writeFileSync(path, "agent-default-model:\n  provider: opper\n", "utf8");
+    });
+
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("keeps the file when it didn't exist before but fn added other content", async () => {
+    const path = join(sandbox, "settings.yaml");
+
+    await withYamlKeys(path, [["agent-default-model"]], async () => {
+      writeFileSync(path, "agent-default-model:\n  provider: opper\nkept: yes\n", "utf8");
+    });
+
+    expect(parse(readFileSync(path, "utf8"))).toEqual({ kept: "yes" });
+  });
+
+  it("restores even when fn throws, and rethrows the error", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "agent-default-model:\n  provider: deepseek\n", "utf8");
+
+    await expect(
+      withYamlKeys(path, [["agent-default-model"]], async () => {
+        writeFileSync(path, "agent-default-model:\n  provider: opper\n", "utf8");
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(parse(readFileSync(path, "utf8"))).toEqual({
+      "agent-default-model": { provider: "deepseek" },
+    });
+  });
+
+  it("preserves the original file mode", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "a: 1\n", "utf8");
+    chmodSync(path, 0o600);
+
+    await withYamlKeys(path, [["a"]], async () => {
+      writeFileSync(path, "a: 2\n", "utf8");
+    });
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("restores multiple keyPaths independently", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(
+      path,
+      "llm-pi-ai:\n  providers:\n    opper:\n      baseURL: compat\nagent-default-model:\n  model: theirs\n",
+      "utf8",
+    );
+
+    await withYamlKeys(
+      path,
+      [["llm-pi-ai", "providers", "opper"], ["agent-default-model"]],
+      async () => {
+        writeFileSync(
+          path,
+          "llm-pi-ai:\n  providers:\n    opper:\n      baseURL: session\nagent-default-model:\n  model: ours\n",
+          "utf8",
+        );
+      },
+    );
+
+    expect(parse(readFileSync(path, "utf8"))).toEqual({
+      "llm-pi-ai": { providers: { opper: { baseURL: "compat" } } },
+      "agent-default-model": { model: "theirs" },
+    });
+  });
+
+  it("reads an unparseable file as empty when capturing, rather than throwing", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "a: [1,\n  b: :\n", "utf8");
+
+    await expect(
+      withYamlKeys(path, [["agent-default-model"]], async () => {
+        writeFileSync(path, "agent-default-model:\n  provider: opper\nkept: yes\n", "utf8");
+      }),
+    ).resolves.toBeUndefined();
+
+    // Nothing of ours was there to restore, and the rest of the file stands.
+    expect(parse(readFileSync(path, "utf8"))).toEqual({ kept: "yes" });
+  });
+
+  it("says nothing when the file was already unparseable before fn — we never wrote to it", async () => {
+    const path = join(sandbox, "settings.yaml");
+    const broken = "theirs: keep\nmcp-servers: [oops\n";
+    writeFileSync(path, broken, "utf8");
+
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await withYamlKeys(path, [["llm-pi-ai", "providers", "opper"]], async () => {
+        // patchSettings would have thrown here; nothing was written.
+      });
+      expect(readFileSync(path, "utf8")).toBe(broken);
+      expect(err).not.toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("leaves a file that became unparseable during fn untouched rather than rewriting it", async () => {
+    const path = join(sandbox, "settings.yaml");
+    writeFileSync(path, "llm-pi-ai:\n  providers:\n    opper:\n      baseURL: compat\ntheirs: keep\n", "utf8");
+    const broken = "llm-pi-ai:\n  providers: [oops\ntheirs: keep\nmcp-servers:\n  one: two\n";
+
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      await withYamlKeys(path, [["llm-pi-ai", "providers", "opper"]], async () => {
+        writeFileSync(path, broken, "utf8");
+      });
+      // Restoring from an empty document would have dropped `theirs` and
+      // `mcp-servers` — everything we never snapshotted.
+      expect(readFileSync(path, "utf8")).toBe(broken);
+      expect(err.mock.calls.map((c) => String(c[0])).join("")).toContain("leaving it untouched");
+    } finally {
+      err.mockRestore();
+    }
   });
 });

@@ -63,11 +63,13 @@ opper launch codex               # OpenAI Responses shape → /v3/session/<id>/r
 opper launch hermes              # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
 opper launch openclaw            # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions (background gateway)
 opper launch pi                  # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
+opper launch dsh                 # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions (DeepSeek Harness' local web UI)
 
 # Anything after the agent name is forwarded to its CLI — handy for
 # scripting / cron with non-interactive flags.
 opper launch pi -p "summarise this PR"
 opper launch claude --resume
+opper launch dsh -- --profile headless "run the tests"
 ```
 
 | Agent | Slug | How Opper plugs in |
@@ -79,6 +81,7 @@ opper launch claude --resume
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
 | OpenClaw | `openclaw` | `opper` provider entry in `~/.openclaw/agents/main/agent/models.json`; `opper launch openclaw` defaults to `gateway start` (background daemon) |
 | Pi | `pi` | `opper` provider entry in `~/.pi/agent/models.json` (added/removed idempotently next to your other providers) |
+| DeepSeek Harness | `dsh` | `opper` provider route + `agent-default-model` in `$DSH_HOME/settings.yaml` (default `~/.dsh/`); the key goes to `.credentials.yaml` (mode 0600) for a plain configure, and stays in the environment for a launch. `opper launch dsh` defaults to `dsh web`, its local browser UI |
 
 `opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported). Claude Desktop is GUI-only on macOS/Windows and has no scripted installer — install it from <https://claude.ai/download> first.
 
@@ -90,7 +93,7 @@ To remove an agent's Opper integration without uninstalling the agent itself:
 opper agents remove claude-desktop   # works for any registered adapter
 ```
 
-This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
+This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw / DeepSeek Harness, etc.) without touching anything you put there yourself.
 
 ## Routing through a session without the CLI
 
@@ -158,7 +161,7 @@ export ANTHROPIC_BASE_URL="https://api.opper.ai/v3/session/$SID"
 export ANTHROPIC_AUTH_TOKEN="$OPPER_API_KEY"
 ```
 
-**Config-file agents** — OpenCode, Hermes, Pi, and OpenClaw don't read those env vars; they take the base URL from their own provider config (`opencode.json`, Hermes' `base_url`, `~/.pi/agent/models.json`, …). Point that provider's base URL at `https://api.opper.ai/v3/session/<id>` and use your Opper key.
+**Config-file agents** — OpenCode, Hermes, Pi, OpenClaw, and DeepSeek Harness don't read those env vars; they take the base URL from their own provider config (`opencode.json`, Hermes' `base_url`, `~/.pi/agent/models.json`, `~/.dsh/settings.yaml`, …). Point that provider's base URL at `https://api.opper.ai/v3/session/<id>` and use your Opper key.
 
 Either way, that is exactly what `opper launch` does for you — plus a fresh id per run and an end-of-session cost summary.
 
