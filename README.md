@@ -196,31 +196,51 @@ opper editors opencode --mcp --local --mcp-url http://localhost:8080/mcp
 `--mcp` adds the remote `https://api.opper.ai/mcp` server as `opper`. It leaves
 your inference provider, model, tool permissions, and other MCP servers alone.
 It needs no API key and does not log in, launch OpenCode, or approve consent.
-Reopen OpenCode, connect the server, and approve access in your browser. If the
+The default connection contains only the server URL and connection settings:
+
+```json
+{
+  "mcp": {
+    "opper": {
+      "type": "remote",
+      "url": "https://api.opper.ai/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+Reopen OpenCode, connect the server, and choose your organization and permissions
+in Opper in your browser. Available permissions are discovered from Opper; only
+the permissions you approve are granted. If the
 client requires manual authentication, use `opencode mcp auth opper`, then
-reopen OpenCode to load the authenticated tools. New connections request
-`account:read projects:read` by default.
+reopen OpenCode to load the authenticated tools.
 Availability of the endpoint depends on the Opper MCP deployment.
 
 OpenCode 1.18.29 cannot automatically complete a permission upgrade after a tool
-reports insufficient scope. Choose the permissions needed for your workflow
-before connecting, or update the configured selection and authenticate again:
+reports insufficient scope. Start its native authentication flow again and
+approve the additional permissions in Opper. With the default URL-only setup,
+this does not require editing the MCP config. An agent can guide the workflow;
+the account owner approves access in the browser.
+
+For an advanced client-side restriction, use `--mcp-scopes` to limit the
+permissions that can be offered during consent:
 
 ```bash
-# Create projects and keys, inspect policy, call models, and inspect usage/traces.
-opper editors opencode --mcp --mcp-scopes 'account:read projects:read projects:write apikeys:read apikeys:write controls:read runtime:read runtime:call'
-
-# Full account workflow, including project deletion, policy changes, and routes.
-opper editors opencode --mcp --mcp-scopes 'account:read projects:read projects:write projects:delete apikeys:read apikeys:write controls:read controls:write dynamic_routes:read dynamic_routes:write runtime:read runtime:call'
+# Restrict this client to account and project inspection.
+opper editors opencode --mcp --mcp-scopes 'account:read projects:read'
 ```
 
 `--mcp-scopes` replaces only the matched server's requested scope setting. It
 never adds unselected permissions, grants access, or changes existing tokens.
-Reopen OpenCode and use its native authentication flow to review and approve
-the selected permissions in the browser. For a later upgrade, include the
-permissions you still need along with the new ones. You can narrow the selection
-with the same option; to revoke an existing grant, disconnect it in the Opper
-app. Config changes alone do not revoke grants.
+Reopen OpenCode after changing this restriction and use its native authentication
+flow to review and approve permissions in the browser. Consent cannot exceed
+the explicit restriction. To return an existing connection to normal discovery,
+remove its `oauth.scope` property from the effective OpenCode config, preserving
+any other OAuth settings, then reopen OpenCode and authenticate again. Plain
+`--mcp` preserves existing restrictions, including those from earlier CLI versions.
+To revoke an existing grant, disconnect it in the Opper app. Config changes alone
+do not revoke grants.
 
 The setup preserves JSONC comments and reads both `opencode.json` and
 `opencode.jsonc` (plus global `config.json`) in OpenCode's merge order. New MCP

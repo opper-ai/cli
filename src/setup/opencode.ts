@@ -47,7 +47,7 @@ export interface ConfigureOpenCodeOptions {
   mcp?: boolean;
   /** Optional MCP development/staging endpoint; requires explicit mcp=true. */
   mcpUrl?: string;
-  /** Explicit requested OAuth scopes; replaces only this MCP scope setting. */
+  /** Optional explicit OAuth restriction; default setup discovers permissions from Opper. */
   mcpScopes?: string;
 }
 

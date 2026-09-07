@@ -62,7 +62,7 @@ export async function editorsOpenCodeCommand(
     if (result.mcpEnabled === false) {
       console.log(`The ${result.mcpName} connection is disabled. Enable it in OpenCode when you want to connect.`);
     } else {
-      console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and approve permissions in your browser.`);
+      console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and choose permissions in Opper in your browser.`);
       const name = result.mcpName ?? "opper";
       const shellName = /^[A-Za-z0-9_-]+$/.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;
       console.log(`If your client needs manual authentication, run: opencode mcp auth ${shellName}`);

@@ -9,7 +9,6 @@ import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import type { ConfigureOpenCodeResult } from "./opencode.js";
 
 const DEFAULT_MCP_URL = `${OPPER_HOST}/mcp`;
-const DEFAULT_MCP_SCOPES = "account:read projects:read";
 const MCP_SCOPES = new Set([
   "account:read", "projects:read", "projects:write", "projects:delete",
   "apikeys:read", "apikeys:write", "controls:read", "controls:write",
@@ -133,10 +132,13 @@ export async function configureOpenCodeMcp(
     throw new OpperError("AGENT_CONFIG_CONFLICT", "An OpenCode MCP server named opper already uses different settings.",
       "Edit or rename that entry in OpenCode before adding this endpoint. --overwrite applies only to inference provider setup.");
   }
-  const mcpScopes = scopes ?? DEFAULT_MCP_SCOPES;
-  const entry = { type: "remote", url, enabled: true, oauth: { scope: mcpScopes } };
+  // Omit a scope restriction by default so Opper's consent page can offer
+  // permissions discovered by the client. Only explicit selections belong
+  // in the client config; existing restrictions are preserved above.
+  const entry = { type: "remote", url, enabled: true,
+    ...(scopes !== undefined ? { oauth: { scope: scopes } } : {}) };
   const editPath = existing ? ["mcp", mcpName, "oauth", "scope"] : ["mcp", mcpName];
-  const updated = applyEdits(target.text, modify(target.text, editPath, existing ? mcpScopes : entry, {
+  const updated = applyEdits(target.text, modify(target.text, editPath, existing ? scopes : entry, {
     formattingOptions: { insertSpaces: true, tabSize: 2, eol: target.text.includes("\r\n") ? "\r\n" : "\n" },
   }));
   // A user/editor may save while configuration is being inspected. Refuse
@@ -148,5 +150,6 @@ export async function configureOpenCodeMcp(
   }
   await mkdir(directory, { recursive: true });
   await writeFile(target.path, updated, { encoding: "utf8", mode: 0o600 });
-  return { path: target.path, wrote: true, mcpName, mcpEnabled, mcpScopes };
+  return { path: target.path, wrote: true, mcpName, mcpEnabled,
+    ...(scopes !== undefined ? { mcpScopes: scopes } : {}) };
 }

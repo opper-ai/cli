@@ -96,6 +96,8 @@ describe("editors commands", () => {
       expect(output).toContain("opper");
       expect(output).toMatch(/browser/i);
       expect(output).toMatch(/restart|reopen/i);
+      expect(output).toContain("choose permissions in Opper");
+      expect(output).not.toContain("Requested permissions:");
     } finally { log.mockRestore(); }
   });
 
