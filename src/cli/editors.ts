@@ -24,7 +24,7 @@ const register: RegisterFn = (program) => {
     .option("--overwrite", "replace an existing Opper provider if present")
     .option("--mcp", "add the Opper account MCP only; preserve inference settings")
     .option("--mcp-url <url>", "MCP endpoint override (requires --mcp; default https://api.opper.ai/mcp)")
-    .option("--mcp-scopes <scopes>", "explicit space-separated OAuth scopes; replaces this server's scope setting (requires --mcp)")
+    .option("--mcp-scopes <scopes>", "advanced: restrict available permissions to these space-separated OAuth scopes (requires --mcp)")
     .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean; mcp?: boolean; mcpUrl?: string; mcpScopes?: string }) => {
       await editorsOpenCodeCommand({
         location: cmdOpts.local ? "local" : "global",

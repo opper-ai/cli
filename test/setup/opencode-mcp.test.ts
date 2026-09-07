@@ -23,14 +23,14 @@ describe("explicit OpenCode MCP setup", () => {
   });
   const load = (path: string) => parse(readFileSync(path, "utf8"));
 
-  it("is opt-in and writes only a public remote URL with minimal initial scopes", async () => {
+  it("is opt-in and leaves permission discovery to Opper with a URL-only connection", async () => {
     let result = await configureOpenCode({ location: "global" });
     expect(load(result.path).mcp).toBeUndefined();
     result = await configureOpenCode({ location: "global", mcp: true });
     expect(load(result.path).mcp).toEqual({ opper: {
       type: "remote", url: "https://api.opper.ai/mcp", enabled: true,
-      oauth: { scope: "account:read projects:read" },
     } });
+    expect(result.mcpScopes).toBeUndefined();
     const original = readFileSync(result.path, "utf8");
     expect((await configureOpenCode({ location: "global", mcp: true })).wrote).toBe(false);
     expect(readFileSync(result.path, "utf8")).toBe(original);
@@ -161,6 +161,8 @@ describe("explicit OpenCode MCP setup", () => {
     const path = join(directory, "opencode.json");
     const raw = JSON.stringify({ mcp: { opper: { type: "remote", url: "https://api.opper.ai/mcp", oauth } } });
     writeFileSync(path, raw);
+    expect((await configureOpenCode({ location: "global", mcp: true })).wrote).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(raw);
     await expect(configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read" })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
     expect(readFileSync(path, "utf8")).toBe(raw);
   });
