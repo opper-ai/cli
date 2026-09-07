@@ -30,6 +30,7 @@ const GROUPS: HelpGroup[] = [
     title: "Platform",
     commands: [
       "call",
+      "keys",
       "functions",
       "models",
       "indexes",

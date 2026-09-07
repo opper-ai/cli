@@ -36,7 +36,7 @@ Run `opper` with no arguments for an interactive menu (Account · Ask · Agents 
 
 ## Authentication
 
-Auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on any command to pick which slot to read from (defaults to `default`).
+Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on runtime commands to pick which slot to read from (defaults to `default`). Private key creation below uses its own browser authorization instead.
 
 | Command | Description |
 |---------|-------------|
@@ -265,6 +265,7 @@ Direct access to the platform endpoints:
 | Command | Description |
 |---------|-------------|
 | `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
+| `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
 | `opper functions list [filter]` / `get <name>` / `delete <name>` | Manage functions. |
 | `opper models list [filter]` | List available models (built-in + custom). |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
@@ -279,6 +280,45 @@ Direct access to the platform endpoints:
 | `opper image generate <prompt> [-o <file>] [--base64] [-m <model>]` | Generate an image. |
 
 ## Recipes
+
+### Creating an application key without putting its secret in a conversation
+
+```bash
+opper keys create --project <project-uuid> --name 'My app' --output .env.opper
+```
+
+The command opens Opper consent for project read access and API key creation.
+Choose the organization containing that project and explicitly select API key
+creation. The CLI checks the project, creates one runtime key through the
+delegated API, then writes `OPPER_API_KEY=...` into the new file with POSIX mode
+`0600`. The parent directory must already exist. Existing files and symlinks are
+never replaced, including when another process creates the destination during
+browser approval. Stdout contains only the key ID, name, project UUID, and saved
+path as JSON; progress and the browser URL go to stderr. Load the env file in
+your application without printing or pasting it into an agent conversation.
+
+This authorization is independent of `opper login`, `--key`, `OPPER_API_KEY`,
+and OpenCode's credentials. It uses the maintained MCP SDK for discovery, public
+client registration, and PKCE. Only the public client registration is retained
+under `~/.opper/mcp-clients` (or `$OPPER_HOME/mcp-clients`), keyed by MCP URL and
+issuer; OAuth tokens stay in memory. The temporary OAuth connection is revoked
+when the operation finishes, including on errors. The application key remains
+usable after that connection is revoked.
+
+For local development, append `--mcp-url http://localhost:8080/mcp`. A production
+server must have the delegated MCP/OAuth endpoints deployed before this command
+can authorize. Ordinary API errors and SDK errors are sanitized, including with
+`--debug`.
+
+The CLI retries an uncertain create once with the same idempotency UUID. If the
+outcome is still unknown, its error includes `--idempotency-key <uuid>`: reuse
+that value only with the same project, name, MCP URL, account, organization, and
+retained public client registration. Never generate another operation ID to
+resolve an unknown outcome. A replay identifies the existing key but cannot
+return its secret again; the CLI revokes that key and reports that a fresh
+creation is needed. A failed file installation also attempts to revoke only
+the newly created key. If key or connection cleanup fails, the CLI reports the
+remaining action and exits with an error; an already installed env file is kept.
 
 ### Calling a function from the shell or stdin
 
