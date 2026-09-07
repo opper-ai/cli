@@ -24,11 +24,14 @@ describe("traces commands", () => {
 
   it("list calls GET /v3/traces and prints a table", async () => {
     await setSlot("default", { apiKey: "k" });
+    // Mirrors what /v3/traces returns in production: a `data` envelope, `id`
+    // rather than `uuid`, and `status` present only on a failed trace.
     getMock.mockResolvedValue({
-      traces: [
-        { uuid: "t1", name: "call-foo", status: "ok", start_time: "2026-04-21T00:00:00Z", duration_ms: 42 },
-        { uuid: "t2", name: "call-bar", status: "error", start_time: "2026-04-21T00:01:00Z", duration_ms: 1200 },
+      data: [
+        { id: "t1", name: "call-foo", start_time: "2026-04-21T00:00:00Z", duration_ms: 42, span_count: 1 },
+        { id: "t2", name: "call-bar", status: "failed", start_time: "2026-04-21T00:01:00Z", duration_ms: 1200, span_count: 3 },
       ],
+      meta: { total_count: 2 },
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -44,7 +47,7 @@ describe("traces commands", () => {
 
   it("list forwards --limit and --name", async () => {
     await setSlot("default", { apiKey: "k" });
-    getMock.mockResolvedValue({ traces: [] });
+    getMock.mockResolvedValue({ data: [], meta: { total_count: 0 } });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await tracesListCommand({ key: "default", limit: 50, name: "foo" });
@@ -60,8 +63,15 @@ describe("traces commands", () => {
   it("get prints trace details", async () => {
     await setSlot("default", { apiKey: "k" });
     getMock.mockResolvedValue({
-      trace: { uuid: "t1", name: "call", status: "ok" },
-      spans: [{ uuid: "s1", name: "root" }],
+      data: {
+        id: "t1",
+        name: "call",
+        status: "failed",
+        start_time: "2026-04-21T00:00:00Z",
+        duration_ms: 42,
+        span_count: 1,
+        spans: [{ id: "s1", name: "root" }],
+      },
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -69,6 +79,8 @@ describe("traces commands", () => {
       expect(getMock).toHaveBeenCalledWith("/v3/traces/t1");
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("t1");
+      expect(out).toContain("failed");
+      expect(out).toContain("spans:");
     } finally {
       log.mockRestore();
     }
