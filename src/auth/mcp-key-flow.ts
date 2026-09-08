@@ -245,11 +245,23 @@ export async function withMcpKeyAuthorization<T>(
         const endpoint = revocationEndpoint(discovery);
         if (!endpoint || !clientInfo) throw new Error("Missing revocation metadata");
         const url = validateOAuthEndpoint(endpoint);
-        const response = await fetch(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ token: tokens.refresh_token ?? tokens.access_token, client_id: clientInfo.client_id }),
-        });
-        if (!response.ok) throw new Error("Revocation failed");
+        const credentials = [
+          ...(tokens.refresh_token ? [{ token: tokens.refresh_token, hint: "refresh_token" }] : []),
+          { token: tokens.access_token, hint: "access_token" },
+        ];
+        let revocationFailed = false;
+        // A server need not invalidate access tokens when revoking a refresh
+        // token. Attempt each cleanup even if another request fails.
+        for (const credential of credentials) {
+          try {
+            const response = await fetch(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ token: credential.token, token_type_hint: credential.hint, client_id: clientInfo.client_id }),
+            });
+            if (!response.ok) revocationFailed = true;
+          } catch { revocationFailed = true; }
+        }
+        if (revocationFailed) throw new Error("Revocation failed");
       } catch {
         failure = new OpperError("API_ERROR", `${failure ? failure.message + " " : ""}The temporary CLI connection could not be revoked. Disconnect 'Opper CLI private key setup' in Opper's Agent connections.`, failure?.hint);
       }
