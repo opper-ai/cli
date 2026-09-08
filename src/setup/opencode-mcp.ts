@@ -62,6 +62,9 @@ async function replaceExistingConfig(path: string, expected: string, updated: st
   const backup = join(directory, `${basename(path)}.backup`);
   let captured = false;
   try {
+    // Exclude contents before either staged settings or the captured original
+    // can enter this directory, including for an ignored project config.
+    await writeFile(join(directory, ".gitignore"), "*\n", { flag: "wx", mode: 0o600 });
     const handle = await open(staged, "wx", 0o600);
     try { await handle.writeFile(updated); await handle.sync(); }
     finally { await handle.close(); }

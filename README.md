@@ -277,6 +277,7 @@ or fragments.
 
 When setup updates an existing regular config, it retains the original file in
 a private `.opper-mcp-*` backup directory beside it and prints that backup path.
+The backup directory excludes its contents from ordinary Git staging.
 It captures and checks the current file before installing the update without
 replacing a competing save. A detected conflict stops setup and preserves both
 versions for review. Backups also retain late saves through an editor's already
@@ -500,7 +501,7 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 ## Requirements
 
 - Node.js ≥20.12 (for `util.styleText`, used by interactive prompts).
-- macOS, Linux, or WSL. Native Windows shells aren't tested.
+- macOS, Linux, or WSL. Native Windows shells aren't tested; OAuth approval URLs must be opened manually there.
 
 ## Releasing
 
