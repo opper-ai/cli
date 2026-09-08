@@ -130,13 +130,28 @@ describe("MCP command configuration", () => {
     expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 
-  it("preserves printable Unicode names and shell-quotes embedded apostrophes", async () => {
-    const name = "team's café 👩‍💻";
+  it.each([
+    "team's café 👩‍💻", "demo & calc.exe & echo x", "demo%COMSPEC%!PATH!",
+    "demo$(echo x)", "demo`echo x`", "--help", "list", "ls",
+  ])("uses the native picker for a name requiring shell or command interpretation (%s)", async (name) => {
     const original = JSON.stringify({ mcp: { [name]: { type: "remote", url: "https://api.opper.ai/mcp" } } });
     seed(original);
     await run(["mcp", "add", "opencode"]);
-    expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toContain("opencode mcp auth 'team'\\''s café 👩‍💻'");
+    const messages = vi.mocked(console.log).mock.calls.flat();
+    expect(messages.find((message) => String(message).startsWith("If your client needs manual authentication")))
+      .toBe("If your client needs manual authentication, run: opencode mcp auth");
+    expect(messages).toContain("Select the connection named above from OpenCode's server picker.");
+    expect(messages.join("\n")).toContain(name);
     expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  it.each(["opper", "team_2-dev", "9demo"])("keeps a direct portable auth argument for %s", async (name) => {
+    seed(JSON.stringify({ mcp: { [name]: { type: "remote", url: "https://api.opper.ai/mcp" } } }));
+    await run(["editors", "opencode", "--mcp"]);
+    const messages = vi.mocked(console.log).mock.calls.flat();
+    expect(messages.find((message) => String(message).startsWith("If your client needs manual authentication")))
+      .toBe(`If your client needs manual authentication, run: opencode mcp auth ${name}`);
+    expect(messages.join("\n")).not.toContain("server picker");
   });
 
   it("leaves unrelated server names untouched without displaying them", async () => {
