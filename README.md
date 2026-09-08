@@ -259,6 +259,9 @@ do not revoke grants.
 The setup preserves JSONC comments and reads both `opencode.json` and
 `opencode.jsonc` (plus global `config.json`) in OpenCode's merge order. New MCP
 settings go into the existing JSONC file when present, otherwise the JSON file.
+Explicit scope updates edit the highest-precedence file containing the matched
+server's complete remote definition. Other preference layers remain untouched;
+private headers and OAuth settings are not copied between files.
 An existing server with the same URL keeps its current name, auth settings,
 and enabled/disabled preference; an explicit `--scopes` updates only its
 OAuth scope. If OAuth is disabled, an explicit `--scopes` change asks you to

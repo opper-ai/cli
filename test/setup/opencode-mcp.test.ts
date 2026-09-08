@@ -256,18 +256,40 @@ describe("explicit OpenCode MCP setup", () => {
     } });
     writeFileSync(path, raw);
     const jsonc = join(directory, "opencode.jsonc");
-    writeFileSync(jsonc, '{\n // MCP preferences\n "mcp": { "opper_demo": { "oauth": {\n // Fixed callback\n "redirectUri": "http://localhost:19876/mcp/oauth/callback",\n } } },\n}');
+    writeFileSync(jsonc, '{\n // MCP preferences\n "mcp": { "opper_demo": { "type": "remote", "url": "https://api.opper.ai/mcp", "oauth": {\n // Fixed callback\n "redirectUri": "http://localhost:19876/mcp/oauth/callback",\n } } },\n}');
     const result = await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read projects:read projects:write" });
     expect(result).toMatchObject({ wrote: true, mcpName: "opper_demo", mcpEnabled: false, mcpOAuthEnabled: true, mcpScopes: "account:read projects:read projects:write" });
     expect(readFileSync(path, "utf8")).toBe(raw);
     const updated = readFileSync(jsonc, "utf8");
     expect(updated).toContain("// MCP preferences");
     expect(updated).toContain("// Fixed callback");
-    expect(load(jsonc).mcp).toEqual({ opper_demo: { oauth: { redirectUri: "http://localhost:19876/mcp/oauth/callback", scope: "account:read projects:read projects:write" } } });
+    expect(load(jsonc).mcp).toEqual({ opper_demo: { type: "remote", url: "https://api.opper.ai/mcp", oauth: { redirectUri: "http://localhost:19876/mcp/oauth/callback", scope: "account:read projects:read projects:write" } } });
     expect(await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read projects:read projects:write" })).toMatchObject({ wrote: false, mcpOAuthEnabled: true });
     expect(readFileSync(jsonc, "utf8")).toBe(updated);
     await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read" });
     expect(load(jsonc).mcp.opper_demo.oauth.scope).toBe("account:read");
+  });
+
+  it.each([
+    { disabled: false, ignoredScope: undefined },
+    { disabled: true, ignoredScope: undefined },
+    { disabled: true, ignoredScope: "account:read projects:read" },
+  ])("updates the defining document beneath a JSONC preference layer (%j)", async ({ disabled, ignoredScope }) => {
+    const path = join(directory, "opencode.json");
+    const jsonc = `${path}c`;
+    writeFileSync(path, JSON.stringify({ mcp: { demo: {
+      type: "remote", url: "https://api.opper.ai/mcp", enabled: true,
+      headers: { "X-Test": "private-header" }, oauth: { clientId: "existing-client", scope: "account:read" },
+    } } }), { mode: 0o600 });
+    const overlay = `// Keep my preferences\n${JSON.stringify({ model: "other/model", ...(disabled ? { mcp: { demo: { enabled: false, ...(ignoredScope ? { oauth: { scope: ignoredScope } } : {}) } } } : {}) })}\n`;
+    writeFileSync(jsonc, overlay, { mode: 0o644 });
+    const result = await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read projects:read" });
+    expect(result).toMatchObject({ path, wrote: true, mcpEnabled: !disabled, mcpOAuthEnabled: true });
+    expect(load(path).mcp.demo.oauth).toEqual({ clientId: "existing-client", scope: "account:read projects:read" });
+    expect(load(path).mcp.demo.headers).toEqual({ "X-Test": "private-header" });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readFileSync(jsonc, "utf8")).toBe(overlay);
+    expect((await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read projects:read" })).wrote).toBe(false);
   });
 
   it.each(["", " ", "*", "account:read projects:write unknown:write", "account:read,projects:read"])
