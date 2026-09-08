@@ -12,10 +12,15 @@ export interface KeysCreateOptions {
   output: string;
   mcpUrl?: string;
   idempotencyKey?: string;
+  resetClient?: boolean;
 }
 const keySchema = z.object({ data: z.object({ id: z.number().int().positive(), key: z.string().optional() }) });
 
 export async function keysCreateCommand(options: KeysCreateOptions): Promise<void> {
+  if (options.resetClient && options.idempotencyKey !== undefined) {
+    throw new OpperError("INVALID_ARGUMENT", "Cannot reset the client while recovering an interrupted key create.",
+      "Keep the original client registration and --idempotency-key to resolve that operation.");
+  }
   const project = z.string().uuid().safeParse(options.project);
   const requestId = z.string().uuid().safeParse(options.idempotencyKey ?? randomUUID());
   if (!project.success || !requestId.success) throw new OpperError("INVALID_ARGUMENT", "Project and idempotency identifiers must be UUIDs.");
@@ -104,7 +109,8 @@ export async function keysCreateCommand(options: KeysCreateOptions): Promise<voi
       }
       // This whitelist is the entire stdout contract. Never print API objects.
       console.log(JSON.stringify({ id: keyId, name: options.name, project_uuid: project.data, output }));
-    }, { signal: signal.signal });
+    }, { signal: signal.signal, resetClient: options.resetClient ?? false,
+      preserveClientRegistration: options.idempotencyKey !== undefined });
   } catch (error) {
     if (error instanceof OpperError) throw error;
     throw new OpperError("API_ERROR", "The private key setup could not be completed.");

@@ -351,6 +351,19 @@ creation is needed. A failed file installation also attempts to revoke only
 the newly created key. If key or connection cleanup fails, the CLI reports the
 remaining action and exits with an error; an already installed env file is kept.
 
+If a server reset or client deletion leaves the browser reporting `invalid_client`,
+use `--reset-client` with a **fresh** key creation to replace only that MCP URL
+and issuer's retained public registration. The next authorization needs fresh
+browser consent. A token endpoint rejection also removes the rejected registration
+and asks you to restart; the CLI never exchanges an old authorization code under a
+new client identity. Existing OAuth grants are not revoked by resetting local
+registration; manage those in Agent connections.
+
+Do not reset a client while a previous key creation is uncertain. `--reset-client`
+cannot be combined with `--idempotency-key`; recovery also refuses to register a
+new identity if the original cache is missing or invalid. Restore the original
+registration or reconcile the earlier key in Opper before starting a fresh create.
+
 ### Calling a function from the shell or stdin
 
 ```bash

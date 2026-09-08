@@ -15,7 +15,9 @@ let authorization: URL;
 let registrations: number;
 let exchanges: number;
 let revoked: string[];
-let grantedScope: string;
+let grantedScope: string | undefined;
+let invalidClient: boolean;
+let offlineAccessSupported: boolean;
 let registrationError: boolean;
 let revokeError: boolean;
 let requiresIssuer: boolean;
@@ -25,7 +27,7 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "opper-native-key-test-"));
   vi.stubEnv("OPPER_HOME", directory);
   registrations = 0; exchanges = 0; revoked = []; requests.length = 0;
-  grantedScope = KEY_SETUP_SCOPES; registrationError = false; revokeError = false; requiresIssuer = false;
+  grantedScope = KEY_SETUP_SCOPES; invalidClient = false; offlineAccessSupported = false; registrationError = false; revokeError = false; requiresIssuer = false;
   server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -39,7 +41,7 @@ beforeEach(async () => {
         registration_endpoint: `${origin}/oauth/register`, revocation_endpoint: `${origin}/oauth/revoke`,
         response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"],
-        scopes_supported: ["account:read", "projects:read", "projects:write", "projects:delete", "apikeys:read", "apikeys:write", "controls:read", "controls:write", "dynamic_routes:read", "dynamic_routes:write", "runtime:read", "runtime:call"],
+        scopes_supported: ["account:read", "projects:read", "projects:write", "projects:delete", "apikeys:read", "apikeys:write", "controls:read", "controls:write", "dynamic_routes:read", "dynamic_routes:write", "runtime:read", "runtime:call", ...(offlineAccessSupported ? ["offline_access"] : [])],
         authorization_response_iss_parameter_supported: requiresIssuer,
       });
     } else if (request.url === "/oauth/register") {
@@ -48,6 +50,7 @@ beforeEach(async () => {
       else send({ ...JSON.parse(body), client_id: "public-cli-client" }, 201);
     } else if (request.url === "/oauth/token") {
       exchanges += 1;
+      if (invalidClient) { send({ error: "invalid_client" }, 401); return; }
       const form = new URLSearchParams(body);
       expect(form.get("client_id")).toBe("public-cli-client");
       expect(form.get("resource")).toBe(`${origin}/mcp`);
@@ -69,9 +72,9 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-async function approve(url: URL) {
+async function approve(url: URL, expectedScope = KEY_SETUP_SCOPES) {
   authorization = url;
-  expect(url.searchParams.get("scope")).toBe(KEY_SETUP_SCOPES);
+  expect(url.searchParams.get("scope")).toBe(expectedScope);
   expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   const callback = new URL(url.searchParams.get("redirect_uri")!);
   callback.searchParams.set("state", url.searchParams.get("state")!);
@@ -107,6 +110,81 @@ describe("native SDK OAuth for private key setup", () => {
     expect(exchanges).toBe(2);
     expect(revoked).toHaveLength(2);
     expect(authorization.searchParams.get("redirect_uri")).not.toBe(first);
+  });
+
+  it("accepts omitted token scope as the explicitly requested scopes", async () => {
+    grantedScope = undefined;
+    const operation = vi.fn().mockResolvedValue("done");
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
+    expect(operation).toHaveBeenCalledOnce();
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+  });
+
+  it("checks the actual authorization scope if the SDK adds offline access and token scope is omitted", async () => {
+    offlineAccessSupported = true;
+    grantedScope = undefined;
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, {
+      onAuthorizationUrl: (url) => approve(url, `${KEY_SETUP_SCOPES} offline_access`),
+    })).rejects.toThrow(/explicitly select both/);
+    expect(operation).not.toHaveBeenCalled();
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+  });
+
+  it("evicts an invalid client and requires fresh consent before retrying", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve });
+    invalidClient = true;
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve }))
+      .rejects.toThrow(/client registration.*removed/i);
+    expect(operation).not.toHaveBeenCalled();
+    expect(registrations).toBe(1);
+    expect(exchanges).toBe(2);
+    expect(await readdir(join(directory, "mcp-clients"))).toEqual([]);
+    invalidClient = false;
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve });
+    expect(registrations).toBe(2);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("preserves an invalid client identity when recovering an uncertain create", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve });
+    const files = await readdir(join(directory, "mcp-clients"));
+    const path = join(directory, "mcp-clients", files[0]!);
+    const before = await readFile(path, "utf8");
+    invalidClient = true;
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve, preserveClientRegistration: true }))
+      .rejects.toThrow(/recovery.*client registration.*preserved/i);
+    expect(operation).not.toHaveBeenCalled();
+    expect(registrations).toBe(1);
+    expect(await readFile(path, "utf8")).toBe(before);
+  });
+
+  it("does not register a new identity when an uncertain create lost its cache", async () => {
+    const operation = vi.fn();
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve, preserveClientRegistration: true }))
+      .rejects.toThrow(/original client registration is missing/i);
+    expect(operation).not.toHaveBeenCalled();
+    expect(registrations).toBe(0);
+    expect(exchanges).toBe(0);
+  });
+
+  it("explicitly resets only this server and issuer's retained registration", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve });
+    const { writeFile } = await import("node:fs/promises");
+    const unrelated = join(directory, "mcp-clients", "other-server.json");
+    await writeFile(unrelated, "keep this client");
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve, resetClient: true });
+    expect(registrations).toBe(2);
+    expect(await readFile(unrelated, "utf8")).toBe("keep this client");
+  });
+
+  it("refuses reset during uncertain-create recovery before any request", async () => {
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, {
+      onAuthorizationUrl: approve, resetClient: true, preserveClientRegistration: true,
+    })).rejects.toThrow(/cannot reset.*recover/i);
+    expect(requests).toEqual([]);
   });
 
   it("ignores a callback with the wrong state before accepting the genuine callback", async () => {
@@ -164,7 +242,7 @@ describe("native SDK OAuth for private key setup", () => {
     expect(registrations).toBe(1);
   });
 
-  it.each(["projects:read", "projects:read apikeys:write runtime:call"])("revokes an insufficient or excessive grant without creating a key (%s)", async (scope) => {
+  it.each(["", "projects:read", "projects:read apikeys:write runtime:call"])("revokes an insufficient or excessive grant without creating a key (%s)", async (scope) => {
     grantedScope = scope;
     const operation = vi.fn();
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).rejects.toThrow(/explicitly select both/);

@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
 import { configureOpenCode } from "../../src/setup/opencode.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, mkdir: vi.fn(original.mkdir) };
+});
 
 describe("explicit OpenCode MCP setup", () => {
   let sandbox: string;
@@ -17,6 +22,7 @@ describe("explicit OpenCode MCP setup", () => {
     mkdirSync(directory, { recursive: true });
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(sandbox, { recursive: true, force: true });
     if (previous === undefined) delete process.env.OPPER_EDITOR_HOME;
     else process.env.OPPER_EDITOR_HOME = previous;
@@ -34,6 +40,19 @@ describe("explicit OpenCode MCP setup", () => {
     const original = readFileSync(result.path, "utf8");
     expect((await configureOpenCode({ location: "global", mcp: true })).wrote).toBe(false);
     expect(readFileSync(result.path, "utf8")).toBe(original);
+  });
+
+  it("does not overwrite a new config created after inspection", async () => {
+    const fs = await import("node:fs/promises");
+    const original = fs.mkdir;
+    const path = join(directory, "opencode.json");
+    const other = '{"model":"another-process/model"}';
+    vi.spyOn(fs, "mkdir").mockImplementationOnce(async (...args) => {
+      writeFileSync(path, other);
+      return original(...args);
+    });
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(readFileSync(path, "utf8")).toBe(other);
   });
 
   it("preserves provider, MCP entries, preferences, comments, and file permissions", async () => {

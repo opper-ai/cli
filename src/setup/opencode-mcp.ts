@@ -149,7 +149,15 @@ export async function configureOpenCodeMcp(
       (original && readFileSync(candidate, "utf8") !== original.text)) throw configConflict(candidate);
   }
   await mkdir(directory, { recursive: true });
-  await writeFile(target.path, updated, { encoding: "utf8", mode: 0o600 });
+  try {
+    await writeFile(target.path, updated, {
+      encoding: "utf8", mode: 0o600,
+      flag: documents.some((document) => document.path === target.path) ? "w" : "wx",
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw configConflict(target.path);
+    throw error;
+  }
   return { path: target.path, wrote: true, mcpName, mcpEnabled,
     ...(scopes !== undefined ? { mcpScopes: scopes } : {}) };
 }

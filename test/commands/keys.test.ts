@@ -28,6 +28,26 @@ function projectResponse() { return Response.json({ data: { uuid: project, name:
 function created() { return Response.json({ data: { id: 42, name: "App key", key: secret } }, { status: 201 }); }
 
 describe("private runtime key creation", () => {
+  it("refuses a client reset during idempotent recovery before authorization", async () => {
+    await expect(keysCreateCommand({ ...opts(), resetClient: true, idempotencyKey: "6ba3d2bf-35e7-48b6-bd24-48064df1acbe" }))
+      .rejects.toThrow(/cannot reset.*recover/i);
+    expect(authFlow).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("passes the original client preservation requirement for idempotent recovery", async () => {
+    fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
+    await keysCreateCommand({ ...opts(), idempotencyKey: "6ba3d2bf-35e7-48b6-bd24-48064df1acbe" });
+    expect(authFlow.mock.calls[0]![2]).toMatchObject({ preserveClientRegistration: true });
+  });
+
+  it("passes an explicit client reset for a fresh create", async () => {
+    fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
+    await keysCreateCommand({ ...opts(), resetClient: true });
+    expect(authFlow.mock.calls[0]![2]).toMatchObject({ resetClient: true, preserveClientRegistration: false });
+  });
+
   it("writes a 0600 env file and prints only whitelisted metadata", async () => {
     fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
     await keysCreateCommand(opts());

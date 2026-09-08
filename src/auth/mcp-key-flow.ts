@@ -35,6 +35,9 @@ export function validateMcpServerUrl(value: string): URL {
 export interface KeyAuthorizationOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
+  resetClient?: boolean;
+  /** An interrupted create must retain its original idempotency namespace. */
+  preserveClientRegistration?: boolean;
   /** Browser handoff injection for native-flow tests; never receives tokens. */
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 }
@@ -45,6 +48,9 @@ export async function withMcpKeyAuthorization<T>(
   operation: (accessToken: string) => Promise<T>,
   options: KeyAuthorizationOptions = {},
 ): Promise<T> {
+  if (options.resetClient && options.preserveClientRegistration) {
+    throw new OpperError("INVALID_ARGUMENT", "Cannot reset the client while recovering an interrupted key create.");
+  }
   const state = randomBytes(32).toString("base64url");
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -53,15 +59,21 @@ export async function withMcpKeyAuthorization<T>(
   const timer = setTimeout(abort, options.timeoutMs ?? 300_000);
   let tokens: Tokens | undefined;
   let clientInfo: ClientInfo | undefined;
+  let registrationPath: string | undefined;
+  let resetApplied = false;
   let discovery: OAuthDiscoveryState | undefined;
   let verifier = "";
+  let requestedScope = KEY_SETUP_SCOPES;
   let callbackComplete = false;
   let resolveCallback!: (value: { code: string; iss?: string }) => void;
   let rejectCallback!: (reason: OpperError) => void;
   const callback = new Promise<{ code: string; iss?: string }>((resolve, reject) => { resolveCallback = resolve; rejectCallback = reject; });
   // The callback may finish while the SDK is completing its redirect hook.
   void callback.catch(() => {});
-  const callbackAbort = () => rejectCallback(new OpperError("AUTH_REQUIRED", "Browser authorization was cancelled or timed out. No key was installed."));
+  const callbackAbort = () => rejectCallback(new OpperError("AUTH_REQUIRED", "Browser authorization was cancelled or timed out. No key was installed.",
+    options.preserveClientRegistration
+      ? "Keep the original client registration and --idempotency-key when retrying recovery."
+      : "If the browser reports invalid_client after a server reset, retry with --reset-client. Use that option only for a fresh key create, never an uncertain earlier operation."));
   controller.signal.addEventListener("abort", callbackAbort, { once: true });
   let redirectUrl = "";
   const server = createServer((request, response) => {
@@ -115,13 +127,24 @@ export async function withMcpKeyAuthorization<T>(
       if (!context) return undefined;
       try {
         const path = clientPath(context.issuer);
+        registrationPath = path;
+        if (options.resetClient && !resetApplied) {
+          await rm(path, { force: true });
+          resetApplied = true;
+        }
         if (!(await lstat(path)).isFile()) throw new Error("Expected a registration file");
         const saved = registrationSchema.parse(JSON.parse(await readFile(path, "utf8")));
         if (saved.issuer !== context.issuer) throw new Error("Issuer mismatch");
         clientInfo = saved;
         return clientInfo;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          if (options.preserveClientRegistration) {
+            throw new OpperError("AUTH_REQUIRED", "The original client registration is missing; the interrupted create cannot be safely recovered with a new client.",
+              "Restore the original registration or reconcile the earlier key in Opper before starting a fresh create.");
+          }
+          return undefined;
+        }
         throw new Error("Stored client registration could not be read");
       }
     },
@@ -132,6 +155,7 @@ export async function withMcpKeyAuthorization<T>(
       await mkdir(join(opperHome(), "mcp-clients"), { recursive: true, mode: 0o700 });
       // Concurrent first registrations must never replace the winning identity.
       const path = clientPath(context.issuer);
+      registrationPath = path;
       const temporary = `${path}.${randomUUID()}.tmp`;
       try {
         const handle = await open(temporary, "wx", 0o600);
@@ -140,6 +164,29 @@ export async function withMcpKeyAuthorization<T>(
         await link(temporary, path);
       } finally { await rm(temporary, { force: true }); }
       clientInfo = saved;
+    },
+    async invalidateCredentials(scope) {
+      if (scope === "client" || scope === "all") {
+        if (options.preserveClientRegistration) {
+          throw new OpperError("AUTH_REQUIRED", "Recovery cannot continue with this invalid client; the original client registration was preserved.",
+            "Restore access to the original client or reconcile the earlier key in Opper before starting a fresh create.");
+        }
+        if (registrationPath && clientInfo) {
+          // Only discard the exact rejected identity; another run may have reset it.
+          try {
+            const saved = registrationSchema.parse(JSON.parse(await readFile(registrationPath, "utf8")));
+            if (saved.client_id === clientInfo.client_id) await rm(registrationPath, { force: true });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        }
+        clientInfo = undefined;
+        // The old code belongs to the old client. Require a new browser flow.
+        throw new OpperError("AUTH_REQUIRED", "The rejected OAuth client registration was removed. Start key setup again to register a new client and approve fresh access.");
+      }
+      if (scope === "tokens") tokens = undefined;
+      if (scope === "verifier") verifier = "";
+      if (scope === "discovery") discovery = undefined;
     },
     tokens: () => tokens,
     saveTokens(value) { tokens = value; },
@@ -151,6 +198,7 @@ export async function withMcpKeyAuthorization<T>(
     },
     discoveryState: () => discovery,
     async redirectToAuthorization(url) {
+      requestedScope = url.searchParams.get("scope") ?? KEY_SETUP_SCOPES;
       validateMcpServerUrl(new URL(url.pathname, url.origin).href);
       if (url.username || url.password || url.hash) throw new Error("Unsafe authorization destination");
       if (options.onAuthorizationUrl) await options.onAuthorizationUrl(url);
@@ -172,7 +220,8 @@ export async function withMcpKeyAuthorization<T>(
     if (first !== "REDIRECT") throw new Error("Expected fresh browser consent");
     const response = await callback;
     await auth(provider, { serverUrl, scope: KEY_SETUP_SCOPES, authorizationCode: response.code, ...(response.iss ? { iss: response.iss } : {}), fetchFn: secureFetch });
-    const granted = new Set(tokens?.scope?.split(/\s+/).filter(Boolean));
+    // RFC 6749 permits omission when the grant equals the requested scopes.
+    const granted = new Set((tokens?.scope ?? requestedScope).split(/\s+/).filter(Boolean));
     if (!tokens?.access_token || granted.size !== 2 || !granted.has("projects:read") || !granted.has("apikeys:write")) {
       throw new OpperError("AUTH_REQUIRED", "Key setup needs project read access and API key creation permission. Start again and explicitly select both in Opper.");
     }
