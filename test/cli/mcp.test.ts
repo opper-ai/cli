@@ -92,6 +92,26 @@ describe("MCP command configuration", () => {
     expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toContain("disabled");
   });
 
+  it.each([
+    { args: ["mcp", "add", "opencode"], enabled: true },
+    { args: ["mcp", "add", "opencode"], enabled: false },
+    { args: ["editors", "opencode", "--mcp"], enabled: true },
+  ])("explains preserved OAuth disablement for $args with enabled=$enabled", async ({ args, enabled }) => {
+    const original = JSON.stringify({ mcp: { demo: {
+      type: "remote", url: "https://api.opper.ai/mcp", enabled, oauth: false,
+    } } });
+    seed(original);
+    await run(args);
+    const output = vi.mocked(console.log).mock.calls.flat().join("\n");
+    expect(output).toContain("OAuth is disabled for demo");
+    expect(output).toContain("oauth: false");
+    expect(output).not.toContain("opencode mcp auth");
+    expect(output).not.toContain("choose permissions in Opper");
+    if (!enabled) expect(output).toContain("connection is disabled. Enable it in OpenCode");
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it.each(["claude", "unknown"])("rejects unsupported client %s without writing config", async (client) => {
     await expect(run(["mcp", "add", client])).rejects.toMatchObject({ code: "commander.invalidArgument" });
     expect(existsSync(configPath)).toBe(false);
