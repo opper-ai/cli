@@ -262,7 +262,9 @@ settings go into the existing JSONC file when present, otherwise the JSON file.
 An existing server with the same URL keeps its current name, auth settings,
 and enabled/disabled preference; an explicit `--scopes` updates only its
 OAuth scope. If OAuth is disabled, an explicit `--scopes` change asks you to
-review that setting instead of enabling it; plain setup preserves it.
+review that setting instead of enabling it; plain setup preserves it and
+explains how to enable browser consent. Remove the matched server's
+`oauth: false` setting from the effective config, then reopen OpenCode.
 A conflicting `opper` entry, malformed config,
 or duplicate JSON keys produces an error without changing the files. `--url` accepts
 HTTPS endpoints or HTTP loopback addresses, without credentials, query parameters,

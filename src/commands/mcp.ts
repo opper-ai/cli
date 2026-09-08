@@ -30,8 +30,12 @@ export async function mcpAddCommand(client: string, opts: McpAddOptions): Promis
   if (result.mcpScopes !== undefined) console.log(`Requested permissions: ${result.mcpScopes}`);
   if (result.mcpEnabled === false) {
     console.log(`The ${result.mcpName} connection is disabled. Enable it in OpenCode when you want to connect.`);
+  }
+  if (result.mcpOAuthEnabled === false) {
+    console.log(`OAuth is disabled for ${result.mcpName}. Remove its oauth: false setting from the effective OpenCode config to enable browser consent, then reopen OpenCode.`);
     return;
   }
+  if (result.mcpEnabled === false) return;
   console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and choose permissions in Opper in your browser.`);
   const name = result.mcpName ?? "opper";
   const shellName = /^[A-Za-z0-9_-]+$/.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;

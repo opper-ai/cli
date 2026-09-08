@@ -154,18 +154,20 @@ export async function configureOpenCodeMcp(
     { path: jsonPath, text: "{\n}\n", config: {} };
   let mcpName = "opper";
   let mcpEnabled = true;
+  let mcpOAuthEnabled = true;
   let existing = false;
   for (const [name, settings] of Object.entries(servers)) {
     if (record(settings) && settings.type === "remote" && settings.url === url) {
       mcpName = name;
       mcpEnabled = settings.enabled !== false;
+      mcpOAuthEnabled = settings.oauth !== false;
       existing = true;
       if (scopes !== undefined && settings.oauth !== undefined && !record(settings.oauth)) {
         throw new OpperError("AGENT_CONFIG_CONFLICT", "Cannot select scopes while this MCP server's OAuth is disabled or invalid.",
           "Review its OAuth settings in OpenCode, then retry. Existing settings were preserved.");
       }
       if (scopes === undefined || (record(settings.oauth) && settings.oauth.scope === scopes)) {
-        return { path: target.path, wrote: false, reason: "exists", mcpName, mcpEnabled,
+        return { path: target.path, wrote: false, reason: "exists", mcpName, mcpEnabled, mcpOAuthEnabled,
           ...(scopes !== undefined ? { mcpScopes: scopes } : {}) };
       }
       break;
@@ -203,7 +205,7 @@ export async function configureOpenCodeMcp(
       throw error;
     }
   }
-  return { path: target.path, wrote: true, mcpName, mcpEnabled,
+  return { path: target.path, wrote: true, mcpName, mcpEnabled, mcpOAuthEnabled,
     ...(backupPath !== undefined ? { backupPath } : {}),
     ...(scopes !== undefined ? { mcpScopes: scopes } : {}) };
 }

@@ -57,6 +57,7 @@ export interface ConfigureOpenCodeResult {
   reason?: "exists";
   mcpName?: string;
   mcpEnabled?: boolean;
+  mcpOAuthEnabled?: boolean;
   mcpScopes?: string;
   backupPath?: string;
 }
