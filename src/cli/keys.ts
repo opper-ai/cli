@@ -9,6 +9,7 @@ const register: RegisterFn = (program) => {
     .requiredOption("--output <path>", "new env file (0600); parent directory must exist")
     .option("--mcp-url <url>", "MCP server URL (default: https://api.opper.ai/mcp)")
     .option("--idempotency-key <uuid>", "reuse only to recover the same interrupted create operation")
+    .option("--reset-client", "replace this server's cached OAuth registration for a fresh create; cannot be used with --idempotency-key")
     .action(async (options: KeysCreateOptions) => keysCreateCommand(options));
 };
 export default register;
