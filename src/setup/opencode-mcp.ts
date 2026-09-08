@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { isIP } from "node:net";
 import { applyEdits, getNodeValue, modify, parseTree, type Node, type ParseError } from "jsonc-parser";
 import { OpperError } from "../errors.js";
@@ -49,6 +49,49 @@ export function validateMcpUrl(value: string): string {
 function configConflict(path: string): OpperError {
   return new OpperError("AGENT_CONFIG_CONFLICT", `Cannot safely update OpenCode config at ${path}.`,
     "Fix invalid JSON/JSONC, duplicate keys, or non-object provider/mcp settings, then retry. No files were changed.");
+}
+
+/** Capture before replacing: editor saves are retained, never truncated. */
+async function replaceExistingConfig(path: string, expected: string, updated: string): Promise<string> {
+  if (!(await lstat(path)).isFile()) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", `Cannot safely replace non-regular OpenCode config at ${path}.`,
+      "The file was not changed. Merge the MCP entry manually for a symlinked config.");
+  }
+  const directory = await mkdtemp(join(dirname(path), ".opper-mcp-"));
+  const staged = join(directory, "updated");
+  const backup = join(directory, `${basename(path)}.backup`);
+  let captured = false;
+  try {
+    const handle = await open(staged, "wx", 0o600);
+    try { await handle.writeFile(updated); await handle.sync(); }
+    finally { await handle.close(); }
+    // rename captures the current inode atomically, including an editor save
+    // after our earlier read. Keep it even after success: an already-open
+    // descriptor may still write to that inode after the comparison below.
+    await rename(path, backup);
+    captured = true;
+    const capturedInfo = await lstat(backup);
+    if (!capturedInfo.isFile() || await readFile(backup, "utf8") !== expected) {
+      throw new Error("The captured configuration changed during setup");
+    }
+    await chmod(staged, capturedInfo.mode & 0o777);
+    // An editor may recreate the original path while it is absent. Never
+    // replace that save, either while installing or restoring after failure.
+    await link(staged, path);
+    return backup;
+  } catch (error) {
+    if (captured) {
+      let restored = false;
+      try { await link(backup, path); restored = true; } catch { /* Keep both files for recovery. */ }
+      throw new OpperError("AGENT_CONFIG_CONFLICT", `OpenCode configuration could not be safely updated at ${path}.`,
+        `The captured config is preserved at ${backup}. ${restored ? "It was restored to the original path." : "Any file now at the original path was left untouched."} Review the files and retry setup.`);
+    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw configConflict(path);
+    throw error;
+  } finally {
+    await rm(staged, { force: true });
+    if (!captured) await rm(directory, { recursive: true, force: true });
+  }
 }
 
 function checkDuplicateKeys(node: Node, path: string): void {
@@ -149,15 +192,18 @@ export async function configureOpenCodeMcp(
       (original && readFileSync(candidate, "utf8") !== original.text)) throw configConflict(candidate);
   }
   await mkdir(directory, { recursive: true });
-  try {
-    await writeFile(target.path, updated, {
-      encoding: "utf8", mode: 0o600,
-      flag: documents.some((document) => document.path === target.path) ? "w" : "wx",
-    });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw configConflict(target.path);
-    throw error;
+  let backupPath: string | undefined;
+  if (documents.some((document) => document.path === target.path)) {
+    backupPath = await replaceExistingConfig(target.path, target.text, updated);
+  } else {
+    try {
+      await writeFile(target.path, updated, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw configConflict(target.path);
+      throw error;
+    }
   }
   return { path: target.path, wrote: true, mcpName, mcpEnabled,
+    ...(backupPath !== undefined ? { backupPath } : {}),
     ...(scopes !== undefined ? { mcpScopes: scopes } : {}) };
 }

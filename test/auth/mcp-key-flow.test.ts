@@ -21,11 +21,14 @@ let offlineAccessSupported: boolean;
 let registrationError: boolean;
 let revokeError: boolean;
 let requiresIssuer: boolean;
+let revocationQuery: string;
+let revocationUrlOverride: string | undefined;
 const requests: { path: string; body: string }[] = [];
 
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "opper-native-key-test-"));
   vi.stubEnv("OPPER_HOME", directory);
+  revocationQuery = ""; revocationUrlOverride = undefined;
   registrations = 0; exchanges = 0; revoked = []; requests.length = 0;
   grantedScope = KEY_SETUP_SCOPES; invalidClient = false; offlineAccessSupported = false; registrationError = false; revokeError = false; requiresIssuer = false;
   server = createServer(async (request, response) => {
@@ -38,7 +41,7 @@ beforeEach(async () => {
       send({ resource: `${origin}/mcp`, authorization_servers: [`${origin}/oauth`] });
     } else if (request.url === "/.well-known/oauth-authorization-server/oauth") {
       send({ issuer: `${origin}/oauth`, authorization_endpoint: `${origin}/oauth/authorize`, token_endpoint: `${origin}/oauth/token`,
-        registration_endpoint: `${origin}/oauth/register`, revocation_endpoint: `${origin}/oauth/revoke`,
+        registration_endpoint: `${origin}/oauth/register`, revocation_endpoint: revocationUrlOverride ?? `${origin}/oauth/revoke${revocationQuery}`,
         response_types_supported: ["code"], grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"], token_endpoint_auth_methods_supported: ["none"],
         scopes_supported: ["account:read", "projects:read", "projects:write", "projects:delete", "apikeys:read", "apikeys:write", "controls:read", "controls:write", "dynamic_routes:read", "dynamic_routes:write", "runtime:read", "runtime:call", ...(offlineAccessSupported ? ["offline_access"] : [])],
@@ -56,7 +59,7 @@ beforeEach(async () => {
       expect(form.get("resource")).toBe(`${origin}/mcp`);
       expect(createHash("sha256").update(form.get("code_verifier")!).digest("base64url")).toBe(authorization.searchParams.get("code_challenge"));
       send({ access_token: "PRIVATE-ACCESS-TOKEN", refresh_token: "PRIVATE-REFRESH-TOKEN", token_type: "Bearer", expires_in: 300, scope: grantedScope });
-    } else if (request.url === "/oauth/revoke") {
+    } else if (request.url?.startsWith("/oauth/revoke")) {
       revoked.push(new URLSearchParams(body).get("token")!);
       send({}, revokeError ? 500 : 200);
     } else send({ error: "not found" }, 404);
@@ -277,6 +280,25 @@ describe("native SDK OAuth for private key setup", () => {
       .rejects.toThrow("Browser authorization could not be completed. Start again from the CLI.");
     expect(exchanges).toBe(0);
   });
+
+  it("preserves a discovered revocation endpoint's fixed query", async () => {
+    revocationQuery = "?tenant=tenant-a&mode=cleanup";
+    const operation = vi.fn().mockResolvedValue("done");
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
+    expect(operation).toHaveBeenCalledOnce();
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(requests.find((request) => request.path.startsWith("/oauth/revoke"))?.path).toBe(`/oauth/revoke${revocationQuery}`);
+  });
+
+  it.each(["http://example.com/revoke?tenant=a", "https://user:secret@example.com/revoke?tenant=a", "https://example.com/revoke?tenant=a#fragment"])
+    ("rejects unsafe discovered revocation endpoints before authorization (%s)", async (endpoint) => {
+      revocationUrlOverride = endpoint;
+      const operation = vi.fn();
+      await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).rejects.toThrow(/authorization could not be completed/i);
+      expect(operation).not.toHaveBeenCalled();
+      expect(exchanges).toBe(0);
+      expect(revoked).toEqual([]);
+    });
 
   it("reports failed revocation without claiming the temporary connection was removed", async () => {
     revokeError = true;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, openSync, closeSync, writeSync, ftruncateSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
@@ -7,7 +7,7 @@ import { configureOpenCode } from "../../src/setup/opencode.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...original, mkdir: vi.fn(original.mkdir) };
+  return { ...original, mkdir: vi.fn(original.mkdir), rename: vi.fn(original.rename), link: vi.fn(original.link) };
 });
 
 describe("explicit OpenCode MCP setup", () => {
@@ -53,6 +53,92 @@ describe("explicit OpenCode MCP setup", () => {
     });
     await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
     expect(readFileSync(path, "utf8")).toBe(other);
+  });
+
+  it("preserves an existing config edited after the final inspection", async () => {
+    const fs = await import("node:fs/promises");
+    const original = fs.mkdir;
+    const path = join(directory, "opencode.json");
+    writeFileSync(path, '{"model":"initial/model"}');
+    const edited = '{"model":"newer/model"}';
+    vi.spyOn(fs, "mkdir").mockImplementationOnce(async (...args) => {
+      writeFileSync(path, edited);
+      return original(...args);
+    });
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(readFileSync(path, "utf8")).toBe(edited);
+  });
+
+  it("retains the original inode and permissions in a reported backup on update", async () => {
+    const path = join(directory, "opencode.json");
+    const raw = '{"model":"my/model"}';
+    writeFileSync(path, raw, { mode: 0o640 });
+    const originalInode = statSync(path).ino;
+    const result = await configureOpenCode({ location: "global", mcp: true });
+    expect(result.backupPath).toBeTruthy();
+    expect(readFileSync(result.backupPath!, "utf8")).toBe(raw);
+    expect(statSync(result.backupPath!).ino).toBe(originalInode);
+    expect(statSync(path).ino).not.toBe(originalInode);
+    expect(statSync(path).mode & 0o777).toBe(0o640);
+    expect(load(path).mcp.opper.url).toBe("https://api.opper.ai/mcp");
+  });
+
+  it("restores a changed captured file only when the destination is still absent", async () => {
+    const fs = await import("node:fs/promises");
+    const original = fs.rename;
+    const path = join(directory, "opencode.json");
+    writeFileSync(path, '{"model":"initial/model"}');
+    const edited = '{"model":"edited-after-capture/model"}';
+    vi.spyOn(fs, "rename").mockImplementationOnce(async (source, destination) => {
+      await original(source, destination);
+      writeFileSync(destination, edited);
+    });
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", hint: expect.stringContaining("preserved at") });
+    expect(readFileSync(path, "utf8")).toBe(edited);
+  });
+
+  it("keeps a concurrent atomic save and retains the captured original for recovery", async () => {
+    const fs = await import("node:fs/promises");
+    const original = fs.link;
+    const path = join(directory, "opencode.json");
+    const raw = '{"model":"initial/model"}';
+    const edited = '{"model":"other-editor/model"}';
+    writeFileSync(path, raw);
+    vi.spyOn(fs, "link").mockImplementationOnce(async (source, destination) => {
+      expect(existsSync(path)).toBe(false);
+      writeFileSync(path, edited);
+      return original(source, destination);
+    });
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", hint: expect.stringContaining("preserved at") });
+    expect(readFileSync(path, "utf8")).toBe(edited);
+    const saved = readdirSync(directory).find((name) => name.startsWith(".opper-mcp-"));
+    expect(saved).toBeTruthy();
+    expect(readFileSync(join(directory, saved!, "opencode.json.backup"), "utf8")).toBe(raw);
+  });
+
+  it("retains late writes through an old open file descriptor in the backup", async () => {
+    const path = join(directory, "opencode.json");
+    writeFileSync(path, '{"model":"initial/model"}');
+    const handle = openSync(path, "r+");
+    try {
+      const result = await configureOpenCode({ location: "global", mcp: true });
+      const later = '{"model":"late-in-place-save/model"}';
+      ftruncateSync(handle, 0);
+      writeSync(handle, later, 0, "utf8");
+      expect(readFileSync(result.backupPath!, "utf8")).toBe(later);
+      expect(load(path).mcp.opper.url).toBe("https://api.opper.ai/mcp");
+    } finally { closeSync(handle); }
+  });
+
+  it("refuses to move a symlink config or change its target", async () => {
+    const path = join(directory, "opencode.json");
+    const target = join(directory, "dotfile");
+    const raw = '{"model":"my/model"}';
+    writeFileSync(target, raw);
+    symlinkSync(target, path);
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(lstatSync(path).isSymbolicLink()).toBe(true);
+    expect(readFileSync(target, "utf8")).toBe(raw);
   });
 
   it("preserves provider, MCP entries, preferences, comments, and file permissions", async () => {
