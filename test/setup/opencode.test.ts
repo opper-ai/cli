@@ -208,6 +208,7 @@ describe("configureOpenCode", () => {
     const res = await configureOpenCode({ location: "global", overwrite: true, models });
     const cfg = JSON.parse(readFileSync(res.path, "utf8"));
     expect(Object.keys(cfg.provider.opper.models)).toEqual(["dynamic/my-route"]);
+    expect(cfg.provider.opper.whitelist).toEqual(["dynamic/my-route"]);
   });
 
   it("applies the override again when a config already exists", async () => {
@@ -216,6 +217,23 @@ describe("configureOpenCode", () => {
     const res = await configureOpenCode({ location: "global", overwrite: true, models });
     const cfg = JSON.parse(readFileSync(res.path, "utf8"));
     expect(Object.keys(cfg.provider.opper.models)).toEqual(["claude-sonnet-5"]);
+    expect(cfg.provider.opper.whitelist).toEqual(["claude-sonnet-5"]);
+  });
+
+  it("removes models from the whitelist when access is revoked, including all access", async () => {
+    await configureOpenCode({ location: "global", overwrite: true, models: {
+      "allowed-model": { name: "Allowed" },
+      "revoked-model": { name: "Revoked" },
+    } });
+    const result = await configureOpenCode({ location: "global", overwrite: true, models: {
+      "allowed-model": { name: "Allowed" },
+    } });
+    expect(JSON.parse(readFileSync(result.path, "utf8")).provider.opper.whitelist).toEqual(["allowed-model"]);
+
+    await configureOpenCode({ location: "global", overwrite: true, models: {} });
+    const config = JSON.parse(readFileSync(result.path, "utf8"));
+    expect(config.provider.opper.models).toEqual({});
+    expect(config.provider.opper.whitelist).toEqual([]);
   });
 
   it("keeps the bundled list when no override is supplied", async () => {

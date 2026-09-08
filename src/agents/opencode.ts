@@ -1,17 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { parse, type ParseError } from "jsonc-parser";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
-import {
-  configureOpenCode,
-  readProjectConfigState,
-} from "../setup/opencode.js";
+import { configureOpenCode } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
-import { resolveOpenCodeModels } from "../setup/opencode-models.js";
+import { resolveOpenCodeModels, type OpenCodeModel } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
-import { brand } from "../ui/colors.js";
+import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -49,9 +47,8 @@ async function isConfigured(): Promise<boolean> {
 async function configure(): Promise<void> {
   // Prefer the live catalogue over the bundled list. `/v3/compat/models` is
   // scoped to the key, so this is also the only way the user's own pools and
-  // `dynamic/<name>` routes reach OpenCode's picker. A null result (no key,
-  // gateway unreachable) falls back to the template rather than failing the
-  // launch — OpenCode still merges with models.dev either way.
+  // `dynamic/<name>` routes reach OpenCode's picker. Only setup without a key
+  // uses the template; authenticated catalog failures leave config untouched.
   const models = await resolveOpenCodeModels();
 
   // overwrite: true so a re-run pulls in the latest models, costs and
@@ -147,6 +144,40 @@ export function restoreTarget(stored: string | undefined): string {
   return stored.startsWith(OPPER_HOST) ? OPPER_COMPAT_URL : stored;
 }
 
+/** Apply launch settings after OpenCode's project and custom file layers. */
+function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRouting): string {
+  function object(value: unknown): Record<string, unknown> {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Invalid OPENCODE_CONFIG_CONTENT: expected configuration objects.");
+    }
+    return value as Record<string, unknown>;
+  }
+  const errors: ParseError[] = [];
+  const raw = process.env.OPENCODE_CONFIG_CONTENT;
+  const parsed: unknown = raw ? parse(raw, errors, { allowTrailingComma: true }) : {};
+  if (errors.length) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "Cannot parse OPENCODE_CONFIG_CONTENT. Existing configuration was preserved.");
+  }
+  const config = object(parsed);
+  const providers = config.provider === undefined ? {} : object(config.provider);
+  const opper = providers.opper === undefined ? {} : object(providers.opper);
+  const options = opper.options === undefined ? {} : object(opper.options);
+  return JSON.stringify({
+    ...config,
+    provider: {
+      ...providers,
+      opper: {
+        ...opper,
+        npm: "@ai-sdk/openai-compatible",
+        options: { ...options, baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
+        // Keep the full model metadata in the generated config file. A live
+        // catalog can exceed Linux's per-environment-variable size limit.
+        whitelist: Object.keys(models),
+      },
+    },
+  });
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
@@ -157,7 +188,18 @@ async function spawn(
   // resolving the catalogue here is what makes `opper launch opencode`
   // pick up new models, changed policy, and newly deployed routes without
   // the user doing anything. Resolved once and shared by both branches.
-  const models = await resolveOpenCodeModels();
+  const models = await resolveOpenCodeModels({
+    apiKey: routing.apiKey,
+    baseUrl: routing.apiBaseUrl,
+  });
+  // Validate existing inline config before mutating either config file. The
+  // runtime override also prevents an old project whitelist or URL from
+  // overriding the catalog and credentials chosen for this launch.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPPER_API_KEY: routing.apiKey,
+    OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
+  };
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project
@@ -174,10 +216,6 @@ async function spawn(
     await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPPER_API_KEY: routing.apiKey,
-      };
       const result = spawnSync("opencode", args, { stdio: "inherit", env });
       return result.status ?? -1;
     } finally {
@@ -199,26 +237,7 @@ async function spawn(
     async () => {
       await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 
-      // OpenCode reads `./opencode.json` if present and uses it instead
-      // of the user-level config. If one exists without an Opper
-      // provider, whatever we just wrote globally is dead weight — warn
-      // so the user can re-run with `--project`.
-      const projectPath = opencodeConfigPath("local");
-      const state = readProjectConfigState(projectPath);
-      if (state.exists && !state.hasOpperProvider) {
-        process.stderr.write(
-          brand.dim(
-            `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
-          ),
-        );
-      }
-
       await setSessionBaseUrl(routing.baseUrl, "global");
-
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPPER_API_KEY: routing.apiKey,
-      };
       const result = spawnSync("opencode", args, { stdio: "inherit", env });
       return result.status ?? -1;
     },

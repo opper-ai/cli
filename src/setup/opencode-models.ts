@@ -13,15 +13,14 @@
  * key, so it already reflects the org's model-access rules, and it returns
  * pools and `dynamic/<name>` routes alongside concrete models.
  *
- * OpenCode MERGES a custom provider block with the models.dev registry entry
- * for the same provider id rather than replacing it (verified against
- * opencode-ai 1.14.41: models.dev's 40 `opper` models and a 10-model custom
- * block yielded 60 entries). So everything written here is additive — a model
- * omitted for want of pricing is not thereby removed from the picker.
+ * OpenCode merges configured models with its models.dev registry. The config
+ * writer also sets a whitelist from this map so registry or older configured
+ * models cannot reappear after being removed from the allowed catalog.
  */
 
 import { OpperApi } from "../api/client.js";
-import { resolveApiContext } from "../api/resolve.js";
+import { resolveApiContext, type ApiContext } from "../api/resolve.js";
+import { OpperError } from "../errors.js";
 
 /** One entry of `/v3/compat/models`. Only the fields this mapping reads. */
 export interface CompatModel {
@@ -188,40 +187,33 @@ function routeEntry(e: CompatModel): OpenCodeModel {
 }
 
 /**
- * Fetch and map the live catalogue, or null when it cannot be reached.
- *
- * Null is the caller's signal to keep the bundled template: a network blip or
- * an expired key must not leave the user with an empty picker, and OpenCode
- * merges with models.dev regardless.
+ * Resolve a setup key or use the exact launch credentials. Only setup without
+ * credentials uses the bundled template. Authenticated failures propagate
+ * before config is written, and an empty allowed catalog remains empty.
  */
-/**
- * The live model map for a config write, or undefined to keep the template.
- *
- * Both entry points that write OpenCode's config — `opper launch opencode` and
- * `opper editors opencode` — go through here, so neither can quietly fall back
- * to the frozen bundled list while the other stays current.
- */
-export async function resolveOpenCodeModels(): Promise<
+export function resolveOpenCodeModels(context: ApiContext): Promise<Record<string, OpenCodeModel>>;
+export function resolveOpenCodeModels(key?: string): Promise<Record<string, OpenCodeModel> | undefined>;
+export async function resolveOpenCodeModels(contextOrKey: ApiContext | string = "default"): Promise<
   Record<string, OpenCodeModel> | undefined
 > {
+  let context: ApiContext;
   try {
-    const { apiKey, baseUrl } = await resolveApiContext("default");
-    const fetched = await fetchOpenCodeModels(new OpperApi({ apiKey, baseUrl }));
-    return fetched ?? undefined;
-  } catch {
-    // No configured key — the bundled list is the honest fallback.
-    return undefined;
+    context = typeof contextOrKey === "string"
+      ? await resolveApiContext(contextOrKey)
+      : contextOrKey;
+  } catch (error) {
+    if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
+    throw error;
   }
+  return fetchOpenCodeModels(new OpperApi(context));
 }
 
 export async function fetchOpenCodeModels(
   api: OpperApi,
-): Promise<Record<string, OpenCodeModel> | null> {
-  try {
-    const res = await api.get<{ data?: CompatModel[] }>("/v3/compat/models");
-    const models = toOpenCodeModels(res.data ?? []);
-    return Object.keys(models).length > 0 ? models : null;
-  } catch {
-    return null;
+): Promise<Record<string, OpenCodeModel>> {
+  const res = await api.get<{ data?: CompatModel[] }>("/v3/compat/models");
+  if (!Array.isArray(res?.data)) {
+    throw new OpperError("API_ERROR", "Invalid model catalog response: expected a data array.");
   }
+  return toOpenCodeModels(res.data);
 }

@@ -85,6 +85,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
   const routing: OpperRouting = {
+    apiBaseUrl: host,
     baseUrl,
     apiKey: slot.apiKey,
     model: opts.model ?? DEFAULT_MODELS.opus,

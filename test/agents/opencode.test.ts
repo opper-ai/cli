@@ -17,15 +17,13 @@ const runMock = vi.fn();
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const configureOpenCodeMock = vi.fn();
-const readProjectConfigStateMock = vi.fn();
 vi.mock("../../src/setup/opencode.js", () => ({
   configureOpenCode: configureOpenCodeMock,
-  readProjectConfigState: readProjectConfigStateMock,
 }));
 
 // spawn() and configure() resolve the live catalogue; stub it so this suite
 // stays offline, and so a test can vary what the gateway "returns".
-const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue(undefined);
+const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue({});
 vi.mock("../../src/setup/opencode-models.js", () => ({
   resolveOpenCodeModels: resolveOpenCodeModelsMock,
 }));
@@ -44,6 +42,7 @@ const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
 
 const ROUTING = {
+  apiBaseUrl: "https://api.opper.ai",
   baseUrl: SESSION_URL,
   apiKey: "op_live_run",
   model: "claude-opus-4-7",
@@ -86,13 +85,7 @@ describe("opencode adapter", () => {
     whichMock.mockReset();
     runMock.mockReset();
     configureOpenCodeMock.mockReset();
-    readProjectConfigStateMock.mockReset();
     spawnSyncMock.mockReset();
-    // Default: no shadowing project config exists.
-    readProjectConfigStateMock.mockReturnValue({
-      exists: false,
-      hasOpperProvider: false,
-    });
     sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
     prevHome = process.env.HOME;
     process.env.HOME = sandbox;
@@ -153,7 +146,7 @@ describe("opencode adapter", () => {
 
     const code = await opencode.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global", overwrite: true });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global", overwrite: true, models: {} });
 
     const call = spawnSyncMock.mock.calls[0]!;
     expect(call[0]).toBe("opencode");
@@ -169,7 +162,7 @@ describe("opencode adapter", () => {
     const models = { "dynamic/my-route": { name: "My Route (route)" } };
     resolveOpenCodeModelsMock.mockResolvedValueOnce(models);
     spawnSyncMock.mockReturnValue({ status: 0 });
-    await opencode.spawn([], { apiKey: "k", baseUrl: "https://api.opper.ai/v3/compat" });
+    await opencode.spawn([], { ...ROUTING, apiKey: "k" });
     expect(configureOpenCodeMock).toHaveBeenCalledWith(
       expect.objectContaining({ models }),
     );
@@ -376,7 +369,7 @@ describe("opencode adapter", () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
 
     await opencode.spawn!(["chat"], ROUTING, { configScope: "project" });
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true, models: {} });
   });
 
   it("project scope: opper provider persists across launches but baseURL is reset to compat", async () => {
@@ -526,74 +519,4 @@ describe("opencode adapter", () => {
     }
   });
 
-  it("spawn warns when a project opencode.json exists without an Opper provider", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "/tmp/g", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: false,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING);
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    const blob = errors.join("");
-    expect(blob).toMatch(/opencode\.json/);
-    expect(blob).toMatch(/--project/);
-  });
-
-  it("spawn does not warn when the project opencode.json already has an Opper provider", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "/tmp/g", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: true,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING);
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    expect(errors.join("")).not.toMatch(/--project/);
-  });
-
-  it("spawn does not warn when configScope=project (we're writing there)", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "./opencode.json", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: false,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING, { configScope: "project" });
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    expect(errors.join("")).not.toMatch(/--project/);
-  });
 });

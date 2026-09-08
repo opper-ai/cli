@@ -84,6 +84,10 @@ opper launch claude --resume
 
 The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default. Claude Desktop's picker is restricted to Claude-backed routes because its third-party gateway rejects non-Anthropic models; the generated profile defaults to Claude Opus 5 and also includes Sonnet 5, Haiku 4.5, and Fable 5.1.
 
+For OpenCode, each launch fetches `/v3/compat/models` using the same key and API host as the launched session, including when you select a different slot with `--key`. The generated model map and whitelist limit Opper's picker entries to the returned models supported by the CLI. These settings also apply at runtime so an older project configuration cannot restore removed entries or override the launch URL. Unrelated inline `OPENCODE_CONFIG_CONTENT` settings are preserved.
+
+If the allowed list is empty, OpenCode has no Opper models to select. If the authenticated catalog request fails, launch stops before changing configuration; it does not substitute the bundled catalog. `opper editors opencode` also writes a whitelist when it fetches models; use `--overwrite` to refresh an existing Opper provider block.
+
 To remove an agent's Opper integration without uninstalling the agent itself:
 
 ```bash

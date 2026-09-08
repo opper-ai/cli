@@ -38,7 +38,8 @@ export interface ConfigureOpenCodeOptions {
    * `/v3/compat/models` so the block reflects the live, key-scoped catalogue —
    * including the user's pools and dynamic routes, which no static list can
    * carry. Omitted (or undefined) keeps the bundled template, which is what
-   * happens when the gateway is unreachable or no key is configured.
+   * happens when no key is configured. Authenticated fetch failures must be
+   * handled before calling the config writer.
    */
   models?: Record<string, unknown>;
 }
@@ -63,10 +64,13 @@ export async function configureOpenCode(
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
-    provider: { opper: { models?: Record<string, unknown> } };
+    provider: { opper: { models?: Record<string, unknown>; whitelist?: string[] } };
   };
   if (opts.models) {
     templateConfig.provider.opper.models = opts.models;
+    // OpenCode merges with models.dev and other config layers. An explicit
+    // whitelist also removes stale/disallowed entries, including when empty.
+    templateConfig.provider.opper.whitelist = Object.keys(opts.models);
   }
   // The fresh-install path below writes the asset verbatim to preserve its
   // formatting, so a models override has to be re-serialised — otherwise it
