@@ -6,6 +6,7 @@ import registerSkills from "../../src/cli/skills.js";
 import registerEditors from "../../src/cli/editors.js";
 import registerAgents from "../../src/cli/agents.js";
 import registerPlatform from "../../src/cli/platform.js";
+import registerMcp from "../../src/cli/mcp.js";
 
 function buildProgram(): Command {
   const program = new Command();
@@ -19,6 +20,7 @@ function buildProgram(): Command {
     registerEditors,
     registerAgents,
     registerPlatform,
+    registerMcp,
   ]) {
     register(program, ctx);
   }
@@ -49,6 +51,7 @@ describe("addGroupedHelpText", () => {
       "Skills",
       "Editors",
       "Agents",
+      "MCP",
       "Platform",
       "Misc",
     ]) {

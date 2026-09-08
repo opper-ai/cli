@@ -10,6 +10,7 @@ import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
 import type { Location } from "../util/editor-paths.js";
+import { mcpAddCommand } from "./mcp.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
@@ -49,24 +50,11 @@ export async function editorsOpenCodeCommand(
     throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
   }
   if (opts.mcp) {
-    const result = await configureOpenCode({
+    await mcpAddCommand("opencode", {
       location: opts.location,
-      mcp: true,
-      ...(opts.mcpUrl !== undefined ? { mcpUrl: opts.mcpUrl } : {}),
-      ...(opts.mcpScopes !== undefined ? { mcpScopes: opts.mcpScopes } : {}),
+      ...(opts.mcpUrl !== undefined ? { url: opts.mcpUrl } : {}),
+      ...(opts.mcpScopes !== undefined ? { scopes: opts.mcpScopes } : {}),
     });
-    console.log(brand.accent(result.wrote
-      ? `✓ Configured Opper MCP (${result.mcpName}) in ${result.path}.`
-      : `Opper MCP (${result.mcpName}) is already configured; existing settings were preserved.`));
-    if (result.mcpScopes !== undefined) console.log(`Requested permissions: ${result.mcpScopes}`);
-    if (result.mcpEnabled === false) {
-      console.log(`The ${result.mcpName} connection is disabled. Enable it in OpenCode when you want to connect.`);
-    } else {
-      console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and choose permissions in Opper in your browser.`);
-      const name = result.mcpName ?? "opper";
-      const shellName = /^[A-Za-z0-9_-]+$/.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;
-      console.log(`If your client needs manual authentication, run: opencode mcp auth ${shellName}`);
-    }
     return;
   }
   const models = await resolveOpenCodeModels();
