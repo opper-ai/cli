@@ -131,6 +131,16 @@ function merge(base: Config, override: Config): Config {
   }));
 }
 
+function effectiveLayer(config: Config): Config {
+  if (!record(config.mcp)) return config;
+  // OpenCode's untyped enabled-only variant strips every other field before
+  // merging, including a stray scope written by older setup versions.
+  return { ...config, mcp: Object.fromEntries(Object.entries(config.mcp).map(([name, entry]) => [
+    name, record(entry) && entry.type === undefined && typeof entry.enabled === "boolean"
+      ? { enabled: entry.enabled } : entry,
+  ])) };
+}
+
 /** Add an account MCP connection; this never configures inference or logs in. */
 export async function configureOpenCodeMcp(
   location: Location,
@@ -147,9 +157,9 @@ export async function configureOpenCodeMcp(
   // Read and validate every local layer before planning the single file edit.
   // There is no provider/model rewrite and no evaluation of {env:...} tokens.
   const documents = candidates.filter(existsSync).map(readDocument);
-  const effective = documents.reduce((config, document) => merge(config, document.config), {} as Config);
+  const effective = documents.reduce((config, document) => merge(config, effectiveLayer(document.config)), {} as Config);
   const servers = record(effective.mcp) ? effective.mcp : {};
-  const target = documents.find((document) => document.path === `${jsonPath}c`) ??
+  let target = documents.find((document) => document.path === `${jsonPath}c`) ??
     documents.find((document) => document.path === jsonPath) ??
     { path: jsonPath, text: "{\n}\n", config: {} };
   let mcpName = "opper";
@@ -158,10 +168,25 @@ export async function configureOpenCodeMcp(
   let existing = false;
   for (const [name, settings] of Object.entries(servers)) {
     if (record(settings) && settings.type === "remote" && settings.url === url) {
+      if (/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(name)) {
+        throw new OpperError("AGENT_CONFIG_CONFLICT", "The matching MCP server name contains non-printable characters.",
+          "Rename it using printable characters in OpenCode, then retry. Existing settings were preserved.");
+      }
       mcpName = name;
       mcpEnabled = settings.enabled !== false;
       mcpOAuthEnabled = settings.oauth !== false;
       existing = true;
+      if (scopes !== undefined) {
+        // OpenCode validates each file before merging. A scope-only entry is
+        // invalid, or its fields are discarded as an enabled-only override.
+        // Edit the latest complete definition without copying private headers
+        // or OAuth settings into a potentially less-restricted config file.
+        target = [...documents].reverse().find((document) => {
+          const entries = document.config.mcp;
+          const entry = record(entries) ? entries[name] : undefined;
+          return record(entry) && entry.type === "remote" && entry.url === url;
+        }) ?? target;
+      }
       if (scopes !== undefined && settings.oauth !== undefined && !record(settings.oauth)) {
         throw new OpperError("AGENT_CONFIG_CONFLICT", "Cannot select scopes while this MCP server's OAuth is disabled or invalid.",
           "Review its OAuth settings in OpenCode, then retry. Existing settings were preserved.");

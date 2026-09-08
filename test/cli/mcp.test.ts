@@ -112,6 +112,41 @@ describe("MCP command configuration", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "\u001b]52;c;dGVzdA==\u0007", args: ["mcp", "add", "opencode"] },
+    { name: "demo\nforged-command", args: ["mcp", "add", "opencode", "--scopes", "account:read"] },
+    { name: "\u009b2Jdemo", args: ["editors", "opencode", "--mcp"], enabled: false },
+    { name: "demo\u202E", args: ["editors", "opencode", "--mcp", "--mcp-scopes", "account:read"] },
+    { name: "demo\u2028forged-command", args: ["mcp", "add", "opencode"], oauth: false },
+  ])("rejects terminal controls in a matching name before output or writes (%j)", async ({ name, args, enabled, oauth }) => {
+    const original = JSON.stringify({ mcp: { [name]: { type: "remote", url: "https://api.opper.ai/mcp", enabled, oauth } } });
+    seed(original);
+    await expect(run(args)).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT",
+      message: "The matching MCP server name contains non-printable characters.",
+      hint: expect.not.stringContaining(name),
+    });
+    expect(console.log).not.toHaveBeenCalled();
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  it("preserves printable Unicode names and shell-quotes embedded apostrophes", async () => {
+    const name = "team's café 👩‍💻";
+    const original = JSON.stringify({ mcp: { [name]: { type: "remote", url: "https://api.opper.ai/mcp" } } });
+    seed(original);
+    await run(["mcp", "add", "opencode"]);
+    expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toContain("opencode mcp auth 'team'\\''s café 👩‍💻'");
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  it("leaves unrelated server names untouched without displaying them", async () => {
+    const name = "\u001b]52;c;dGVzdA==\u0007";
+    seed(JSON.stringify({ mcp: { [name]: { type: "remote", url: "https://other.example/mcp" } } }));
+    await run(["mcp", "add", "opencode"]);
+    expect(parse(readFileSync(configPath, "utf8")).mcp[name].url).toBe("https://other.example/mcp");
+    expect(vi.mocked(console.log).mock.calls.flat().join("\n")).not.toContain(name);
+  });
+
   it.each(["claude", "unknown"])("rejects unsupported client %s without writing config", async (client) => {
     await expect(run(["mcp", "add", client])).rejects.toMatchObject({ code: "commander.invalidArgument" });
     expect(existsSync(configPath)).toBe(false);
