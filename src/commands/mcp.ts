@@ -38,6 +38,9 @@ export async function mcpAddCommand(client: string, opts: McpAddOptions): Promis
   if (result.mcpEnabled === false) return;
   console.log(`Reopen OpenCode to load the server, then connect ${result.mcpName} and choose permissions in Opper in your browser.`);
   const name = result.mcpName ?? "opper";
-  const shellName = /^[A-Za-z0-9_-]+$/.test(name) ? name : `'${name.replaceAll("'", "'\\''")}'`;
-  console.log(`If your client needs manual authentication, run: opencode mcp auth ${shellName}`);
+  // Use the native picker when a name needs shell quoting or could instead
+  // select an option/subcommand. The fallback contains no config-controlled text.
+  const directName = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(name) && name !== "list" && name !== "ls";
+  console.log(`If your client needs manual authentication, run: opencode mcp auth${directName ? ` ${name}` : ""}`);
+  if (!directName) console.log("Select the connection named above from OpenCode's server picker.");
 }

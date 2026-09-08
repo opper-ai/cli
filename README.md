@@ -228,6 +228,8 @@ in Opper in your browser. Available permissions are discovered from Opper; only
 the permissions you approve are granted. If the
 client requires manual authentication, use `opencode mcp auth opper`, then
 reopen OpenCode to load the authenticated tools.
+For names that need shell quoting or conflict with command options, setup
+suggests `opencode mcp auth` so you can select the server in OpenCode's picker.
 Availability of the endpoint depends on the Opper MCP deployment.
 
 OpenCode 1.18.29 cannot automatically complete a permission upgrade after a tool
