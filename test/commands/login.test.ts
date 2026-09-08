@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 import { readConfig } from "../../src/auth/config.js";
 
@@ -47,6 +47,8 @@ const { runDeviceFlow } = await import("../../src/auth/device-flow.js");
 const { loginCommand } = await import("../../src/commands/login.js");
 
 useTempOpperHome();
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+afterEach(() => Object.defineProperty(process, "platform", platform));
 
 describe("login", () => {
   beforeEach(() => {
@@ -139,5 +141,19 @@ describe("login", () => {
     const out = clackMessages.join("\n");
     expect(out).toContain("ABCD-1234");
     expect(out).toContain("platform.opper.ai/device");
+  });
+
+  it("describes manual browser approval on Windows with the complete device URL", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    const url = "https://platform.opper.ai/device?user_code=ABCD-1234&state=keep-this";
+    vi.mocked(runDeviceFlow).mockImplementation(async (opts) => {
+      opts?.onPrompt?.({ userCode: "ABCD-1234", verificationUri: url, verificationUriComplete: url, expiresIn: 600 });
+      return { apiKey: "test-key", obtainedAt: "2026-04-21T11:00:00Z", source: "device-flow" };
+    });
+    await loginCommand({ key: "default", force: true, legacyPath: "/nonexistent" });
+    const output = clackMessages.join("\n");
+    expect(output).toContain(url);
+    expect(output).toContain("Open this URL in your browser");
+    expect(output).not.toContain("Opening");
   });
 });

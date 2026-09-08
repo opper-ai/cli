@@ -212,7 +212,8 @@ export async function withMcpKeyAuthorization<T>(
       validateOAuthEndpoint(url);
       if (options.onAuthorizationUrl) await options.onAuthorizationUrl(url);
       else {
-        process.stderr.write(`Approve this project's read access and API key creation in Opper.\nOpening your browser; if needed, open this URL directly:\n${url.href}\n`);
+        const browserHint = process.platform === "win32" ? "Open this URL in your browser:" : "Opening your browser; if needed, open this URL directly:";
+        process.stderr.write(`Approve this project's read access and API key creation in Opper.\n${browserHint}\n${url.href}\n`);
         openBrowser(url.href);
       }
     },

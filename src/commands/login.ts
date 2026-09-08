@@ -43,7 +43,9 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       onPrompt(p) {
         const url = p.verificationUriComplete ?? p.verificationUri;
         note(
-          `Opening ${brand.accent(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.accent(p.userCode)}`,
+          process.platform === "win32"
+            ? `Open this URL in your browser:\n${brand.accent(url)}\nEnter code ${brand.accent(p.userCode)} if requested.`
+            : `Opening ${brand.accent(url)} in your browser…\nIf it doesn't open, paste the URL above and enter code ${brand.accent(p.userCode)}`,
           "Authorize the CLI",
         );
         openBrowser(url);

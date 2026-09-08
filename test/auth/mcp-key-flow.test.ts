@@ -8,6 +8,12 @@ import { join } from "node:path";
 import { KEY_SETUP_SCOPES, withMcpKeyAuthorization } from "../../src/auth/mcp-key-flow.js";
 import { OpperError } from "../../src/errors.js";
 
+const browserSpawn = vi.hoisted(() => vi.fn(() => ({ on: vi.fn(), unref: vi.fn() })));
+vi.mock("node:child_process", async () => ({
+  ...await vi.importActual<typeof import("node:child_process")>("node:child_process"),
+  spawn: browserSpawn,
+}));
+
 let server: Server;
 let origin: string;
 let directory: string;
@@ -97,6 +103,46 @@ async function approve(url: URL, expectedScope = KEY_SETUP_SCOPES) {
 }
 
 describe("native SDK OAuth for private key setup", () => {
+  it("prints a complete manual OAuth URL on Windows and closes the callback after cancellation", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    browserSpawn.mockClear();
+    let shown!: (url: URL) => void;
+    const shownUrl = new Promise<URL>((resolve) => { shown = resolve; });
+    let printed = "";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      printed += String(chunk);
+      const line = String(chunk).split("\n").find((value) => value.startsWith("http://"));
+      if (line) shown(new URL(line));
+      return true;
+    });
+    const abort = new AbortController();
+    try {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const operation = vi.fn();
+      const flow = withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { signal: abort.signal, timeoutMs: 2000 });
+      const result = flow.catch((error: unknown) => error);
+      const url = await shownUrl;
+      abort.abort();
+      expect(await result).toMatchObject({ code: "AUTH_REQUIRED" });
+      expect(printed).toContain("Open this URL in your browser:");
+      expect(printed).not.toContain("Opening your browser");
+      expect(printed).toContain(url.href);
+      expect(url.href).toContain("&");
+      expect(url.searchParams.get("scope")).toBe(KEY_SETUP_SCOPES);
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(url.searchParams.get("state")).toBeTruthy();
+      expect(browserSpawn).not.toHaveBeenCalled();
+      expect(operation).not.toHaveBeenCalled();
+      expect(exchanges).toBe(0);
+      await expect(fetch(url.searchParams.get("redirect_uri")!)).rejects.toThrow();
+    } finally {
+      abort.abort();
+      Object.defineProperty(process, "platform", platform);
+      stderr.mockRestore();
+      browserSpawn.mockClear();
+    }
+  });
+
   it("uses real SDK DCR/PKCE and revokes its temporary grant after the operation", async () => {
     const operation = vi.fn().mockResolvedValue("done");
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");

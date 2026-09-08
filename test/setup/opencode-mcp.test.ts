@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
 import { configureOpenCode } from "../../src/setup/opencode.js";
+import { execFileSync } from "node:child_process";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -82,6 +83,38 @@ describe("explicit OpenCode MCP setup", () => {
     expect(statSync(path).ino).not.toBe(originalInode);
     expect(statSync(path).mode & 0o777).toBe(0o640);
     expect(load(path).mcp.opper.url).toBe("https://api.opper.ai/mcp");
+  });
+
+  it("excludes retained private backups from ordinary Git staging in local setup", async () => {
+    const project = join(sandbox, "project");
+    mkdirSync(project);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: project, encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    git("init", "--quiet");
+    writeFileSync(join(project, ".gitignore"), "/opencode.json\n");
+    const path = join(project, "opencode.json");
+    const original = JSON.stringify({ mcp: { private: {
+      type: "remote", url: "https://private.example/mcp", headers: { Authorization: "private-fixture-value" },
+    } } });
+    writeFileSync(path, original, { mode: 0o600 });
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+    const result = await configureOpenCode({ location: "local", mcp: true });
+    expect(readFileSync(result.backupPath!, "utf8")).toBe(original);
+    git("add", "--all");
+    expect(git("ls-files").trim()).toBe(".gitignore");
+    expect(git("status", "--porcelain")).not.toContain(".opper-mcp-");
+    expect(git("check-ignore", result.backupPath!).trim()).toBe(result.backupPath);
+  });
+
+  it("leaves the original untouched if the backup ignore rule cannot be written", async () => {
+    const fs = await import("node:fs/promises");
+    const path = join(directory, "opencode.json");
+    const original = '{"model":"original/model"}';
+    writeFileSync(path, original);
+    vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("Cannot write ignore rule"));
+    await expect(configureOpenCode({ location: "global", mcp: true })).rejects.toThrow("Cannot write ignore rule");
+    expect(readFileSync(path, "utf8")).toBe(original);
+    expect(readdirSync(directory)).toEqual(["opencode.json"]);
   });
 
   it("restores a changed captured file only when the destination is still absent", async () => {
