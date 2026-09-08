@@ -268,6 +268,16 @@ or duplicate JSON keys produces an error without changing the files. `--url` acc
 HTTPS endpoints or HTTP loopback addresses, without credentials, query parameters,
 or fragments.
 
+When setup updates an existing regular config, it retains the original file in
+a private `.opper-mcp-*` backup directory beside it and prints that backup path.
+It captures and checks the current file before installing the update without
+replacing a competing save. A detected conflict stops setup and preserves both
+versions for review. Backups also retain late saves through an editor's already
+open file; compare them if you edited the config during setup. Repeated setup
+that makes no change creates no backup. Symlinked target files require a manual
+merge. New files are created exclusively, so setup never replaces a file that
+appeared after inspection.
+
 Use `--global` or `--local` to select where the MCP configuration is written.
 For a native OpenCode setup instead, run `opencode mcp add` and choose a remote
 server with the same URL. That is also suitable for demonstrating server setup

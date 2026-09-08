@@ -26,6 +26,7 @@ export async function mcpAddCommand(client: string, opts: McpAddOptions): Promis
   console.log(brand.accent(result.wrote
     ? `✓ Configured Opper MCP (${result.mcpName}) in ${result.path}.`
     : `Opper MCP (${result.mcpName}) is already configured; existing settings were preserved.`));
+  if (result.backupPath) console.log(`Previous config retained at ${result.backupPath}`);
   if (result.mcpScopes !== undefined) console.log(`Requested permissions: ${result.mcpScopes}`);
   if (result.mcpEnabled === false) {
     console.log(`The ${result.mcpName} connection is disabled. Enable it in OpenCode when you want to connect.`);

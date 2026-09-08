@@ -32,6 +32,16 @@ export function validateMcpServerUrl(value: string): URL {
   return url;
 }
 
+/** Discovered OAuth endpoints may include a fixed query component. */
+function validateOAuthEndpoint(value: string | URL): URL {
+  try {
+    const url = new URL(value);
+    validateMcpServerUrl(new URL(url.pathname, url.origin).href);
+    if (url.username || url.password || url.hash) throw new Error();
+    return url;
+  } catch { throw new Error("Unsafe OAuth destination"); }
+}
+
 export interface KeyAuthorizationOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -106,9 +116,7 @@ export async function withMcpKeyAuthorization<T>(
   });
 
   const secureFetch: typeof fetch = async (input, init) => {
-    const url = new URL(input instanceof Request ? input.url : input.toString());
-    validateMcpServerUrl(new URL(url.pathname, url.origin).href);
-    if (url.username || url.password || url.hash) throw new Error("Unsafe OAuth destination");
+    validateOAuthEndpoint(input instanceof Request ? input.url : input.toString());
     return fetch(input, { ...init, redirect: "error", signal: AbortSignal.any([
       controller.signal, AbortSignal.timeout(15_000), ...(init?.signal ? [init.signal] : []),
     ]) });
@@ -193,14 +201,15 @@ export async function withMcpKeyAuthorization<T>(
     saveCodeVerifier(value) { verifier = value; },
     codeVerifier: () => verifier,
     saveDiscoveryState(value) {
-      if (!revocationEndpoint(value)) throw new Error("Missing revocation endpoint");
+      const endpoint = revocationEndpoint(value);
+      if (!endpoint) throw new Error("Missing revocation endpoint");
+      validateOAuthEndpoint(endpoint);
       discovery = value;
     },
     discoveryState: () => discovery,
     async redirectToAuthorization(url) {
       requestedScope = url.searchParams.get("scope") ?? KEY_SETUP_SCOPES;
-      validateMcpServerUrl(new URL(url.pathname, url.origin).href);
-      if (url.username || url.password || url.hash) throw new Error("Unsafe authorization destination");
+      validateOAuthEndpoint(url);
       if (options.onAuthorizationUrl) await options.onAuthorizationUrl(url);
       else {
         process.stderr.write(`Approve this project's read access and API key creation in Opper.\nOpening your browser; if needed, open this URL directly:\n${url.href}\n`);
@@ -235,8 +244,8 @@ export async function withMcpKeyAuthorization<T>(
       try {
         const endpoint = revocationEndpoint(discovery);
         if (!endpoint || !clientInfo) throw new Error("Missing revocation metadata");
-        validateMcpServerUrl(endpoint);
-        const response = await fetch(endpoint, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+        const url = validateOAuthEndpoint(endpoint);
+        const response = await fetch(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ token: tokens.refresh_token ?? tokens.access_token, client_id: clientInfo.client_id }),
         });

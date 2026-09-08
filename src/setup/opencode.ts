@@ -58,6 +58,7 @@ export interface ConfigureOpenCodeResult {
   mcpName?: string;
   mcpEnabled?: boolean;
   mcpScopes?: string;
+  backupPath?: string;
 }
 
 // NOTE: OpenCode's template uses `{env:OPPER_API_KEY}` placeholders so the
