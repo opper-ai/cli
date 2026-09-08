@@ -20,6 +20,9 @@ let invalidClient: boolean;
 let offlineAccessSupported: boolean;
 let registrationError: boolean;
 let revokeError: boolean;
+let revokeFailureFor: string | undefined;
+let omitRefreshToken: boolean;
+let activeTokens: Set<string>;
 let requiresIssuer: boolean;
 let revocationQuery: string;
 let revocationUrlOverride: string | undefined;
@@ -29,6 +32,7 @@ beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "opper-native-key-test-"));
   vi.stubEnv("OPPER_HOME", directory);
   revocationQuery = ""; revocationUrlOverride = undefined;
+  revokeFailureFor = undefined; omitRefreshToken = false; activeTokens = new Set();
   registrations = 0; exchanges = 0; revoked = []; requests.length = 0;
   grantedScope = KEY_SETUP_SCOPES; invalidClient = false; offlineAccessSupported = false; registrationError = false; revokeError = false; requiresIssuer = false;
   server = createServer(async (request, response) => {
@@ -58,10 +62,15 @@ beforeEach(async () => {
       expect(form.get("client_id")).toBe("public-cli-client");
       expect(form.get("resource")).toBe(`${origin}/mcp`);
       expect(createHash("sha256").update(form.get("code_verifier")!).digest("base64url")).toBe(authorization.searchParams.get("code_challenge"));
-      send({ access_token: "PRIVATE-ACCESS-TOKEN", refresh_token: "PRIVATE-REFRESH-TOKEN", token_type: "Bearer", expires_in: 300, scope: grantedScope });
+      activeTokens.add("PRIVATE-ACCESS-TOKEN");
+      if (!omitRefreshToken) activeTokens.add("PRIVATE-REFRESH-TOKEN");
+      send({ access_token: "PRIVATE-ACCESS-TOKEN", ...(omitRefreshToken ? {} : { refresh_token: "PRIVATE-REFRESH-TOKEN" }), token_type: "Bearer", expires_in: 300, scope: grantedScope });
     } else if (request.url?.startsWith("/oauth/revoke")) {
-      revoked.push(new URLSearchParams(body).get("token")!);
-      send({}, revokeError ? 500 : 200);
+      const token = new URLSearchParams(body).get("token")!;
+      revoked.push(token);
+      const failed = revokeError || revokeFailureFor === token;
+      if (!failed) activeTokens.delete(token); // Deliberately does not cascade.
+      send({}, failed ? 500 : 200);
     } else send({ error: "not found" }, 404);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -93,7 +102,7 @@ describe("native SDK OAuth for private key setup", () => {
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
     expect(operation).toHaveBeenCalledWith("PRIVATE-ACCESS-TOKEN");
     expect(exchanges).toBe(1);
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
     const paths = await readdir(join(directory, "mcp-clients"));
     expect(paths).toHaveLength(1);
     const path = join(directory, "mcp-clients", paths[0]!);
@@ -111,7 +120,7 @@ describe("native SDK OAuth for private key setup", () => {
     await withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve });
     expect(registrations).toBe(1);
     expect(exchanges).toBe(2);
-    expect(revoked).toHaveLength(2);
+    expect(revoked).toHaveLength(4);
     expect(authorization.searchParams.get("redirect_uri")).not.toBe(first);
   });
 
@@ -120,7 +129,7 @@ describe("native SDK OAuth for private key setup", () => {
     const operation = vi.fn().mockResolvedValue("done");
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
     expect(operation).toHaveBeenCalledOnce();
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
   });
 
   it("checks the actual authorization scope if the SDK adds offline access and token scope is omitted", async () => {
@@ -131,7 +140,7 @@ describe("native SDK OAuth for private key setup", () => {
       onAuthorizationUrl: (url) => approve(url, `${KEY_SETUP_SCOPES} offline_access`),
     })).rejects.toThrow(/explicitly select both/);
     expect(operation).not.toHaveBeenCalled();
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
   });
 
   it("evicts an invalid client and requires fresh consent before retrying", async () => {
@@ -250,7 +259,7 @@ describe("native SDK OAuth for private key setup", () => {
     const operation = vi.fn();
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).rejects.toThrow(/explicitly select both/);
     expect(operation).not.toHaveBeenCalled();
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
   });
 
   it.each([undefined, "https://wrong-issuer.example"])("rejects a missing or mismatched iss before token exchange when advertised (%s)", async (iss) => {
@@ -271,7 +280,7 @@ describe("native SDK OAuth for private key setup", () => {
   it("revokes on operation failure and redacts untrusted errors", async () => {
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => { throw new Error("PRIVATE-OPERATION-SECRET"); }, { onAuthorizationUrl: approve }))
       .rejects.toThrow("The private key setup could not be completed.");
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
   });
 
   it("redacts SDK server error text before returning an error", async () => {
@@ -286,7 +295,7 @@ describe("native SDK OAuth for private key setup", () => {
     const operation = vi.fn().mockResolvedValue("done");
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), operation, { onAuthorizationUrl: approve })).resolves.toBe("done");
     expect(operation).toHaveBeenCalledOnce();
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
     expect(requests.find((request) => request.path.startsWith("/oauth/revoke"))?.path).toBe(`/oauth/revoke${revocationQuery}`);
   });
 
@@ -300,11 +309,36 @@ describe("native SDK OAuth for private key setup", () => {
       expect(revoked).toEqual([]);
     });
 
+  it("revokes both tokens when the server does not cascade revocation", async () => {
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => {
+      expect(activeTokens).toEqual(new Set(["PRIVATE-ACCESS-TOKEN", "PRIVATE-REFRESH-TOKEN"]));
+    }, { onAuthorizationUrl: approve });
+    expect(activeTokens.size).toBe(0);
+    const hints = requests.filter((request) => request.path.startsWith("/oauth/revoke"))
+      .map((request) => new URLSearchParams(request.body).get("token_type_hint"));
+    expect(hints).toEqual(["refresh_token", "access_token"]);
+  });
+
+  it("revokes the access token when no refresh token was issued", async () => {
+    omitRefreshToken = true;
+    await withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve });
+    expect(revoked).toEqual(["PRIVATE-ACCESS-TOKEN"]);
+    expect(activeTokens.size).toBe(0);
+  });
+
+  it.each(["PRIVATE-ACCESS-TOKEN", "PRIVATE-REFRESH-TOKEN"])("attempts both cleanups when revoking %s fails", async (failedToken) => {
+    revokeFailureFor = failedToken;
+    await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve }))
+      .rejects.toThrow(/temporary CLI connection could not be revoked/);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
+    expect(activeTokens).toEqual(new Set([failedToken]));
+  });
+
   it("reports failed revocation without claiming the temporary connection was removed", async () => {
     revokeError = true;
     await expect(withMcpKeyAuthorization(new URL(`${origin}/mcp`), async () => undefined, { onAuthorizationUrl: approve }))
       .rejects.toThrow(/temporary CLI connection could not be revoked/);
-    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN"]);
+    expect(revoked).toEqual(["PRIVATE-REFRESH-TOKEN", "PRIVATE-ACCESS-TOKEN"]);
   });
 
   it("preserves operation recovery instructions even if OAuth cleanup also fails", async () => {
