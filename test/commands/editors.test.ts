@@ -15,6 +15,10 @@ vi.mock("../../src/setup/opencode-models.js", () => ({
 
 vi.mock("../../src/setup/opencode.js", () => ({
   configureOpenCode: mocks.configureOpenCode,
+  readProjectConfigState: vi.fn().mockReturnValue({
+    exists: false,
+    hasOpperProvider: false,
+  }),
 }));
 
 const { editorsListCommand, editorsOpenCodeCommand } = await import(

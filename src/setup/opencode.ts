@@ -10,9 +10,8 @@ export interface ProjectConfigState {
 }
 
 /**
- * Inspect the cwd-local `opencode.json` (if any). Used at launch time to
- * decide whether to warn that a project-level config will shadow whatever
- * we just wrote to the user-level config.
+ * Inspect an OpenCode config before setup to avoid fetching the catalogue
+ * when an existing Opper provider makes the operation a no-op.
  */
 export function readProjectConfigState(path: string): ProjectConfigState {
   if (!existsSync(path)) return { exists: false, hasOpperProvider: false };
