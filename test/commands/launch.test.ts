@@ -31,12 +31,7 @@ vi.mock("../../src/api/client.js", () => ({
     get = apiGetMock;
   },
 }));
-vi.mock("../../src/api/resolve.js", () => ({
-  resolveApiContext: vi.fn().mockResolvedValue({
-    apiKey: "op_live_x",
-    baseUrl: "https://api.opper.ai",
-  }),
-}));
+
 
 const { launchCommand } = await import("../../src/commands/launch.js");
 

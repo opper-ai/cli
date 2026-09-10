@@ -29,6 +29,20 @@ describe("formatSessionSummary", () => {
     expect(out).not.toMatch(/^\s*Model\s/m);
   });
 
+  it("reports unavailable usage without suggesting rollup lag after a failed request", () => {
+    const out = formatSessionSummary({
+      durationMs: 90_000,
+      models: [],
+      tracesUrl: TRACES,
+      usageUnavailable: true,
+    });
+    expect(out).toContain("Duration  1m 30s");
+    expect(out).toContain("Usage unavailable");
+    expect(out).toContain("Traces    " + TRACES);
+    expect(out).not.toContain("usage rollup lags");
+    expect(out).not.toMatch(/^\s*Cost\s/m);
+  });
+
   it("renders a single-model session with totals", () => {
     const out = formatSessionSummary({
       durationMs: 150_000,
