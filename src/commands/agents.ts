@@ -2,6 +2,7 @@ import { listAdapters, getAdapter } from "../agents/registry.js";
 import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
+import { getSlot } from "../auth/config.js";
 
 interface Row {
   name: string;
@@ -98,4 +99,16 @@ export async function agentsRemoveCommand(name: string): Promise<void> {
   }
   await adapter.unconfigure();
   console.log(`${adapter.displayName} integration removed.`);
+}
+
+export async function agentsConfigureCommand(name: string, key: string, model?: string): Promise<void> {
+  const adapter = getAdapter(name);
+  if (!adapter) throw new OpperError("AGENT_NOT_FOUND", `Unknown agent "${name}"`, "Run `opper agents list` to see supported agents.");
+  const slot = await getSlot(key);
+  if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${key}"`, "Run `opper login` first.");
+  await adapter.configure({ keyName: key, apiKey: slot.apiKey,
+    baseUrl: process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai",
+    ...(model ? { model } : {}),
+  });
+  console.log(`${adapter.displayName} configured.`);
 }

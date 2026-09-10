@@ -1,4 +1,4 @@
-import { agentsListCommand, agentsRemoveCommand } from "../commands/agents.js";
+import { agentsListCommand, agentsRemoveCommand, agentsConfigureCommand } from "../commands/agents.js";
 import { launchCommand } from "../commands/launch.js";
 import type { RegisterFn } from "./types.js";
 
@@ -33,6 +33,14 @@ const register: RegisterFn = (program, ctx) => {
   const agentsCmd = program
     .command("agents")
     .description("Manage supported AI agents");
+
+  agentsCmd
+    .command("configure <name>")
+    .description("Configure an agent to use the selected Opper key without launching it")
+    .option("--model <id>", "Opper model identifier (where supported)")
+    .action(async (name: string, opts: { model?: string }) => {
+      await agentsConfigureCommand(name, ctx.key(), opts.model);
+    });
 
   agentsCmd
     .command("list")

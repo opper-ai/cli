@@ -87,6 +87,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
   const routing: OpperRouting = {
+    keyName: opts.key,
     apiBaseUrl: apiContext.baseUrl,
     baseUrl,
     apiKey: apiContext.apiKey,
@@ -122,6 +123,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   // Best-effort session summary. Failures are silent — we never block or
   // change the agent's exit code on a summary error.
   try {
+    if (adapter.launchesInBackground) return code;
     await printSessionSummary({
       apiContext,
       sessionId,

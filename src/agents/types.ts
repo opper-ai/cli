@@ -5,6 +5,8 @@ export interface DetectResult {
 }
 
 export interface OpperRouting {
+  /** Selected stored credential, for desktop integrations that outlive launch. */
+  keyName?: string;
   /** Original API root for model discovery, before the inference session path. */
   apiBaseUrl: string;
   baseUrl: string;
@@ -16,6 +18,9 @@ export interface OpperRouting {
 export interface ConfigureOptions {
   /** API key for adapters that bake the key into their config. */
   apiKey?: string;
+  keyName?: string;
+  baseUrl?: string;
+  model?: string;
 }
 
 export interface SpawnOptions {
@@ -49,6 +54,8 @@ export interface AgentAdapter {
   name: string;
   displayName: string;
   docsUrl: string;
+  /** The desktop app outlives this command; no process-lifetime usage summary. */
+  launchesInBackground?: boolean;
 
   /** Optional restriction for integrations that cannot use the full catalog. */
   supportsModel?(modelId: string): boolean;

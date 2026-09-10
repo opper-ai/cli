@@ -52,12 +52,13 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 
 ## Agents
 
-`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch — except Claude Desktop (see the table below) — runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link. The usage summary uses the same key and API host as the launched session. If the usage request fails, it reports “Usage unavailable”; the rollup-delay hint is reserved for successful requests with no usage rows. Summary failures do not change the agent’s exit code.
+`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Terminal agents run inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link. The usage summary uses the same key and API host as the launched session. If the usage request fails, it reports “Usage unavailable”; the rollup-delay hint is reserved for successful requests with no usage rows. Summary failures do not change the agent’s exit code. Desktop integrations use persistent gateway configuration.
 
 ```bash
 opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND
 opper launch claude              # Anthropic Messages shape → /v3/session/<id>/v1/messages
 opper launch claude-desktop      # rewire Claude Desktop (GUI) → /v3/compat (persistent GUI profile)
+opper --key prod launch codex-desktop --model claude-sonnet-5
 opper launch opencode            # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
 opper launch codex               # OpenAI Responses shape → /v3/session/<id>/responses
 opper launch hermes              # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
@@ -75,7 +76,8 @@ opper launch claude --resume
 | Claude Code | `claude` | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env vars |
 | Claude Desktop | `claude-desktop` | writes a third-party-inference (`deploymentMode: "3p"`) profile into `~/Library/Application Support/Claude-3p/` (macOS) / `%LOCALAPPDATA%\Claude-3p\` (Windows); quits and reopens the GUI app to apply |
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
-| Codex | `codex` | sentinel-managed `[model_providers.opper]` + `[profiles.opper-opus]` block in `~/.codex/config.toml` |
+| Codex CLI | `codex` | per-invocation Responses provider and model overrides; preserves shared configuration and supports current native profile files |
+| Codex / ChatGPT desktop | `codex-desktop` | configures local Codex tasks on macOS with a persistent Responses provider, selected-key credential helper, and live Opper model catalog |
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
 | OpenClaw | `openclaw` | `opper` provider entry in `~/.openclaw/agents/main/agent/models.json`; `opper launch openclaw` defaults to `gateway start` (background daemon) |
 | Pi | `pi` | `opper` provider entry in `~/.pi/agent/models.json` (added/removed idempotently next to your other providers) |
@@ -107,9 +109,36 @@ opper agents remove claude-desktop   # works for any registered adapter
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
+### Codex / ChatGPT desktop on macOS
+
+Install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
+
+```bash
+# Configure and open the app with the selected stored key and model
+opper --key prod launch codex-desktop --model claude-sonnet-5
+
+# Configure without launching (also available in the Agents menu)
+opper --key prod agents configure codex-desktop --model claude-sonnet-5
+
+# Restore the previous provider, model and catalog
+opper agents remove codex-desktop
+```
+
+If the app is already running, the CLI saves the configuration and reports that a restart is required. Quit and reopen the app, then create a new **local Codex task**. Existing tasks keep their provider. This integration covers local Codex tasks; ordinary ChatGPT conversations and cloud tasks are separate.
+
+Setup refreshes the model picker from the selected key's authorized, tool-capable Opper catalog, using the same API root as inference. Run the launch or configure command again to refresh the catalog or change keys/models. Models without confirmed tool support are excluded.
+
+Codex's built-in web search is disabled while this integration is enabled: its default cached-only search relies on an OpenAI service that Opper cannot reproduce across model providers. The previous search setting is restored when removing the integration. File tools and sub-agents remain enabled.
+
+The app reads the selected slot through a local credential helper, so it also works when opened from Finder. The API key stays in the Opper credential store. Rotating that slot's key is picked up when Codex refreshes credentials; deleting the slot stops future credential retrieval. If the slot's API host changes, rerun setup before using it.
+
+Configuration is stored in `~/.codex/config.toml` (or `CODEX_HOME`) and helper/catalog/backup files in `CODEX_HOME/opper-desktop/`. Because Codex CLI and the desktop app share this configuration, plain `codex` also sees these defaults. `opper launch codex` supplies its own provider/model and disables built-in web search per invocation, without changing saved settings. Explicit native `--model` or `--profile` choices take precedence over the launcher's default model; current profiles are separate `NAME.config.toml` files.
+
+Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use a separate `CODEX_HOME` to keep a dotfile-managed configuration intact. Restart the app after removal.
+
 ## Routing through a session without the CLI
 
-For every launchable agent except Claude Desktop, `opper launch` is a thin convenience wrapper. Under the hood it does one thing: it mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required. (Claude Desktop is the exception — it rewires a persistent `/v3/compat` GUI profile instead, so it doesn't get a per-launch session.)
+For terminal agents, `opper launch` mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required. Desktop integrations use persistent `/v3/compat` configuration and do not get a per-launch session.
 
 ### The endpoint
 
