@@ -88,7 +88,7 @@ export async function agentsListCommand(): Promise<void> {
   }
 }
 
-export async function agentsRemoveCommand(name: string): Promise<void> {
+export async function agentsRemoveCommand(name: string, codexHome?: string): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) {
     throw new OpperError(
@@ -97,18 +97,26 @@ export async function agentsRemoveCommand(name: string): Promise<void> {
       "Run `opper agents list` to see supported agents.",
     );
   }
-  await adapter.unconfigure();
+  if (codexHome !== undefined && adapter.name !== "codex-desktop") {
+    throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
+  }
+  if (codexHome !== undefined) await adapter.unconfigure({ codexHome });
+  else await adapter.unconfigure();
   console.log(`${adapter.displayName} integration removed.`);
 }
 
-export async function agentsConfigureCommand(name: string, key: string, model?: string): Promise<void> {
+export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) throw new OpperError("AGENT_NOT_FOUND", `Unknown agent "${name}"`, "Run `opper agents list` to see supported agents.");
+  if (codexHome !== undefined && adapter.name !== "codex-desktop") {
+    throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
+  }
   const slot = await getSlot(key);
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${key}"`, "Run `opper login` first.");
   await adapter.configure({ keyName: key, apiKey: slot.apiKey,
     baseUrl: process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai",
     ...(model ? { model } : {}),
+    ...(codexHome !== undefined ? { codexHome } : {}),
   });
   console.log(`${adapter.displayName} configured.`);
 }

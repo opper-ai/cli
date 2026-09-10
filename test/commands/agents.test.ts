@@ -87,13 +87,36 @@ describe("agentsRemoveCommand", () => {
         "../../src/commands/agents.js"
       );
       await agentsRemoveCommand("hermes");
-      expect(hermesUnconfigure).toHaveBeenCalled();
+      expect(hermesUnconfigure).toHaveBeenCalledExactlyOnceWith();
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("Hermes Agent");
       expect(out).toContain("removed");
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("forwards an explicit desktop home on removal without changing CODEX_HOME", async () => {
+    const homeBefore = process.env.CODEX_HOME;
+    getAdapterMock.mockReturnValue({
+      name: "codex-desktop", displayName: "Codex Desktop", docsUrl: "https://example.com",
+      detect: vi.fn(), isConfigured: vi.fn(), configure: vi.fn(), unconfigure: hermesUnconfigure,
+    });
+    const { agentsRemoveCommand } = await import("../../src/commands/agents.js");
+    await agentsRemoveCommand("codex-desktop", "/tmp/selected Codex home");
+    expect(hermesUnconfigure).toHaveBeenCalledExactlyOnceWith({ codexHome: "/tmp/selected Codex home" });
+    expect(process.env.CODEX_HOME).toBe(homeBefore);
+  });
+
+  it("rejects --codex-home for other adapters before removing anything", async () => {
+    getAdapterMock.mockReturnValue({
+      name: "hermes", displayName: "Hermes", docsUrl: "https://example.com",
+      detect: vi.fn(), isConfigured: vi.fn(), configure: vi.fn(), unconfigure: hermesUnconfigure,
+    });
+    const { agentsRemoveCommand } = await import("../../src/commands/agents.js");
+    await expect(agentsRemoveCommand("hermes", "/tmp/custom"))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--codex-home") });
+    expect(hermesUnconfigure).not.toHaveBeenCalled();
   });
 
   it("throws AGENT_NOT_FOUND for unknown adapter names", async () => {
@@ -157,6 +180,29 @@ describe("agentsConfigureCommand", () => {
     expect(configure).toHaveBeenCalledExactlyOnceWith({
       keyName: "prod", apiKey: "fixture-prod", baseUrl: "https://override.example/api", model: "claude-opus-5",
     });
+  });
+
+  it("forwards an explicit desktop home on configuration without changing CODEX_HOME", async () => {
+    await setSlot("prod", { apiKey: "fixture-prod" });
+    const homeBefore = process.env.CODEX_HOME;
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await agentsConfigureCommand("codex-desktop", "prod", undefined, "/tmp/selected Codex home");
+    expect(configure).toHaveBeenCalledExactlyOnceWith({
+      keyName: "prod", apiKey: "fixture-prod", baseUrl: "https://api.opper.ai", codexHome: "/tmp/selected Codex home",
+    });
+    expect(process.env.CODEX_HOME).toBe(homeBefore);
+  });
+
+  it("rejects --codex-home for other adapters before resolving credentials", async () => {
+    getAdapterMock.mockReturnValue({
+      name: "codex", displayName: "Codex CLI", docsUrl: "https://example.com",
+      detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure,
+    });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await expect(agentsConfigureCommand("codex", "missing", undefined, "/tmp/custom"))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--codex-home") });
+    expect(configure).not.toHaveBeenCalled();
+    expect(unconfigure).not.toHaveBeenCalled();
   });
 
   it("uses the production root and leaves model selection to the adapter when omitted", async () => {

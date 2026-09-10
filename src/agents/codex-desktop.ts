@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getSlot } from "../auth/config.js";
 import { configPath as opperConfigPath } from "../auth/paths.js";
 import { DEFAULT_MODELS } from "../config/models.js";
@@ -10,20 +10,28 @@ import { OpperError } from "../errors.js";
 import { run } from "../util/run.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
 import { applyDesktopConfig, removeDesktopConfig, readDesktopConfig, DESKTOP_PROVIDER, type DesktopConfigState } from "../setup/codex-desktop-config.js";
-import type { AgentAdapter, ConfigureOptions, OpperRouting } from "./types.js";
+import type { AgentAdapter, ConfigureOptions, OpperRouting, SpawnOptions, UnconfigureOptions } from "./types.js";
 
 const MINIMUM_RUNTIME = [0, 153, 4];
-function codexHome(): string { return resolve(process.env.CODEX_HOME || join(homedir(), ".codex")); }
-function paths() {
-  const home = codexHome();
+function codexHome(explicit?: string): string {
+  if (explicit !== undefined && !explicit.trim()) throw new OpperError("INVALID_ARGUMENT", "--codex-home must be a non-empty path.");
+  return resolve(explicit ?? (process.env.CODEX_HOME || join(homedir(), ".codex")));
+}
+function paths(home = codexHome()) {
   const directory = join(home, "opper-desktop");
   return { home, directory, config: join(home, "config.toml"), catalog: join(directory, "catalog.json"), auth: join(directory, "auth.mjs"), state: join(directory, "state.json"), lock: join(home, ".opper-desktop.lock") };
 }
 function appCandidates(): string[] {
   return ["/Applications/ChatGPT.app", "/Applications/Codex.app", join(homedir(), "Applications", "ChatGPT.app"), join(homedir(), "Applications", "Codex.app")];
 }
+function isSupportedRuntime(version: string): boolean {
+  const parts = version.split(".").map(Number);
+  const comparison = parts.findIndex((n, i) => n !== MINIMUM_RUNTIME[i]);
+  return comparison === -1 || parts[comparison]! > MINIMUM_RUNTIME[comparison]!;
+}
 function findApp(): { app: string; runtime: string; version: string } | null {
   if (platform() !== "darwin") return null;
+  let outdatedApp: { app: string; runtime: string; version: string } | null = null;
   for (const app of appCandidates()) {
     const runtime = join(app, "Contents", "Resources", "codex");
     if (!existsSync(runtime)) continue;
@@ -31,16 +39,19 @@ function findApp(): { app: string; runtime: string; version: string } | null {
     if (bundle.code !== 0 || bundle.stdout.trim() !== "com.openai.codex") continue;
     const version = run(runtime, ["--version"]);
     const match = version.stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/);
-    if (version.code === 0 && match?.[1]) return { app, runtime, version: match[1] };
+    if (version.code === 0 && match?.[1]) {
+      const candidate = { app, runtime, version: match[1] };
+      if (isSupportedRuntime(candidate.version)) return candidate;
+      // Keep an installed copy for the update guidance if no candidate is usable.
+      outdatedApp ??= candidate;
+    }
   }
-  return null;
+  return outdatedApp;
 }
 function requireApp() {
   const app = findApp();
   if (!app) throw new OpperError("AGENT_NOT_FOUND", "The Codex/ChatGPT desktop app for macOS is not installed.", "Install the app with local Codex support from https://chatgpt.com/download.");
-  const parts = app.version.split(".").map(Number);
-  const comparison = parts.findIndex((n, i) => n !== MINIMUM_RUNTIME[i]);
-  if (comparison !== -1 && parts[comparison]! < MINIMUM_RUNTIME[comparison]!) {
+  if (!isSupportedRuntime(app.version)) {
     throw new OpperError("AGENT_NOT_FOUND", `The app bundles Codex ${app.version}; Opper desktop requires 0.153.4 or later.`, "Update the desktop app and try again.");
   }
   return app;
@@ -50,8 +61,8 @@ async function readOptional(path: string): Promise<string | null> {
   try { return await readFile(path, "utf8"); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return null; throw e; }
 }
-async function checkConfigPaths(): Promise<void> {
-  const p = paths();
+async function checkConfigPaths(home: string): Promise<void> {
+  const p = paths(home);
   for (const file of [p.config, p.auth, p.catalog, p.state, p.directory]) {
     try {
       const info = await lstat(file);
@@ -112,8 +123,8 @@ async function readState(path: string): Promise<StoredState | undefined> {
   }
   return state;
 }
-async function locked<T>(fn: () => Promise<T>): Promise<T> {
-  const p = paths();
+async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
+  const p = paths(home);
   await mkdir(p.home, { recursive: true });
   try { await mkdir(p.lock, { mode: 0o700 }); }
   catch (e) {
@@ -123,9 +134,12 @@ async function locked<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { await rm(p.lock, { recursive: true }); }
 }
 
-async function setup(opts: ConfigureOptions): Promise<void> {
+interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; }
+
+async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
+  const home = codexHome(opts.codexHome);
   requireApp();
-  await checkConfigPaths();
+  await checkConfigPaths(home);
   const keyName = opts.keyName ?? "default";
   const slot = await getSlot(keyName);
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${keyName}"`, "Run `opper login` first.");
@@ -133,9 +147,9 @@ async function setup(opts: ConfigureOptions): Promise<void> {
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
   const model = opts.model ?? DEFAULT_MODELS.opus;
   const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl }, model);
-  await locked(async () => {
-    await checkConfigPaths();
-    const p = paths();
+  await locked(home, async () => {
+    await checkConfigPaths(home);
+    const p = paths(home);
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
     const provider = {
@@ -163,13 +177,33 @@ async function setup(opts: ConfigureOptions): Promise<void> {
       throw e;
     }
   });
+  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model };
 }
 
-async function unconfigure(): Promise<void> {
-  const p = paths();
+function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
+function shellQuote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
+function launchCommand(settings: ConfiguredDesktop): string {
+  const args = ["env", "-u", "OPPER_API_KEY", `OPPER_HOME=${settings.credentialHome}`, `OPPER_BASE_URL=${settings.baseUrl}`];
+  if (process.env.CODEX_ELECTRON_USER_DATA_PATH) args.push(`CODEX_ELECTRON_USER_DATA_PATH=${resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH)}`);
+  args.push("opper", "--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home);
+  return args.map(shellQuote).join(" ");
+}
+function reopenHint(settings: ConfiguredDesktop): string {
+  return customHome(settings)
+    ? `Quit the app, then use the same Codex home with this command:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex, not this custom home. Existing tasks keep their provider.`
+    : "Quit and reopen the app to use Opper for new local Codex tasks. Existing tasks keep their provider.";
+}
+async function configure(opts: ConfigureOptions): Promise<void> {
+  const settings = await setup(opts);
+  if (customHome(settings)) console.log(`Configured only ${settings.home}. To use the same Codex home, run:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex. The command above runs opper launch codex-desktop with your selected key and model.`);
+}
+
+async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
+  const home = codexHome(opts?.codexHome);
+  const p = paths(home);
   if (!existsSync(p.state)) return;
-  await locked(async () => {
-    await checkConfigPaths();
+  await locked(home, async () => {
+    await checkConfigPaths(home);
     const state = await readState(p.state);
     if (!state) return;
     const existing = await readOptional(p.config);
@@ -197,24 +231,24 @@ async function isConfigured(): Promise<boolean> {
   } catch { return false; }
 }
 
-async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions): Promise<number> {
   if (args.length) throw new OpperError("INVALID_ARGUMENT", "codex-desktop does not accept passthrough arguments.");
   const app = requireApp();
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
-  await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model });
+  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
   const executable = run("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", join(app.app, "Contents", "Info.plist")]);
   const binary = join(app.app, "Contents", "MacOS", executable.stdout.trim() || "ChatGPT");
   const processes = run("pgrep", ["-f", `^${binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([[:space:]]|$)`]);
-  if (processes.code !== 0 && processes.code !== 1) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the app's running state could not be checked.", "Quit and reopen the Codex/ChatGPT app manually.");
+  if (processes.code !== 0 && processes.code !== 1) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the app's running state could not be checked.", reopenHint(settings));
   const running = processes.code === 0;
   if (running && !userData) {
-    throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the Codex/ChatGPT app is already running.", "Quit and reopen the app to use Opper for new local Codex tasks. Existing tasks keep their provider.");
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the Codex/ChatGPT app is already running.", reopenHint(settings));
   }
-  const openArgs = ["-a", app.app, "--env", `CODEX_HOME=${codexHome()}`];
+  const openArgs = ["-a", app.app, "--env", `CODEX_HOME=${settings.home}`];
   if (userData) openArgs.push("-n", "--env", `CODEX_ELECTRON_USER_DATA_PATH=${resolve(userData)}`, "--args", `--user-data-dir=${resolve(userData)}`);
   const opened = run("open", openArgs);
-  if (opened.code !== 0) throw new OpperError("AGENT_NOT_FOUND", "Opper is configured, but the Codex/ChatGPT app could not be opened.", "Open the app manually or retry `opper launch codex-desktop`.");
+  if (opened.code !== 0) throw new OpperError("AGENT_NOT_FOUND", "Opper is configured, but the Codex/ChatGPT app could not be opened.", reopenHint(settings));
   console.log("Opened Codex/ChatGPT with Opper for new local Codex tasks.");
   return 0;
 }
@@ -224,7 +258,7 @@ export const codexDesktop: AgentAdapter = {
   launchesInBackground: true,
   async detect() { const app = findApp(); return { installed: app !== null, ...(app ? { version: app.version } : {}), configPath: paths().config }; },
   isConfigured,
-  configure: (opts) => setup(opts),
+  configure,
   unconfigure,
   spawn,
 };

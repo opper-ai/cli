@@ -38,8 +38,9 @@ const register: RegisterFn = (program, ctx) => {
     .command("configure <name>")
     .description("Configure an agent to use the selected Opper key without launching it")
     .option("--model <id>", "Opper model identifier (where supported)")
-    .action(async (name: string, opts: { model?: string }) => {
-      await agentsConfigureCommand(name, ctx.key(), opts.model);
+    .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
+    .action(async (name: string, opts: { model?: string; codexHome?: string }) => {
+      await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome);
     });
 
   agentsCmd
@@ -52,8 +53,9 @@ const register: RegisterFn = (program, ctx) => {
     .description(
       "Remove the Opper integration from an agent's config (the agent binary stays installed)",
     )
-    .action(async (name: string) => {
-      await agentsRemoveCommand(name);
+    .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
+    .action(async (name: string, opts: { codexHome?: string }) => {
+      await agentsRemoveCommand(name, opts.codexHome);
     });
 
   program
@@ -67,6 +69,7 @@ const register: RegisterFn = (program, ctx) => {
     )
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
+    .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--install", "install the agent if missing", false)
     .option(
       "--project",
@@ -86,6 +89,7 @@ const register: RegisterFn = (program, ctx) => {
         agentName: string,
         cmdOpts: {
           model?: string;
+          codexHome?: string;
           install?: boolean;
           project?: boolean;
           tag?: Record<string, string>;
@@ -97,6 +101,7 @@ const register: RegisterFn = (program, ctx) => {
           agent: agentName,
           key: ctx.key(),
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+          ...(cmdOpts.codexHome !== undefined ? { codexHome: cmdOpts.codexHome } : {}),
           ...(cmdOpts.install ? { install: true } : {}),
           ...(cmdOpts.project ? { configScope: "project" as const } : {}),
           ...(cmdOpts.tag && Object.keys(cmdOpts.tag).length > 0

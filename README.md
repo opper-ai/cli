@@ -130,11 +130,21 @@ Setup refreshes the model picker from the selected key's authorized, tool-capabl
 
 Codex's built-in web search is disabled while this integration is enabled: its default cached-only search relies on an OpenAI service that Opper cannot reproduce across model providers. The previous search setting is restored when removing the integration. File tools and sub-agents remain enabled.
 
-The app reads the selected slot through a local credential helper, so it also works when opened from Finder. The API key stays in the Opper credential store. Rotating that slot's key is picked up when Codex refreshes credentials; deleting the slot stops future credential retrieval. If the slot's API host changes, rerun setup before using it.
+With the default `~/.codex` home, the app reads the selected slot through a local credential helper, so it also works when opened from Finder. The API key stays in the Opper credential store. Rotating that slot's key is picked up when Codex refreshes credentials; deleting the slot stops future credential retrieval. If the slot's API host changes, rerun setup before using it.
 
 Configuration is stored in `~/.codex/config.toml` (or `CODEX_HOME`) and helper/catalog/backup files in `CODEX_HOME/opper-desktop/`. Because Codex CLI and the desktop app share this configuration, plain `codex` also sees these defaults. `opper launch codex` supplies its own provider/model and disables built-in web search per invocation, without changing saved settings. Explicit native `--model` or `--profile` choices take precedence over the launcher's default model; current profiles are separate `NAME.config.toml` files.
 
-Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use a separate `CODEX_HOME` to keep a dotfile-managed configuration intact. Restart the app after removal.
+Use `--codex-home <path>` on desktop configure, launch, and removal to select a separate Codex home. The option takes precedence over `CODEX_HOME`, which remains supported; otherwise the default is `~/.codex`. Setup changes only the selected directory. Ordinary Finder launches still use `~/.codex`; they do not inherit the shell environment. Configure prints a launch command preserving your custom home, key, model, and API root. Use that command for subsequent launches (and after quitting an already-running app). Opper does not change global macOS launch settings.
+
+```sh
+opper --key prod agents configure codex-desktop --codex-home "$HOME/.codex-opper-test"
+opper --key prod launch codex-desktop --codex-home "$HOME/.codex-opper-test"
+opper agents remove codex-desktop --codex-home "$HOME/.codex-opper-test"
+```
+
+A separate Codex home isolates Codex settings and task data. It does not by itself start a second desktop app instance or isolate the app's Electron profile.
+
+Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use `--codex-home <path>` to keep a dotfile-managed configuration intact. Restart the app after removal.
 
 ## Routing through a session without the CLI
 

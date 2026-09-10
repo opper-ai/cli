@@ -21,9 +21,17 @@ export interface ConfigureOptions {
   keyName?: string;
   baseUrl?: string;
   model?: string;
+  /** Explicit Codex desktop configuration directory; does not change process.env. */
+  codexHome?: string;
+}
+
+export interface UnconfigureOptions {
+  codexHome?: string;
 }
 
 export interface SpawnOptions {
+  /** Explicit Codex desktop configuration directory. */
+  codexHome?: string;
   /**
    * Where the adapter should write its persistent Opper config. Adapters
    * without a project-level config concept (Codex, Pi, Claude Code, …)
@@ -80,7 +88,7 @@ export interface AgentAdapter {
    * Idempotent removal of the Opper integration. Should leave the agent's
    * own config and binary alone — only the Opper bits go away.
    */
-  unconfigure(): Promise<void>;
+  unconfigure(opts?: UnconfigureOptions): Promise<void>;
 
   /** Optional: run the upstream agent's installer. Throws when not supported. */
   install?(): Promise<void>;

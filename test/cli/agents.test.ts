@@ -1,5 +1,59 @@
-import { describe, it, expect } from "vitest";
-import { collectTagPairs } from "../../src/cli/agents.js";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { Command } from "commander";
+import registerAgents, { collectTagPairs } from "../../src/cli/agents.js";
+
+const commands = vi.hoisted(() => ({ configure: vi.fn(), remove: vi.fn(), launch: vi.fn(), list: vi.fn() }));
+vi.mock("../../src/commands/agents.js", () => ({
+  agentsConfigureCommand: commands.configure, agentsRemoveCommand: commands.remove, agentsListCommand: commands.list,
+}));
+vi.mock("../../src/commands/launch.js", () => ({ launchCommand: commands.launch }));
+
+function program(): Command {
+  const cli = new Command().exitOverride().option("--key <slot>", "", "default");
+  cli.configureOutput({ writeErr: () => {} });
+  registerAgents(cli, { key: () => cli.opts().key, version: "test" });
+  return cli;
+}
+
+describe("agent command options", () => {
+  beforeEach(() => {
+    for (const command of Object.values(commands)) command.mockReset().mockResolvedValue(undefined);
+    commands.launch.mockResolvedValue(0);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("parses --codex-home for configure together with the selected key and model", async () => {
+    await program().parseAsync(["--key", "prod", "agents", "configure", "codex-desktop", "--codex-home", "/tmp/Codex Home", "--model", "claude-sonnet-5"], { from: "user" });
+    expect(commands.configure).toHaveBeenCalledExactlyOnceWith("codex-desktop", "prod", "claude-sonnet-5", "/tmp/Codex Home");
+  });
+
+  it("parses --codex-home for removal", async () => {
+    await program().parseAsync(["agents", "remove", "codex-desktop", "--codex-home=/tmp/Codex Home"], { from: "user" });
+    expect(commands.remove).toHaveBeenCalledExactlyOnceWith("codex-desktop", "/tmp/Codex Home");
+  });
+
+  it("consumes --codex-home on launch instead of forwarding it to the app", async () => {
+    await program().parseAsync(["launch", "codex-desktop", "--codex-home", "/tmp/Codex Home", "--model", "claude-sonnet-5"], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({
+      agent: "codex-desktop", key: "default", codexHome: "/tmp/Codex Home", model: "claude-sonnet-5", passthrough: [],
+    });
+  });
+
+  it("leaves native --home untouched for other launched agents", async () => {
+    await program().parseAsync(["launch", "codex", "--home", "/tmp/Native Home"], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({
+      agent: "codex", key: "default", passthrough: ["--home", "/tmp/Native Home"],
+    });
+  });
+
+  it("preserves explicitly separated native arguments", async () => {
+    await program().parseAsync(["launch", "codex", "--", "--codex-home", "/tmp/native"], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({
+      agent: "codex", key: "default", passthrough: ["--codex-home", "/tmp/native"],
+    });
+  });
+});
 
 describe("collectTagPairs", () => {
   it("accepts a key=value pair and returns it merged into the accumulator", () => {

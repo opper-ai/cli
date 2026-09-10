@@ -27,9 +27,8 @@ vi.mock("node:os", async () => ({
 vi.mock("node:fs", async () => ({
   ...await vi.importActual<typeof import("node:fs")>("node:fs"),
   existsSync: (path: string) => {
-    if (path.startsWith("/Applications/")) {
-      return [...mocks.apps].some((app) => path === app || path.startsWith(`${app}/`));
-    }
+    if ([...mocks.apps].some((app) => path === app || path.startsWith(`${app}/`))) return true;
+    if (path.startsWith("/Applications/")) return false;
     return mocks.realExists(path);
   },
 }));
@@ -136,6 +135,50 @@ describe("Codex desktop detection", () => {
     mocks.apps.clear();
     mocks.apps.add("/Applications/Codex.app");
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
+  });
+
+  it.each([
+    ["system Codex", "/Applications/Codex.app", "0.153.4"],
+    ["user-local ChatGPT", "ChatGPT.app", "0.154.0"],
+    ["user-local Codex", "Codex.app", "1.0.0"],
+  ])("selects compatible %s when system ChatGPT is too old", async (_name, appPath, version) => {
+    const app = isAbsolute(appPath) ? appPath : join(home, "Applications", appPath);
+    const runtime = join(app, "Contents", "Resources", "codex");
+    mocks.apps.add(app);
+    runtimeVersion = "0.153.3";
+    const run = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[]) => command === runtime && args.includes("--version")
+      ? ok(`codex-cli ${version}\n`)
+      : run(command, args));
+
+    expect(await codexDesktop.detect()).toMatchObject({ installed: true, version });
+    await expect(codexDesktop.spawn!([], routing())).resolves.toBe(0);
+    expect(mocks.run.mock.calls.find(([command]) => command === "open")?.[1]).toContain(app);
+  });
+
+  it("keeps the first compatible app instead of selecting a later newer copy", async () => {
+    mocks.apps.add("/Applications/Codex.app");
+    const run = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[]) => command === "/Applications/Codex.app/Contents/Resources/codex"
+      ? ok("codex-cli 0.154.0\n")
+      : run(command, args));
+
+    expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.153.4" });
+    expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/Codex.app/Contents/Resources/codex")).toBe(false);
+  });
+
+  it("retains update guidance when every valid installed app is too old", async () => {
+    mocks.apps.add("/Applications/Codex.app");
+    runtimeVersion = "0.153.3";
+
+    expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.153.3" });
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      message: "The app bundles Codex 0.153.3; Opper desktop requires 0.153.4 or later.",
+    });
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+    expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(false);
   });
 
   it("does not mistake ChatGPT Classic for the Codex app", async () => {
@@ -349,6 +392,93 @@ describe("Codex desktop launching", () => {
 
   it("rejects CLI passthrough arguments before writing configuration", async () => {
     await expect(codexDesktop.spawn!(["--profile", "other"], routing())).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex desktop custom-home guidance", () => {
+  it("makes custom-home configure explicit without changing the default home", async () => {
+    const defaultHome = join(home, ".codex");
+    mkdirSync(defaultHome);
+    writeFileSync(join(defaultHome, "config.toml"), "# untouched default\n");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await codexDesktop.configure(options());
+      const text = log.mock.calls.flat().join("\n");
+      expect(text).toContain(codexHome);
+      expect(text).toContain("Finder");
+      expect(text).toContain("same Codex home");
+      expect(text).toContain("opper launch codex-desktop");
+      expect(readFileSync(join(defaultHome, "config.toml"), "utf8")).toBe("# untouched default\n");
+      expect(await codexDesktop.isConfigured()).toBe(true);
+    } finally { log.mockRestore(); }
+  });
+
+  it("does not give custom-home guidance for the normal home", async () => {
+    vi.stubEnv("CODEX_HOME", join(home, ".codex"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await codexDesktop.configure(options());
+      expect(log.mock.calls.flat().join("\n")).not.toContain("same Codex home");
+    } finally { log.mockRestore(); }
+  });
+
+  it("directs a running custom-home app back through the same launcher environment", async () => {
+    appRunning = true;
+    await expect(codexDesktop.spawn!([], routing())).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT", hint: expect.stringContaining("same Codex home"),
+    });
+    expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(false);
+  });
+
+  it("passes the custom home explicitly when opening the app", async () => {
+    await codexDesktop.spawn!([], routing());
+    const args = mocks.run.mock.calls.find(([command]) => command === "open")?.[1];
+    expect(args).toContain(`CODEX_HOME=${codexHome}`);
+  });
+});
+
+describe("explicit Codex home", () => {
+  it("configures and removes only the explicit directory despite CODEX_HOME", async () => {
+    const selected = join(home, "custom home's settings");
+    mkdirSync(selected);
+    writeFileSync(join(selected, "config.toml"), ORIGINAL);
+    await codexDesktop.configure(options({ codexHome: selected }));
+    expect(readDesktopConfig(readFileSync(join(selected, "config.toml"), "utf8")).model_provider).toBe("opper-desktop");
+    expect(configText()).toBe(ORIGINAL);
+    expect(process.env.CODEX_HOME).toBe(codexHome);
+    await codexDesktop.unconfigure({ codexHome: selected });
+    expect(readFileSync(join(selected, "config.toml"), "utf8")).toBe(ORIGINAL);
+    expect(mocks.realExists(join(selected, "opper-desktop"))).toBe(false);
+    expect(configText()).toBe(ORIGINAL);
+  });
+
+  it("launches with the explicit home and leaves the environment home untouched", async () => {
+    const selected = join(home, "explicit launch");
+    await codexDesktop.spawn!([], routing(), { codexHome: selected });
+    expect(mocks.run.mock.calls.find(([command]) => command === "open")?.[1]).toContain(`CODEX_HOME=${selected}`);
+    expect(configText()).toBe(ORIGINAL);
+    expect(process.env.CODEX_HOME).toBe(codexHome);
+  });
+
+  it("prints a shell-safe retry command for an explicit home", async () => {
+    const selected = join(home, "custom home's settings");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await codexDesktop.configure(options({ codexHome: selected }));
+      const command = log.mock.calls.flat().join("\n").split("\n")[1]!;
+      const bin = join(home, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "opper"), '#!/bin/sh\nprintf "%s\\n" "$OPPER_HOME" "$@"\n', { mode: 0o700 });
+      const executed = spawnSync("/bin/zsh", ["-f", "-c", command], { encoding: "utf8", env: { ...process.env, OPPER_HOME: "/wrong-store", PATH: `${bin}:/usr/bin:/bin` } });
+      expect(executed.status).toBe(0);
+      expect(executed.stdout.trim().split("\n")).toEqual([opperHome, "--key", "prod", "launch", "codex-desktop", "--model", MODEL, "--codex-home", selected]);
+    } finally { log.mockRestore(); }
+  });
+
+  it("rejects an empty explicit home before changing configuration", async () => {
+    await expect(codexDesktop.configure(options({ codexHome: " " }))).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(configText()).toBe(ORIGINAL);
     expect(mocks.fetchCatalog).not.toHaveBeenCalled();
   });

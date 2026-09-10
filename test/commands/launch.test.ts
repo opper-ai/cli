@@ -171,6 +171,32 @@ describe("launchCommand", () => {
     );
   });
 
+  it("forwards an explicit desktop home through spawn options without changing CODEX_HOME", async () => {
+    const desktop = { ...adapter, name: "codex-desktop", launchesInBackground: true };
+    getAdapterMock.mockReturnValueOnce(desktop);
+    await setSlot("prod", { apiKey: "fixture-prod" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+    const homeBefore = process.env.CODEX_HOME;
+
+    await launchCommand({ agent: "codex-desktop", key: "prod", codexHome: "/tmp/selected Codex home" });
+
+    expect(adapter.spawn).toHaveBeenCalledExactlyOnceWith([], expect.objectContaining({ keyName: "prod" }), {
+      codexHome: "/tmp/selected Codex home",
+    });
+    expect(process.env.CODEX_HOME).toBe(homeBefore);
+    expect(apiGetMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects --codex-home for other adapters before login, detection or installation", async () => {
+    await expect(launchCommand({ agent: "hermes", key: "missing", install: true, codexHome: "/tmp/custom" }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--codex-home") });
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(adapter.detect).not.toHaveBeenCalled();
+    expect(adapter.install).not.toHaveBeenCalled();
+    expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
   it("does not set configScope=project when --project wasn't passed", async () => {
     await setSlot("default", { apiKey: "op_live_n" });
     adapter.detect.mockResolvedValue({ installed: true });
