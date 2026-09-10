@@ -158,6 +158,9 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   const providers = config.provider === undefined ? {} : object(config.provider);
   const opper = providers.opper === undefined ? {} : object(providers.opper);
   const options = opper.options === undefined ? {} : object(opper.options);
+  const headers = options.headers === undefined ? undefined : Object.fromEntries(
+    Object.entries(object(options.headers)).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
   return JSON.stringify({
     ...config,
     provider: {
@@ -165,13 +168,61 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
       opper: {
         ...opper,
         npm: "@ai-sdk/openai-compatible",
-        options: { ...options, baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
+        options: { ...options, ...(headers === undefined ? {} : { headers }), baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
         // Keep the full model metadata in the generated config file. A live
         // catalog can exceed Linux's per-environment-variable size limit.
         whitelist: Object.keys(models),
       },
     },
   });
+}
+
+/**
+ * Inspect merged settings before changing Opper's provider configuration.
+ * OpenCode may add its own $schema metadata while loading a JSON file.
+ */
+function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv): void {
+  let config: Record<string, unknown>;
+  try {
+    const result = spawnSync("opencode", ["debug", "config"], {
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0 || typeof result.stdout !== "string") {
+      throw new Error("Configuration inspection failed");
+    }
+    config = parseJsoncObject(result.stdout);
+  } catch {
+    // Debug output can contain credentials. Never include it (or subprocess
+    // errors) in the user-facing failure.
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      "Could not inspect OpenCode's effective configuration before launch.",
+      "Run `opencode debug config` locally to diagnose the configuration, then retry.",
+    );
+  }
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : undefined;
+  const hasAuthorization = (headers: unknown): boolean =>
+    Object.keys(record(headers) ?? {}).some((name) => name.toLowerCase() === "authorization");
+  const opper = record(record(config.provider)?.opper);
+  const providerHeaders = record(opper?.options)?.headers;
+  const configuredModels = record(opper?.models);
+  const modelHasAuthorization = Object.keys(models).some((id) => {
+    const model = record(configuredModels?.[id]);
+    return hasAuthorization(model?.headers) || hasAuthorization(record(model?.options)?.headers);
+  });
+  if (hasAuthorization(providerHeaders) || modelHasAuthorization) {
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      "OpenCode's effective Opper configuration contains an Authorization header that can override the selected API key.",
+      "Remove Authorization headers from Opper provider and model settings, then retry with the desired --key slot.",
+    );
+  }
 }
 
 async function spawn(
@@ -196,6 +247,7 @@ async function spawn(
     OPPER_API_KEY: routing.apiKey,
     OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
   };
+  checkEffectiveAuthorization(models, env);
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project

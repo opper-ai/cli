@@ -38,6 +38,7 @@ describe("OpenCode launch model discovery", () => {
   let previousCwd: string;
   let configPath: string;
   let child: { apiKey: string | undefined; config: CapturedConfig; inline: any } | undefined;
+  let preflightResult: { status: number | null; stdout: string; stderr?: string; error?: Error } | undefined;
   const fetchMock = vi.fn<typeof fetch>();
   const selectedKey = "op_live_selected_test_key";
   const selectedHost = "https://selected.opper.test/gateway";
@@ -54,6 +55,7 @@ describe("OpenCode launch model discovery", () => {
     vi.stubEnv("OPPER_API_KEY", undefined);
     vi.stubEnv("OPPER_BASE_URL", undefined);
     child = undefined;
+    preflightResult = undefined;
     fetchMock.mockReset();
     fetchMock.mockImplementation(async (_input, init) => {
       const key = new Headers(init?.headers).get("Authorization");
@@ -74,6 +76,9 @@ describe("OpenCode launch model discovery", () => {
         return { status: 0, stdout: "/test/bin/opencode\n", stderr: "" };
       }
       if (command !== "opencode") throw new Error(`Unexpected subprocess: ${command}`);
+      if (args[0] === "debug" && args[1] === "config") {
+        return preflightResult ?? { status: 0, stdout: opts.env?.OPENCODE_CONFIG_CONTENT ?? "{}", stderr: "" };
+      }
       child = {
         apiKey: opts.env?.OPPER_API_KEY,
         config: JSON.parse(readFileSync(configPath, "utf8")) as CapturedConfig,
@@ -140,6 +145,48 @@ describe("OpenCode launch model discovery", () => {
           expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual(originalConfig);
         }
       }
+
+      it("removes inherited authorization headers without dropping unrelated headers", async () => {
+        await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost });
+        vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { options: {
+          headers: { Authorization: "Bearer stale", authorization: "Bearer stale-lower", AUTHORIZATION: "Bearer stale-upper", "X-Custom": "keep" },
+        } } } }));
+        await launchAndCheck(selectedHost);
+        expect(child!.inline.provider.opper.options.headers).toEqual({ "X-Custom": "keep" });
+      });
+
+      it.each([
+        { location: "provider", opper: { options: { headers: { aUtHoRiZaTiOn: "Bearer secret-stale-provider" } } } },
+        { location: "model", opper: { models: { "allowed/selected-model": { headers: { AUTHORIZATION: "Bearer secret-stale-model" } } } } },
+        { location: "model options", opper: { models: { "allowed/selected-model": { options: { headers: { authorization: "Bearer secret-stale-options" } } } } } },
+      ])("rejects effective $location authorization headers before changing config or starting inference", async ({ opper }) => {
+        await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost });
+        preflightResult = { status: 0, stdout: JSON.stringify({ provider: { opper } }) };
+        const originalBytes = readFileSync(configPath, "utf8");
+        await expect(launchCommand({ agent: "opencode", key: "team", configScope: scope })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+        expect(child).toBeUndefined();
+        expect(readFileSync(configPath, "utf8")).toBe(originalBytes);
+      });
+
+      it.each([
+        { status: 1, stdout: "secret config stdout", stderr: "secret config stderr" },
+        { status: null, stdout: "", error: new Error("secret spawn error") },
+        { status: 0, stdout: "secret malformed config" },
+      ])("fails closed without leaking output when effective configuration cannot be inspected: %j", async (result) => {
+        await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost });
+        preflightResult = result;
+        const originalBytes = readFileSync(configPath, "utf8");
+        let caught: unknown;
+        try {
+          await launchCommand({ agent: "opencode", key: "team", configScope: scope });
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+        expect(String(caught)).not.toContain("secret");
+        expect(child).toBeUndefined();
+        expect(readFileSync(configPath, "utf8")).toBe(originalBytes);
+      });
 
       it("discovers with the selected key and host instead of the default slot", async () => {
         await setSlot("default", {

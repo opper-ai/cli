@@ -30,11 +30,14 @@ vi.mock("../../src/setup/opencode-models.js", () => ({
 }));
 
 const spawnSyncMock = vi.fn();
+const debugConfigMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
     "node:child_process",
   );
-  return { ...actual, spawnSync: spawnSyncMock };
+  return { ...actual, spawnSync: (...args: any[]) =>
+    args[0] === "opencode" && args[1]?.[0] === "debug" && args[1]?.[1] === "config"
+      ? debugConfigMock(...args) : spawnSyncMock(...args) };
 });
 
 const { opencode } = await import("../../src/agents/opencode.js");
@@ -88,6 +91,7 @@ describe("opencode adapter", () => {
     runMock.mockReset();
     configureOpenCodeMock.mockReset();
     spawnSyncMock.mockReset();
+    debugConfigMock.mockReset().mockReturnValue({ status: 0, stdout: "{}", stderr: "" });
     sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
     prevHome = process.env.HOME;
     prevEditorHome = process.env.OPPER_EDITOR_HOME;
