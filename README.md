@@ -84,6 +84,17 @@ opper launch claude --resume
 
 The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default. Claude Desktop's picker is restricted to Claude-backed routes because its third-party gateway rejects non-Anthropic models; the generated profile defaults to Claude Opus 5 and also includes Sonnet 5, Haiku 4.5, and Fable 5.1.
 
+For Claude Code, use version **2.1.257 or later**. `opper launch claude` starts on Opus 5 and enables gateway model discovery, adding the Claude models available to your Opper key to Claude Code's `/model` picker. Claude Code keeps its built-in choices and filters discovered IDs to those containing `claude` or `anthropic`; Opper enforces model access on each request. Discovery refreshes at startup, so restart after changing your Opper model rules. If discovery fails, Claude Code can fall back to its cached or built-in list. Nonessential traffic stays disabled, which also disables Claude Code's automatic updates during these launches; update Claude Code separately before a demo.
+
+```bash
+opper launch claude --model claude-sonnet-5
+opper launch claude --model claude-fable-5-1
+# Request the full context window supported by these models:
+opper launch claude --model 'claude-opus-5[1m]'
+```
+
+The Opper routing and credential apply only to the launched process. Claude Code can still save model selections and its discovery cache; use the picker's session-only selection to keep your existing default. See [Claude Code's gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery) for discovery and client-version behavior.
+
 To remove an agent's Opper integration without uninstalling the agent itself:
 
 ```bash

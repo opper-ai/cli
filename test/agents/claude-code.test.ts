@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
@@ -28,6 +28,12 @@ describe("claude-code adapter", () => {
     whichMock.mockReset();
     runMock.mockReset();
     spawnSyncMock.mockReset();
+    vi.stubEnv("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", undefined);
+    vi.stubEnv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("metadata is correct", () => {
@@ -98,11 +104,31 @@ describe("claude-code adapter", () => {
     // Stops Claude Code from pinging api.anthropic.com directly when
     // routing is supposed to be Opper-only.
     expect(init.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
-    // The /model picker now pulls entries from /v3/compat/v1/models — we
-    // should NOT be setting the legacy tier-override env vars.
+    // Gateway discovery is opt-in, and remains enabled while nonessential
+    // traffic is disabled on supported Claude Code versions.
+    expect(init.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
+    expect(process.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined();
+    // The picker discovers models from the session gateway without replacing
+    // Claude Code's family defaults.
     expect(init.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
     expect(init.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
     expect(init.env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
+  });
+
+  it("enables discovery only for the Opper child when the parent disables it", async () => {
+    vi.stubEnv("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "0");
+    vi.stubEnv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "0");
+    spawnSyncMock.mockReturnValue({ status: 0 });
+
+    await claudeCode.spawn!([], ROUTING);
+
+    const init = spawnSyncMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv };
+    expect(init.env).not.toBe(process.env);
+    expect(init.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
+    expect(init.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
+    expect(process.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("0");
+    expect(process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("0");
   });
 
   it("spawn propagates non-zero exit codes", async () => {
