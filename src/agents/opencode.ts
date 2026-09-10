@@ -100,9 +100,7 @@ async function setSessionBaseUrl(
   const opper = parsed.provider?.opper;
   if (!opper) return;
   const original = readFileSync(cfg, "utf8");
-  const updated = applyEdits(original, modify(original, ["provider", "opper", "options", "baseURL"], baseUrl, {
-    formattingOptions: { insertSpaces: true, tabSize: 2 },
-  }));
+  const updated = applyEdits(original, modify(original, ["provider", "opper", "options", "baseURL"], baseUrl, {}));
   await writeFile(cfg, updated, "utf8");
 }
 

@@ -110,9 +110,7 @@ export async function configureOpenCode(
         ? ["provider", "opper"] : ["provider"];
       const providerValue = providerPath.length === 2
         ? templateConfig.provider.opper : { opper: templateConfig.provider.opper };
-      const merged = applyEdits(original, modify(original, providerPath, providerValue, {
-        formattingOptions: { insertSpaces: true, tabSize: 2 },
-      }));
+      const merged = applyEdits(original, modify(original, providerPath, providerValue, {}));
       await writeFile(path, merged, "utf8");
       return { path, wrote: true };
     }
