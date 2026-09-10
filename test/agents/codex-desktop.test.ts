@@ -471,7 +471,7 @@ describe("explicit Codex home", () => {
       const bin = join(home, "bin");
       mkdirSync(bin);
       writeFileSync(join(bin, "opper"), '#!/bin/sh\nprintf "%s\\n" "$OPPER_HOME" "$@"\n', { mode: 0o700 });
-      const executed = spawnSync("/bin/zsh", ["-f", "-c", command], { encoding: "utf8", env: { ...process.env, OPPER_HOME: "/wrong-store", PATH: `${bin}:/usr/bin:/bin` } });
+      const executed = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8", env: { ...process.env, OPPER_HOME: "/wrong-store", PATH: `${bin}:/usr/bin:/bin` } });
       expect(executed.status).toBe(0);
       expect(executed.stdout.trim().split("\n")).toEqual([opperHome, "--key", "prod", "launch", "codex-desktop", "--model", MODEL, "--codex-home", selected]);
     } finally { log.mockRestore(); }
