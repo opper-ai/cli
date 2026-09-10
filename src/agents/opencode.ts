@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { parse, type ParseError } from "jsonc-parser";
+import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
+import { deleteJsoncProperty, parseJsoncObject } from "../util/jsonc.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import { configureOpenCode } from "../setup/opencode.js";
@@ -35,7 +36,7 @@ async function isConfigured(): Promise<boolean> {
   const cfg = opencodeConfigPath("global");
   if (!existsSync(cfg)) return false;
   try {
-    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as {
       provider?: { opper?: unknown };
     };
     return parsed.provider?.opper !== undefined;
@@ -63,20 +64,15 @@ async function unconfigure(): Promise<void> {
   if (!existsSync(cfg)) return;
   let parsed: { provider?: Record<string, unknown>; [k: string]: unknown };
   try {
-    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+    parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as typeof parsed;
   } catch {
     return;
   }
   if (!parsed.provider || parsed.provider.opper === undefined) return;
 
-  const { opper: _opper, ...restProviders } = parsed.provider;
-  void _opper;
-  if (Object.keys(restProviders).length === 0) {
-    delete parsed.provider;
-  } else {
-    parsed.provider = restProviders;
-  }
-  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+  const original = readFileSync(cfg, "utf8");
+  const keyPath = Object.keys(parsed.provider).length === 1 ? ["provider"] : ["provider", "opper"];
+  await writeFile(cfg, deleteJsoncProperty(original, keyPath), "utf8");
 }
 
 /**
@@ -97,15 +93,17 @@ async function setSessionBaseUrl(
     [k: string]: unknown;
   };
   try {
-    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+    parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as typeof parsed;
   } catch {
     return;
   }
   const opper = parsed.provider?.opper;
   if (!opper) return;
-  opper.options = opper.options ?? {};
-  opper.options.baseURL = baseUrl;
-  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+  const original = readFileSync(cfg, "utf8");
+  const updated = applyEdits(original, modify(original, ["provider", "opper", "options", "baseURL"], baseUrl, {
+    formattingOptions: { insertSpaces: true, tabSize: 2 },
+  }));
+  await writeFile(cfg, updated, "utf8");
 }
 
 /**
@@ -117,7 +115,7 @@ function readBaseUrl(location: "global" | "local"): string | undefined {
   const cfg = opencodeConfigPath(location);
   if (!existsSync(cfg)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as {
       provider?: { opper?: { options?: { baseURL?: unknown } } };
     };
     const url = parsed.provider?.opper?.options?.baseURL;

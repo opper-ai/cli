@@ -1,6 +1,9 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { applyEdits, modify } from "jsonc-parser";
+import { parseJsoncObject } from "../util/jsonc.js";
+import { OpperError } from "../errors.js";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 
@@ -16,7 +19,7 @@ export interface ProjectConfigState {
 export function readProjectConfigState(path: string): ProjectConfigState {
   if (!existsSync(path)) return { exists: false, hasOpperProvider: false };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(path, "utf8")) as {
       provider?: { opper?: unknown };
     };
     return {
@@ -82,14 +85,15 @@ export async function configureOpenCode(
   await mkdir(dirname(path), { recursive: true });
 
   if (existsSync(path)) {
-    let existing: Record<string, unknown> | null = null;
+    const original = await readFile(path, "utf8");
+    let existing: Record<string, unknown>;
     try {
-      existing = JSON.parse(await readFile(path, "utf8")) as Record<
-        string,
-        unknown
-      >;
+      existing = parseJsoncObject(original);
     } catch {
-      // unparseable — fall through and replace with template
+      throw new OpperError(
+        "AGENT_CONFIG_CONFLICT",
+        `Invalid OpenCode configuration at ${path}; leaving it unchanged.`,
+      );
     }
 
     if (existing && typeof existing === "object") {
@@ -102,11 +106,14 @@ export async function configureOpenCode(
         return { path, wrote: false, reason: "exists" };
       }
 
-      const merged = {
-        ...existing,
-        provider: { ...providers, opper: templateConfig.provider.opper },
-      };
-      await writeFile(path, JSON.stringify(merged, null, 2), "utf8");
+      const providerPath = existing.provider && typeof existing.provider === "object" && !Array.isArray(existing.provider)
+        ? ["provider", "opper"] : ["provider"];
+      const providerValue = providerPath.length === 2
+        ? templateConfig.provider.opper : { opper: templateConfig.provider.opper };
+      const merged = applyEdits(original, modify(original, providerPath, providerValue, {
+        formattingOptions: { insertSpaces: true, tabSize: 2 },
+      }));
+      await writeFile(path, merged, "utf8");
       return { path, wrote: true };
     }
   }

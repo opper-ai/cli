@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse, type ParseError } from "jsonc-parser";
 import {
   configureOpenCode,
   readProjectConfigState,
@@ -61,12 +62,98 @@ describe("configureOpenCode", () => {
     expect(parsed.provider.opper.existing).toBeUndefined();
   });
 
-  it("writes the template when existing config is unparseable", async () => {
+  it("leaves an existing JSONC Opper provider byte-for-byte unchanged without overwrite", async () => {
     const target = opencodeConfigPath("global");
     mkdirSync(join(home, ".config", "opencode"), { recursive: true });
-    writeFileSync(target, "{not json", "utf8");
+    const jsonc = `{
+  // User's configuration must remain untouched.
+  "theme": "tokyonight",
+  "provider": { "opper": { "existing": true, }, },
+}\n`;
+    writeFileSync(target, jsonc);
+
     const result = await configureOpenCode({ location: "global" });
+
+    expect.soft(result).toEqual({ path: target, wrote: false, reason: "exists" });
+    expect.soft(readFileSync(target, "utf8")).toBe(jsonc);
+  });
+
+  it.each([
+    { action: "adds a new provider key", hasProviders: false, overwrite: false },
+    { action: "adds Opper alongside another provider", hasProviders: true, overwrite: false },
+    { action: "overwrites the existing Opper provider", hasProviders: true, overwrite: true },
+  ])("preserves unrelated JSONC settings and comments when it $action", async ({ hasProviders, overwrite }) => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    const providerBlock = hasProviders ? `
+  "provider": {
+    // Keep the other provider's settings.
+    "openrouter": { "npm": "@openrouter/ai-sdk-provider", },
+    ${overwrite ? '"opper": { "stale": true, },' : ""}
+  },` : "";
+    const jsonc = `{
+  // Keep the chosen theme.
+  "theme": "tokyonight",
+  "model": "anthropic/claude-sonnet-4-5",
+  /* Keep the MCP endpoint. */
+  "mcp": { "docs": { "url": "https://docs.example.test/path//literal", }, },
+  "agent": { "build": { "mode": "primary", }, },${providerBlock}
+}\n`;
+    writeFileSync(target, jsonc);
+    const models = { "allowed/model": { name: "Allowed model" } };
+
+    const result = await configureOpenCode({ location: "global", overwrite, models });
+
     expect(result.wrote).toBe(true);
+    const written = readFileSync(target, "utf8");
+    const errors: ParseError[] = [];
+    const config = parse(written, errors, { allowTrailingComma: true });
+    expect(errors).toEqual([]);
+    expect.soft(config.theme).toBe("tokyonight");
+    expect.soft(config.model).toBe("anthropic/claude-sonnet-4-5");
+    expect.soft(config.mcp).toEqual({ docs: { url: "https://docs.example.test/path//literal" } });
+    expect.soft(config.agent).toEqual({ build: { mode: "primary" } });
+    if (hasProviders) {
+      expect.soft(config.provider.openrouter).toEqual({ npm: "@openrouter/ai-sdk-provider" });
+      expect.soft(written).toContain("// Keep the other provider's settings.");
+    }
+    expect(config.provider.opper.models).toEqual(models);
+    expect(config.provider.opper.whitelist).toEqual(["allowed/model"]);
+    expect(config.provider.opper.stale).toBeUndefined();
+    expect.soft(written).toContain("// Keep the chosen theme.");
+    expect.soft(written).toContain("/* Keep the MCP endpoint. */");
+  });
+
+  it.each([false, true])("rejects malformed existing config and preserves its bytes with overwrite=%s", async (overwrite) => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    const malformed = '{\n  // An unfinished user edit.\n  "theme": "tokyonight",\n  "provider": {\n';
+    writeFileSync(target, malformed, "utf8");
+
+    await expect(configureOpenCode({ location: "global", overwrite })).rejects.toThrow();
+
+    expect(readFileSync(target, "utf8")).toBe(malformed);
+  });
+
+  it.each([false, true])("rejects duplicate provider keys and preserves their bytes with overwrite=%s", async (overwrite) => {
+    const target = opencodeConfigPath("global");
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    const ambiguous = `{
+  // A duplicated provider must not be edited ambiguously.
+  "provider": {
+    "opper": { "models": { "first/model": {}, }, },
+    "opper": { "models": { "last/model": {}, }, },
+  },
+}\n`;
+    writeFileSync(target, ambiguous);
+
+    await expect(configureOpenCode({
+      location: "global",
+      overwrite,
+      models: { "allowed/model": { name: "Allowed model" } },
+    })).rejects.toThrow();
+
+    expect(readFileSync(target, "utf8")).toBe(ambiguous);
   });
 
   it("grafts the Opper provider into an existing config that has no provider key", async () => {
@@ -153,6 +240,19 @@ describe("configureOpenCode", () => {
         JSON.stringify({ provider: { opper: { id: "opper" } } }),
         "utf8",
       );
+      expect(readProjectConfigState(target)).toEqual({
+        exists: true,
+        hasOpperProvider: true,
+      });
+    });
+
+    it("recognizes an Opper provider in JSONC with comments and trailing commas", () => {
+      const target = join(home, "opencode.json");
+      writeFileSync(target, `{
+  // Valid OpenCode configuration.
+  "provider": { "opper": { "id": "opper", }, },
+}\n`);
+
       expect(readProjectConfigState(target)).toEqual({
         exists: true,
         hasOpperProvider: true,

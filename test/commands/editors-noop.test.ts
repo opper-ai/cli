@@ -101,6 +101,36 @@ describe("OpenCode editor setup with an existing provider", () => {
         expect(logs).toEqual([]);
         expect(readFileSync(configPath, "utf8")).toBe(originalBytes);
       });
+
+      it("recognizes an existing provider in JSONC without fetching or changing any bytes", async () => {
+        const jsonc = `{
+  // Keep my preferred theme.
+  "theme": "user-theme",
+  "provider": {
+    /* This provider is already configured. */
+    "opper": {
+      "options": { "baseURL": "https://gateway.example.test/v3/compat", },
+      "models": { "custom/model": { "name": "User model", }, },
+    },
+    "other": { "name": "Other provider", },
+  },
+}\n`;
+        writeFileSync(configPath, jsonc);
+        // Even a successful catalog response must never be requested for this
+        // no-op, or a strict-JSON parse failure could silently replace JSONC.
+        fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+
+        await expect(editorsOpenCodeCommand({
+          location,
+          overwrite: false,
+        })).resolves.toBeUndefined();
+
+        expect.soft(fetchMock).not.toHaveBeenCalled();
+        expect.soft(logs).toEqual([
+          `OpenCode config at ${configPath} already has an Opper provider. Pass --overwrite to replace it.`,
+        ]);
+        expect.soft(readFileSync(configPath, "utf8")).toBe(jsonc);
+      });
     });
   }
 });

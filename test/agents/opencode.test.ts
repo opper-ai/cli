@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse, type ParseError } from "jsonc-parser";
 
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
@@ -80,6 +81,7 @@ function seedOpencodeConfig(sandbox: string): void {
 describe("opencode adapter", () => {
   let sandbox: string;
   let prevHome: string | undefined;
+  let prevEditorHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
@@ -88,13 +90,17 @@ describe("opencode adapter", () => {
     spawnSyncMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
     prevHome = process.env.HOME;
+    prevEditorHome = process.env.OPPER_EDITOR_HOME;
     process.env.HOME = sandbox;
+    process.env.OPPER_EDITOR_HOME = sandbox;
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevEditorHome === undefined) delete process.env.OPPER_EDITOR_HOME;
+    else process.env.OPPER_EDITOR_HOME = prevEditorHome;
   });
 
   it("metadata is correct", () => {
@@ -134,6 +140,80 @@ describe("opencode adapter", () => {
     whichMock.mockResolvedValue("/usr/local/bin/opencode");
     const result = await opencode.detect();
     expect(result.installed).toBe(true);
+  });
+
+  it("isConfigured recognizes a JSONC provider with comments and trailing commas", async () => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const jsonc = `{
+  // Existing user configuration.
+  "provider": { "opper": { "name": "Opper", }, },
+}\n`;
+    writeFileSync(configPath, jsonc);
+
+    await expect(opencode.isConfigured()).resolves.toBe(true);
+
+    expect(readFileSync(configPath, "utf8")).toBe(jsonc);
+  });
+
+  it.each([
+    { following: "provider", hasOtherProvider: true },
+    { following: "top-level key", hasOtherProvider: false },
+  ])("unconfigure preserves JSONC settings and the comment before the next $following", async ({ hasOtherProvider }) => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const otherProvider = hasOtherProvider ? `
+    // Keep the next provider's explanation.
+    "other": { "name": "Other", },` : "";
+    const jsonc = `{
+  /* Personal configuration. */
+  "provider": {
+    "opper": { "name": "Opper", },${otherProvider}
+  },
+  // Keep the next setting's explanation.
+  "theme": "tokyonight",
+  "model": "other/selected-model",
+  "mcp": { "docs": { "url": "https://docs.example.test/path//literal", }, },
+}\n`;
+    writeFileSync(configPath, jsonc);
+
+    await opencode.unconfigure();
+
+    const written = readFileSync(configPath, "utf8");
+    const errors: ParseError[] = [];
+    const config = parse(written, errors, { allowTrailingComma: true });
+    expect(errors).toEqual([]);
+    expect(config).toEqual({
+      ...(hasOtherProvider ? { provider: { other: { name: "Other" } } } : {}),
+      theme: "tokyonight",
+      model: "other/selected-model",
+      mcp: { docs: { url: "https://docs.example.test/path//literal" } },
+    });
+    expect.soft(written).toContain("/* Personal configuration. */");
+    expect.soft(written).toContain("// Keep the next setting's explanation.");
+    if (hasOtherProvider) {
+      expect.soft(written).toContain("// Keep the next provider's explanation.");
+    }
+    await expect(opencode.isConfigured()).resolves.toBe(false);
+  });
+
+  it("unconfigure leaves ambiguous JSONC with duplicate provider keys unchanged", async () => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const ambiguous = `{
+  "provider": {
+    "opper": { "name": "First Opper", },
+    // The effective provider is ambiguous for a surgical edit.
+    "opper": { "name": "Last Opper", },
+    "other": { "name": "Other", },
+  },
+  "theme": "tokyonight",
+}\n`;
+    writeFileSync(configPath, ambiguous);
+
+    await expect(opencode.unconfigure()).resolves.toBeUndefined();
+
+    expect(readFileSync(configPath, "utf8")).toBe(ambiguous);
   });
 
   it("spawn ensures the provider config exists then runs opencode with OPPER_API_KEY in env", async () => {
