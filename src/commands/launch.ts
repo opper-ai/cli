@@ -6,7 +6,7 @@ import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperApi } from "../api/client.js";
-import { resolveApiContext } from "../api/resolve.js";
+import type { ApiContext } from "../api/resolve.js";
 import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
 import { newSessionId, buildSessionBaseUrl } from "../util/session-url.js";
@@ -81,13 +81,15 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   }
 
   const host = process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai";
+  // Keep the summary on the same credential and host even if settings change during the session.
+  const apiContext: ApiContext = { apiKey: slot.apiKey, baseUrl: host };
   const sessionId = newSessionId();
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
   const routing: OpperRouting = {
-    apiBaseUrl: host,
+    apiBaseUrl: apiContext.baseUrl,
     baseUrl,
-    apiKey: slot.apiKey,
+    apiKey: apiContext.apiKey,
     model: opts.model ?? DEFAULT_MODELS.opus,
     compatShape: "openai",
   };
@@ -121,7 +123,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   // change the agent's exit code on a summary error.
   try {
     await printSessionSummary({
-      key: opts.key,
+      apiContext,
       sessionId,
       startedAt,
       endedAt,
@@ -134,7 +136,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 }
 
 interface SummaryOptions {
-  key: string;
+  apiContext: ApiContext;
   sessionId: string;
   startedAt: Date;
   endedAt: Date;
@@ -164,9 +166,9 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
   // immediate exit / install error / user ctrl-c before any traffic.
   if (durationMs < 1500) return;
 
-  const ctx = await resolveApiContext(opts.key);
-  const api = new OpperApi(ctx);
+  const api = new OpperApi(opts.apiContext);
   let rows: UsageRow[] = [];
+  let usageUnavailable = false;
   try {
     rows = await api.get<UsageRow[]>("/v2/analytics/usage", {
       session_id: opts.sessionId,
@@ -178,7 +180,7 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
       group_by: "model",
     });
   } catch {
-    rows = [];
+    usageUnavailable = true;
   }
 
   // Same minute bucket can show up multiple times when other group_by keys
@@ -197,6 +199,7 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
   process.stderr.write(
     formatSessionSummary({
       durationMs,
+      usageUnavailable,
       models: Array.from(byModel.values()),
       tracesUrl: TRACES_URL,
     }),

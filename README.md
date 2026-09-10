@@ -52,7 +52,7 @@ Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--k
 
 ## Agents
 
-`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch — except Claude Desktop (see the table below) — runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link.
+`opper launch <agent>` starts a supported AI agent with its model traffic transparently routed through Opper. Pass-through args after the agent name go straight to the agent's CLI. Each launch — except Claude Desktop (see the table below) — runs inside a fresh Opper **session** so every call the agent makes is grouped together for tracing and cost — see [Routing through a session without the CLI](#routing-through-a-session-without-the-cli) to wire that up by hand. After the session, the CLI prints a summary with duration, model, and a traces link. The usage summary uses the same key and API host as the launched session. If the usage request fails, it reports “Usage unavailable”; the rollup-delay hint is reserved for successful requests with no usage rows. Summary failures do not change the agent’s exit code.
 
 ```bash
 opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMMAND

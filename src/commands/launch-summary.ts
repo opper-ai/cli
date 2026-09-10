@@ -11,6 +11,8 @@ export interface SessionSummaryOptions {
   durationMs: number;
   models: ModelUsage[];
   tracesUrl: string;
+  /** The request failed, rather than returning an empty usage rollup. */
+  usageUnavailable?: boolean;
 }
 
 const LABEL_WIDTH = 10;
@@ -38,7 +40,9 @@ export function formatSessionSummary(opts: SessionSummaryOptions): string {
     lines.push(`  ${label("Traces")}${opts.tracesUrl}`);
     lines.push(
       brand.dim(
-        "  (usage rollup lags ~30s — run `opper usage list` for cost / token totals)",
+        opts.usageUnavailable
+          ? "  Usage unavailable — could not fetch session totals."
+          : "  (usage rollup lags ~30s — run `opper usage list` for cost / token totals)",
       ),
     );
     lines.push("");
