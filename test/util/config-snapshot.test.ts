@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   rmSync,
@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "jsonc-parser";
 import { withJsonKeys } from "../../src/util/config-snapshot.js";
 
 function readJson(path: string): Record<string, unknown> {
@@ -273,5 +274,97 @@ describe("withJsonKeys", () => {
     expect(readJson(path)).toEqual({
       providers: { opper: { baseUrl: "keep" } },
     });
+  });
+
+  it("restores JSONC values while preserving unrelated comments and runtime edits", async () => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, `{
+  // Keep the user's provider preferences
+  "provider": {
+    "opper": { "options": { "baseURL": "compat" } },
+    // Other provider annotation
+    "other": { "enabled": true },
+  },
+  "theme": "dark", // Keep this preference comment
+}\n`);
+
+    await withJsonKeys(path, [["provider", "opper"]], async () => {
+      const during = readFileSync(path, "utf8")
+        .replace('"compat"', '"session-url"')
+        .replace('"dark"', '"light"')
+        .replace('"enabled": true', '"enabled": false');
+      writeFileSync(path, during);
+    });
+
+    const restored = readFileSync(path, "utf8");
+    expect(parse(restored)).toEqual({
+      provider: { opper: { options: { baseURL: "compat" } }, other: { enabled: false } },
+      theme: "light",
+    });
+    expect(restored).toContain("// Keep the user's provider preferences");
+    expect(restored).toContain("// Other provider annotation");
+    expect(restored).toContain('"theme": "light", // Keep this preference comment');
+  });
+
+  it("prunes newly added JSONC keys without rewriting unrelated comments", async () => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, '{\n  // Keep the theme\n  "theme": "dark",\n}\n');
+    await withJsonKeys(path, [["provider", "opper"], ["model"]], async () => {
+      writeFileSync(path, `{
+  "provider": { "opper": { "baseURL": "session" } },
+  "model": "opper/test",
+  // Keep the theme
+  "theme": "light", // Added during the session
+}\n`);
+    });
+
+    const restored = readFileSync(path, "utf8");
+    expect(parse(restored)).toEqual({ theme: "light" });
+    expect(restored).toContain("// Keep the theme");
+    expect(restored).toContain("// Added during the session");
+  });
+
+  it("leaves unchanged JSONC bytes intact, including comments within captured values", async () => {
+    const path = join(sandbox, "opencode.json");
+    const original = '{\n\t"provider": {"opper": {/* User choice */ "model": "custom",}},\n}\n';
+    writeFileSync(path, original);
+    await withJsonKeys(path, [["provider", "opper"]], async () => {});
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  it("preserves a pre-existing empty parent and its comments", async () => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, '{"provider":{/* Keep my provider container */}}');
+    await withJsonKeys(path, [["provider", "opper"]], async () => {
+      writeFileSync(path, '{"provider":{/* Keep my provider container */ "opper":{"baseURL":"session"}}}');
+    });
+    const restored = readFileSync(path, "utf8");
+    expect(parse(restored)).toEqual({ provider: {} });
+    expect(restored).toContain("/* Keep my provider container */");
+  });
+
+  it.each(["{broken", "[]", "null"])("does not run or overwrite an invalid configuration: %s", async (original) => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, original);
+    const run = vi.fn(async () => {});
+    await expect(withJsonKeys(path, [["provider", "opper"]], run)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(run).not.toHaveBeenCalled();
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  it("preserves malformed runtime edits and the original callback error", async () => {
+    const path = join(sandbox, "opencode.json");
+    writeFileSync(path, '{"provider":{"opper":{"baseURL":"compat"}}}');
+    const warning = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      await expect(withJsonKeys(path, [["provider", "opper"]], async () => {
+        writeFileSync(path, "{unfinished runtime edit");
+        throw new Error("launch failed");
+      })).rejects.toThrow("launch failed");
+      expect(readFileSync(path, "utf8")).toBe("{unfinished runtime edit");
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("failed to restore"));
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

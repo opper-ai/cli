@@ -1,17 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
+import { deleteJsoncProperty, parseJsoncObject } from "../util/jsonc.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
-import {
-  configureOpenCode,
-  readProjectConfigState,
-} from "../setup/opencode.js";
+import { configureOpenCode } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
-import { resolveOpenCodeModels } from "../setup/opencode-models.js";
+import { resolveOpenCodeModels, type OpenCodeModel } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
-import { brand } from "../ui/colors.js";
+import { OpperError } from "../errors.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -37,7 +36,7 @@ async function isConfigured(): Promise<boolean> {
   const cfg = opencodeConfigPath("global");
   if (!existsSync(cfg)) return false;
   try {
-    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as {
       provider?: { opper?: unknown };
     };
     return parsed.provider?.opper !== undefined;
@@ -49,9 +48,8 @@ async function isConfigured(): Promise<boolean> {
 async function configure(): Promise<void> {
   // Prefer the live catalogue over the bundled list. `/v3/compat/models` is
   // scoped to the key, so this is also the only way the user's own pools and
-  // `dynamic/<name>` routes reach OpenCode's picker. A null result (no key,
-  // gateway unreachable) falls back to the template rather than failing the
-  // launch — OpenCode still merges with models.dev either way.
+  // `dynamic/<name>` routes reach OpenCode's picker. Only setup without a key
+  // uses the template; authenticated catalog failures leave config untouched.
   const models = await resolveOpenCodeModels();
 
   // overwrite: true so a re-run pulls in the latest models, costs and
@@ -66,20 +64,15 @@ async function unconfigure(): Promise<void> {
   if (!existsSync(cfg)) return;
   let parsed: { provider?: Record<string, unknown>; [k: string]: unknown };
   try {
-    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+    parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as typeof parsed;
   } catch {
     return;
   }
   if (!parsed.provider || parsed.provider.opper === undefined) return;
 
-  const { opper: _opper, ...restProviders } = parsed.provider;
-  void _opper;
-  if (Object.keys(restProviders).length === 0) {
-    delete parsed.provider;
-  } else {
-    parsed.provider = restProviders;
-  }
-  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+  const original = readFileSync(cfg, "utf8");
+  const keyPath = Object.keys(parsed.provider).length === 1 ? ["provider"] : ["provider", "opper"];
+  await writeFile(cfg, deleteJsoncProperty(original, keyPath), "utf8");
 }
 
 /**
@@ -100,15 +93,15 @@ async function setSessionBaseUrl(
     [k: string]: unknown;
   };
   try {
-    parsed = JSON.parse(readFileSync(cfg, "utf8"));
+    parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as typeof parsed;
   } catch {
     return;
   }
   const opper = parsed.provider?.opper;
   if (!opper) return;
-  opper.options = opper.options ?? {};
-  opper.options.baseURL = baseUrl;
-  await writeFile(cfg, JSON.stringify(parsed, null, 2), "utf8");
+  const original = readFileSync(cfg, "utf8");
+  const updated = applyEdits(original, modify(original, ["provider", "opper", "options", "baseURL"], baseUrl, {}));
+  await writeFile(cfg, updated, "utf8");
 }
 
 /**
@@ -120,7 +113,7 @@ function readBaseUrl(location: "global" | "local"): string | undefined {
   const cfg = opencodeConfigPath(location);
   if (!existsSync(cfg)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(cfg, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(cfg, "utf8")) as {
       provider?: { opper?: { options?: { baseURL?: unknown } } };
     };
     const url = parsed.provider?.opper?.options?.baseURL;
@@ -147,6 +140,91 @@ export function restoreTarget(stored: string | undefined): string {
   return stored.startsWith(OPPER_HOST) ? OPPER_COMPAT_URL : stored;
 }
 
+/** Apply launch settings after OpenCode's project and custom file layers. */
+function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRouting): string {
+  function object(value: unknown): Record<string, unknown> {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Invalid OPENCODE_CONFIG_CONTENT: expected configuration objects.");
+    }
+    return value as Record<string, unknown>;
+  }
+  const errors: ParseError[] = [];
+  const raw = process.env.OPENCODE_CONFIG_CONTENT;
+  const parsed: unknown = raw ? parse(raw, errors, { allowTrailingComma: true }) : {};
+  if (errors.length) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "Cannot parse OPENCODE_CONFIG_CONTENT. Existing configuration was preserved.");
+  }
+  const config = object(parsed);
+  const providers = config.provider === undefined ? {} : object(config.provider);
+  const opper = providers.opper === undefined ? {} : object(providers.opper);
+  const options = opper.options === undefined ? {} : object(opper.options);
+  const headers = options.headers === undefined ? undefined : Object.fromEntries(
+    Object.entries(object(options.headers)).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
+  return JSON.stringify({
+    ...config,
+    provider: {
+      ...providers,
+      opper: {
+        ...opper,
+        npm: "@ai-sdk/openai-compatible",
+        options: { ...options, ...(headers === undefined ? {} : { headers }), baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
+        // Keep the full model metadata in the generated config file. A live
+        // catalog can exceed Linux's per-environment-variable size limit.
+        whitelist: Object.keys(models),
+      },
+    },
+  });
+}
+
+/**
+ * Inspect merged settings before changing Opper's provider configuration.
+ * OpenCode may add its own $schema metadata while loading a JSON file.
+ */
+function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv): void {
+  let config: Record<string, unknown>;
+  try {
+    const result = spawnSync("opencode", ["debug", "config"], {
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0 || typeof result.stdout !== "string") {
+      throw new Error("Configuration inspection failed");
+    }
+    config = parseJsoncObject(result.stdout);
+  } catch {
+    // Debug output can contain credentials. Never include it (or subprocess
+    // errors) in the user-facing failure.
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      "Could not inspect OpenCode's effective configuration before launch.",
+      "Run `opencode debug config` locally to diagnose the configuration, then retry.",
+    );
+  }
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown> : undefined;
+  const hasAuthorization = (headers: unknown): boolean =>
+    Object.keys(record(headers) ?? {}).some((name) => name.toLowerCase() === "authorization");
+  const opper = record(record(config.provider)?.opper);
+  const providerHeaders = record(opper?.options)?.headers;
+  const configuredModels = record(opper?.models);
+  const modelHasAuthorization = Object.keys(models).some((id) => {
+    const model = record(configuredModels?.[id]);
+    return hasAuthorization(model?.headers) || hasAuthorization(record(model?.options)?.headers);
+  });
+  if (hasAuthorization(providerHeaders) || modelHasAuthorization) {
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      "OpenCode's effective Opper configuration contains an Authorization header that can override the selected API key.",
+      "Remove Authorization headers from Opper provider and model settings, then retry with the desired --key slot.",
+    );
+  }
+}
+
 async function spawn(
   args: string[],
   routing: OpperRouting,
@@ -157,7 +235,19 @@ async function spawn(
   // resolving the catalogue here is what makes `opper launch opencode`
   // pick up new models, changed policy, and newly deployed routes without
   // the user doing anything. Resolved once and shared by both branches.
-  const models = await resolveOpenCodeModels();
+  const models = await resolveOpenCodeModels({
+    apiKey: routing.apiKey,
+    baseUrl: routing.apiBaseUrl,
+  });
+  // Validate existing inline config before mutating either config file. The
+  // runtime override also prevents an old project whitelist or URL from
+  // overriding the catalog and credentials chosen for this launch.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OPPER_API_KEY: routing.apiKey,
+    OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
+  };
+  checkEffectiveAuthorization(models, env);
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project
@@ -174,10 +264,6 @@ async function spawn(
     await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPPER_API_KEY: routing.apiKey,
-      };
       const result = spawnSync("opencode", args, { stdio: "inherit", env });
       return result.status ?? -1;
     } finally {
@@ -199,26 +285,7 @@ async function spawn(
     async () => {
       await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 
-      // OpenCode reads `./opencode.json` if present and uses it instead
-      // of the user-level config. If one exists without an Opper
-      // provider, whatever we just wrote globally is dead weight — warn
-      // so the user can re-run with `--project`.
-      const projectPath = opencodeConfigPath("local");
-      const state = readProjectConfigState(projectPath);
-      if (state.exists && !state.hasOpperProvider) {
-        process.stderr.write(
-          brand.dim(
-            `note: ${projectPath} will shadow the user-level Opper config. Re-run with \`--project\` to write the Opper provider there instead.\n`,
-          ),
-        );
-      }
-
       await setSessionBaseUrl(routing.baseUrl, "global");
-
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        OPPER_API_KEY: routing.apiKey,
-      };
       const result = spawnSync("opencode", args, { stdio: "inherit", env });
       return result.status ?? -1;
     },

@@ -1,4 +1,4 @@
-import { configureOpenCode } from "../setup/opencode.js";
+import { configureOpenCode, readProjectConfigState } from "../setup/opencode.js";
 import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import {
   configureGitHubCopilotVSCode,
@@ -9,7 +9,7 @@ import { listAdapters } from "../agents/registry.js";
 import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
-import type { Location } from "../util/editor-paths.js";
+import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
@@ -42,6 +42,14 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  const path = opencodeConfigPath(opts.location);
+  if (!opts.overwrite && readProjectConfigState(path).hasOpperProvider) {
+    console.log(
+      `OpenCode config at ${path} already has an Opper provider. Pass --overwrite to replace it.`,
+    );
+    return;
+  }
+
   const models = await resolveOpenCodeModels();
   const result = await configureOpenCode({
     location: opts.location,

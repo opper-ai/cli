@@ -28,6 +28,7 @@
     "@opperai/agents": "^0.8.0",
     "@opperai/login": "^0.4.0",
     "commander": "^12.1.0",
+    "jsonc-parser": "^3.3.1",
     "kleur": "^4.1.5",
     "ws": "^8.21.0",
     "yaml": "^2.8.2",

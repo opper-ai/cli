@@ -1,6 +1,9 @@
 import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { applyEdits, modify } from "jsonc-parser";
+import { parseJsoncObject } from "../util/jsonc.js";
+import { OpperError } from "../errors.js";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 
@@ -10,14 +13,13 @@ export interface ProjectConfigState {
 }
 
 /**
- * Inspect the cwd-local `opencode.json` (if any). Used at launch time to
- * decide whether to warn that a project-level config will shadow whatever
- * we just wrote to the user-level config.
+ * Inspect an OpenCode config before setup to avoid fetching the catalogue
+ * when an existing Opper provider makes the operation a no-op.
  */
 export function readProjectConfigState(path: string): ProjectConfigState {
   if (!existsSync(path)) return { exists: false, hasOpperProvider: false };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as {
+    const parsed = parseJsoncObject(readFileSync(path, "utf8")) as {
       provider?: { opper?: unknown };
     };
     return {
@@ -38,7 +40,8 @@ export interface ConfigureOpenCodeOptions {
    * `/v3/compat/models` so the block reflects the live, key-scoped catalogue —
    * including the user's pools and dynamic routes, which no static list can
    * carry. Omitted (or undefined) keeps the bundled template, which is what
-   * happens when the gateway is unreachable or no key is configured.
+   * happens when no key is configured. Authenticated fetch failures must be
+   * handled before calling the config writer.
    */
   models?: Record<string, unknown>;
 }
@@ -63,10 +66,13 @@ export async function configureOpenCode(
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
-    provider: { opper: { models?: Record<string, unknown> } };
+    provider: { opper: { models?: Record<string, unknown>; whitelist?: string[] } };
   };
   if (opts.models) {
     templateConfig.provider.opper.models = opts.models;
+    // OpenCode merges with models.dev and other config layers. An explicit
+    // whitelist also removes stale/disallowed entries, including when empty.
+    templateConfig.provider.opper.whitelist = Object.keys(opts.models);
   }
   // The fresh-install path below writes the asset verbatim to preserve its
   // formatting, so a models override has to be re-serialised — otherwise it
@@ -79,14 +85,15 @@ export async function configureOpenCode(
   await mkdir(dirname(path), { recursive: true });
 
   if (existsSync(path)) {
-    let existing: Record<string, unknown> | null = null;
+    const original = await readFile(path, "utf8");
+    let existing: Record<string, unknown>;
     try {
-      existing = JSON.parse(await readFile(path, "utf8")) as Record<
-        string,
-        unknown
-      >;
+      existing = parseJsoncObject(original);
     } catch {
-      // unparseable — fall through and replace with template
+      throw new OpperError(
+        "AGENT_CONFIG_CONFLICT",
+        `Invalid OpenCode configuration at ${path}; leaving it unchanged.`,
+      );
     }
 
     if (existing && typeof existing === "object") {
@@ -99,11 +106,12 @@ export async function configureOpenCode(
         return { path, wrote: false, reason: "exists" };
       }
 
-      const merged = {
-        ...existing,
-        provider: { ...providers, opper: templateConfig.provider.opper },
-      };
-      await writeFile(path, JSON.stringify(merged, null, 2), "utf8");
+      const providerPath = existing.provider && typeof existing.provider === "object" && !Array.isArray(existing.provider)
+        ? ["provider", "opper"] : ["provider"];
+      const providerValue = providerPath.length === 2
+        ? templateConfig.provider.opper : { opper: templateConfig.provider.opper };
+      const merged = applyEdits(original, modify(original, providerPath, providerValue, {}));
+      await writeFile(path, merged, "utf8");
       return { path, wrote: true };
     }
   }

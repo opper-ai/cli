@@ -5,6 +5,8 @@ export interface DetectResult {
 }
 
 export interface OpperRouting {
+  /** Original API root for model discovery, before the inference session path. */
+  apiBaseUrl: string;
   baseUrl: string;
   apiKey: string;
   model: string;

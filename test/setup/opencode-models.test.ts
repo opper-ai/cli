@@ -1,9 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   toOpenCodeModels,
   displayName,
   type CompatModel,
+  fetchOpenCodeModels,
+  resolveOpenCodeModels,
 } from "../../src/setup/opencode-models.js";
+import { OpperApi } from "../../src/api/client.js";
+import { useTempOpperHome } from "../helpers/temp-home.js";
 
 /** A priced, tool-capable chat entry — the shape most catalogue rows have. */
 function model(over: Partial<CompatModel> = {}): CompatModel {
@@ -113,5 +117,46 @@ describe("displayName", () => {
 
   it("keeps a bare pool name intact", () => {
     expect(displayName("claude-sonnet-5")).toBe("Claude Sonnet 5");
+  });
+});
+
+describe("authenticated catalog discovery", () => {
+  useTempOpperHome();
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+  const context = { apiKey: "op_selected", baseUrl: "https://selected.example/gateway" };
+
+  it("uses an explicit API context instead of ambient credentials", async () => {
+    vi.stubEnv("OPPER_API_KEY", "op_unrelated");
+    vi.stubEnv("OPPER_BASE_URL", "https://unrelated.example");
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [model()] })));
+    vi.stubGlobal("fetch", fetch);
+    const result = await resolveOpenCodeModels(context);
+    expect(Object.keys(result!)).toEqual(["anthropic/claude-sonnet-5"]);
+    expect(fetch).toHaveBeenCalledWith("https://selected.example/gateway/v3/compat/models", {
+      method: "GET", headers: { Authorization: "Bearer op_selected" },
+    });
+  });
+
+  it.each([{ data: [] }, { data: [model({ opper: { type: "embedding" } })] }])("keeps a successful empty usable catalog empty: %j", async ({ data }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data }))));
+    expect(await fetchOpenCodeModels(new OpperApi(context))).toEqual({});
+  });
+
+  it.each([401, 503])("reports HTTP %s instead of substituting bundled models", async (status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("unavailable", { status })));
+    await expect(fetchOpenCodeModels(new OpperApi(context))).rejects.toThrow();
+  });
+
+  it("reports a failed request instead of substituting bundled models", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    await expect(fetchOpenCodeModels(new OpperApi(context))).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+  });
+
+  it("rejects a malformed catalog without treating it as an empty allowed list", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [] }))));
+    await expect(fetchOpenCodeModels(new OpperApi(context))).rejects.toThrow(/catalog/i);
   });
 });

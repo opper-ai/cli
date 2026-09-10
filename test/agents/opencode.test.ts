@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse, type ParseError } from "jsonc-parser";
 
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
@@ -17,25 +18,26 @@ const runMock = vi.fn();
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const configureOpenCodeMock = vi.fn();
-const readProjectConfigStateMock = vi.fn();
 vi.mock("../../src/setup/opencode.js", () => ({
   configureOpenCode: configureOpenCodeMock,
-  readProjectConfigState: readProjectConfigStateMock,
 }));
 
 // spawn() and configure() resolve the live catalogue; stub it so this suite
 // stays offline, and so a test can vary what the gateway "returns".
-const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue(undefined);
+const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue({});
 vi.mock("../../src/setup/opencode-models.js", () => ({
   resolveOpenCodeModels: resolveOpenCodeModelsMock,
 }));
 
 const spawnSyncMock = vi.fn();
+const debugConfigMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
     "node:child_process",
   );
-  return { ...actual, spawnSync: spawnSyncMock };
+  return { ...actual, spawnSync: (...args: any[]) =>
+    args[0] === "opencode" && args[1]?.[0] === "debug" && args[1]?.[1] === "config"
+      ? debugConfigMock(...args) : spawnSyncMock(...args) };
 });
 
 const { opencode } = await import("../../src/agents/opencode.js");
@@ -44,6 +46,7 @@ const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
 
 const ROUTING = {
+  apiBaseUrl: "https://api.opper.ai",
   baseUrl: SESSION_URL,
   apiKey: "op_live_run",
   model: "claude-opus-4-7",
@@ -81,27 +84,27 @@ function seedOpencodeConfig(sandbox: string): void {
 describe("opencode adapter", () => {
   let sandbox: string;
   let prevHome: string | undefined;
+  let prevEditorHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
     configureOpenCodeMock.mockReset();
-    readProjectConfigStateMock.mockReset();
     spawnSyncMock.mockReset();
-    // Default: no shadowing project config exists.
-    readProjectConfigStateMock.mockReturnValue({
-      exists: false,
-      hasOpperProvider: false,
-    });
+    debugConfigMock.mockReset().mockReturnValue({ status: 0, stdout: "{}", stderr: "" });
     sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
     prevHome = process.env.HOME;
+    prevEditorHome = process.env.OPPER_EDITOR_HOME;
     process.env.HOME = sandbox;
+    process.env.OPPER_EDITOR_HOME = sandbox;
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevEditorHome === undefined) delete process.env.OPPER_EDITOR_HOME;
+    else process.env.OPPER_EDITOR_HOME = prevEditorHome;
   });
 
   it("metadata is correct", () => {
@@ -143,6 +146,80 @@ describe("opencode adapter", () => {
     expect(result.installed).toBe(true);
   });
 
+  it("isConfigured recognizes a JSONC provider with comments and trailing commas", async () => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const jsonc = `{
+  // Existing user configuration.
+  "provider": { "opper": { "name": "Opper", }, },
+}\n`;
+    writeFileSync(configPath, jsonc);
+
+    await expect(opencode.isConfigured()).resolves.toBe(true);
+
+    expect(readFileSync(configPath, "utf8")).toBe(jsonc);
+  });
+
+  it.each([
+    { following: "provider", hasOtherProvider: true },
+    { following: "top-level key", hasOtherProvider: false },
+  ])("unconfigure preserves JSONC settings and the comment before the next $following", async ({ hasOtherProvider }) => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const otherProvider = hasOtherProvider ? `
+    // Keep the next provider's explanation.
+    "other": { "name": "Other", },` : "";
+    const jsonc = `{
+  /* Personal configuration. */
+  "provider": {
+    "opper": { "name": "Opper", },${otherProvider}
+  },
+  // Keep the next setting's explanation.
+  "theme": "tokyonight",
+  "model": "other/selected-model",
+  "mcp": { "docs": { "url": "https://docs.example.test/path//literal", }, },
+}\n`;
+    writeFileSync(configPath, jsonc);
+
+    await opencode.unconfigure();
+
+    const written = readFileSync(configPath, "utf8");
+    const errors: ParseError[] = [];
+    const config = parse(written, errors, { allowTrailingComma: true });
+    expect(errors).toEqual([]);
+    expect(config).toEqual({
+      ...(hasOtherProvider ? { provider: { other: { name: "Other" } } } : {}),
+      theme: "tokyonight",
+      model: "other/selected-model",
+      mcp: { docs: { url: "https://docs.example.test/path//literal" } },
+    });
+    expect.soft(written).toContain("/* Personal configuration. */");
+    expect.soft(written).toContain("// Keep the next setting's explanation.");
+    if (hasOtherProvider) {
+      expect.soft(written).toContain("// Keep the next provider's explanation.");
+    }
+    await expect(opencode.isConfigured()).resolves.toBe(false);
+  });
+
+  it("unconfigure leaves ambiguous JSONC with duplicate provider keys unchanged", async () => {
+    const configPath = opencodeConfigPath(sandbox);
+    mkdirSync(join(sandbox, ".config", "opencode"), { recursive: true });
+    const ambiguous = `{
+  "provider": {
+    "opper": { "name": "First Opper", },
+    // The effective provider is ambiguous for a surgical edit.
+    "opper": { "name": "Last Opper", },
+    "other": { "name": "Other", },
+  },
+  "theme": "tokyonight",
+}\n`;
+    writeFileSync(configPath, ambiguous);
+
+    await expect(opencode.unconfigure()).resolves.toBeUndefined();
+
+    expect(readFileSync(configPath, "utf8")).toBe(ambiguous);
+  });
+
   it("spawn ensures the provider config exists then runs opencode with OPPER_API_KEY in env", async () => {
     configureOpenCodeMock.mockResolvedValue({
       path: opencodeConfigPath(sandbox),
@@ -153,7 +230,7 @@ describe("opencode adapter", () => {
 
     const code = await opencode.spawn!(["chat"], ROUTING);
     expect(code).toBe(0);
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global", overwrite: true });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "global", overwrite: true, models: {} });
 
     const call = spawnSyncMock.mock.calls[0]!;
     expect(call[0]).toBe("opencode");
@@ -169,7 +246,7 @@ describe("opencode adapter", () => {
     const models = { "dynamic/my-route": { name: "My Route (route)" } };
     resolveOpenCodeModelsMock.mockResolvedValueOnce(models);
     spawnSyncMock.mockReturnValue({ status: 0 });
-    await opencode.spawn([], { apiKey: "k", baseUrl: "https://api.opper.ai/v3/compat" });
+    await opencode.spawn([], { ...ROUTING, apiKey: "k" });
     expect(configureOpenCodeMock).toHaveBeenCalledWith(
       expect.objectContaining({ models }),
     );
@@ -376,7 +453,7 @@ describe("opencode adapter", () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
 
     await opencode.spawn!(["chat"], ROUTING, { configScope: "project" });
-    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true });
+    expect(configureOpenCodeMock).toHaveBeenCalledWith({ location: "local", overwrite: true, models: {} });
   });
 
   it("project scope: opper provider persists across launches but baseURL is reset to compat", async () => {
@@ -526,74 +603,4 @@ describe("opencode adapter", () => {
     }
   });
 
-  it("spawn warns when a project opencode.json exists without an Opper provider", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "/tmp/g", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: false,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING);
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    const blob = errors.join("");
-    expect(blob).toMatch(/opencode\.json/);
-    expect(blob).toMatch(/--project/);
-  });
-
-  it("spawn does not warn when the project opencode.json already has an Opper provider", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "/tmp/g", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: true,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING);
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    expect(errors.join("")).not.toMatch(/--project/);
-  });
-
-  it("spawn does not warn when configScope=project (we're writing there)", async () => {
-    configureOpenCodeMock.mockResolvedValue({ path: "./opencode.json", wrote: true });
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    readProjectConfigStateMock.mockReturnValue({
-      exists: true,
-      hasOpperProvider: false,
-    });
-
-    const errors: string[] = [];
-    const orig = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      errors.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      await opencode.spawn!([], ROUTING, { configScope: "project" });
-    } finally {
-      process.stderr.write = orig;
-    }
-
-    expect(errors.join("")).not.toMatch(/--project/);
-  });
 });

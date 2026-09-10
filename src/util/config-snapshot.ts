@@ -1,9 +1,13 @@
 import { dirname } from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
+import { applyEdits, modify } from "jsonc-parser";
+import { OpperError } from "../errors.js";
+import { deleteJsoncProperty, parseJsoncObject } from "./jsonc.js";
 
 /**
- * Snapshot the values at one or more `keyPaths` in a JSON file (or
+ * Snapshot the values at one or more `keyPaths` in a JSON/JSONC file (or
  * their absence), run `fn`, then restore just those keys to their
  * pre-`fn` state. Other keys — including ones added or modified during
  * `fn` (e.g. by the launched agent or a concurrent user edit) — are
@@ -37,24 +41,28 @@ export async function withJsonKeys<T>(
       beforeMode = undefined;
     }
   }
-  const before = readJsonOrEmpty(path);
-  const valuesBefore = keyPaths.map((kp) => readKey(before, kp));
+  const before = readJsoncOrEmpty(path);
+  const valuesBefore = keyPaths.map((kp) => readKey(before.value, kp));
   try {
     return await fn();
   } finally {
-    await restore(path, keyPaths, valuesBefore, fileExistedBefore, beforeMode);
+    await restore(path, keyPaths, valuesBefore, before.value, fileExistedBefore, beforeMode);
   }
 }
 
-function readJsonOrEmpty(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
+function readJsoncOrEmpty(path: string): { text: string; value: Record<string, unknown> } {
+  const text = existsSync(path) ? readFileSync(path, "utf8") : "{}";
+  return { text, value: parseObject(text, path) };
+}
+
+function parseObject(text: string, path: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
+    return parseJsoncObject(text);
   } catch {
-    return {};
+    throw new OpperError(
+      "AGENT_CONFIG_CONFLICT",
+      `Cannot safely restore ${path}: expected a valid JSON or JSONC object. Existing configuration was preserved.`,
+    );
   }
 }
 
@@ -67,75 +75,49 @@ function readKey(obj: Record<string, unknown>, keyPath: string[]): unknown {
   return cur;
 }
 
-function setKey(
-  obj: Record<string, unknown>,
-  keyPath: string[],
-  value: unknown,
-): void {
-  let cur = obj;
-  for (let i = 0; i < keyPath.length - 1; i++) {
-    const k = keyPath[i]!;
-    const next = cur[k];
-    if (next === null || typeof next !== "object" || Array.isArray(next)) {
-      cur[k] = {};
-    }
-    cur = cur[k] as Record<string, unknown>;
-  }
-  const last = keyPath[keyPath.length - 1]!;
-  if (value === undefined) delete cur[last];
-  else cur[last] = value;
-}
-
-// Walk back up the path and drop intermediate objects that are now empty —
-// keeps post-restore JSON clean when our key was the only inhabitant of
-// `providers` / `provider`, etc.
-function pruneEmptyAlongPath(
-  obj: Record<string, unknown>,
-  keyPath: string[],
-): void {
-  for (let depth = keyPath.length - 1; depth >= 1; depth--) {
-    let parent: Record<string, unknown> = obj;
-    for (let j = 0; j < depth - 1; j++) {
-      const next = parent[keyPath[j]!];
-      if (next === null || typeof next !== "object") return;
-      parent = next as Record<string, unknown>;
-    }
-    const childKey = keyPath[depth - 1]!;
-    const child = parent[childKey];
-    if (
-      child !== null &&
-      typeof child === "object" &&
-      !Array.isArray(child) &&
-      Object.keys(child as Record<string, unknown>).length === 0
-    ) {
-      delete parent[childKey];
-    }
-  }
-}
-
 async function restore(
   path: string,
   keyPaths: string[][],
   valuesBefore: unknown[],
+  valueBefore: Record<string, unknown>,
   fileExistedBefore: boolean,
   beforeMode: number | undefined,
 ): Promise<void> {
   try {
-    const after = readJsonOrEmpty(path);
+    const after = readJsoncOrEmpty(path);
+    let text = after.text;
+    let value = after.value;
+    const setKey = (keyPath: string[], next: unknown): void => {
+      if (isDeepStrictEqual(readKey(value, keyPath), next)) return;
+      // Edit only the scoped value so comments, formatting, and runtime edits
+      // elsewhere in the document survive restoration.
+      text = next === undefined
+        ? deleteJsoncProperty(text, keyPath)
+        : applyEdits(text, modify(text, keyPath, next, {
+          formattingOptions: { insertSpaces: true, tabSize: 2 },
+        }));
+      value = parseObject(text, path);
+    };
     for (let i = 0; i < keyPaths.length; i++) {
-      setKey(after, keyPaths[i]!, valuesBefore[i]);
+      setKey(keyPaths[i]!, valuesBefore[i]);
     }
     for (const kp of keyPaths) {
-      pruneEmptyAlongPath(after, kp);
+      // Drop parents left empty by removing a temporary key, as on first launch.
+      for (let depth = kp.length - 1; depth >= 1; depth--) {
+        const parentPath = kp.slice(0, depth);
+        const child = readKey(value, parentPath);
+        if (readKey(valueBefore, parentPath) === undefined && child !== null && typeof child === "object" && !Array.isArray(child) && Object.keys(child).length === 0) {
+          setKey(parentPath, undefined);
+        }
+      }
     }
 
-    if (!fileExistedBefore && Object.keys(after).length === 0) {
+    if (!fileExistedBefore && Object.keys(value).length === 0) {
       await rm(path, { force: true });
       return;
     }
 
     await mkdir(dirname(path), { recursive: true });
-    const text = JSON.stringify(after, null, 2) + "\n";
     await writeFile(path, text, beforeMode !== undefined ? { mode: beforeMode } : undefined);
     if (beforeMode !== undefined) await chmod(path, beforeMode);
   } catch (err) {
