@@ -36,7 +36,7 @@ Run `opper` with no arguments for an interactive menu (Account · Ask · Agents 
 
 ## Authentication
 
-Auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on any command to pick which slot to read from (defaults to `default`).
+Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on runtime commands to pick which slot to read from (defaults to `default`). Private key creation below uses its own browser authorization instead.
 
 | Command | Description |
 |---------|-------------|
@@ -199,8 +199,124 @@ opper skills uninstall   # remove + clean up legacy bundled-copy installs
 
 ```bash
 opper editors list
-opper editors opencode [--global|--local] [--overwrite]   # also exposed as `opper launch opencode`
+opper editors opencode [--global|--local] [--overwrite]   # configure inference without launching
 ```
+
+OpenCode is a coding agent; its inference setup remains under `editors` for
+compatibility. Use `opper launch opencode` to run it with inference through Opper.
+
+## MCP client setup
+
+```bash
+opper mcp add opencode                            # account MCP only, no inference changes
+opper mcp add opencode --local --url http://localhost:8080/mcp
+```
+
+`opper mcp add` currently supports **OpenCode only**. This configures the agent's
+access to Opper account tools; `opper launch <agent>` separately runs an agent
+with model inference through Opper. Setup helpers for other MCP clients are not
+implemented yet.
+
+The command adds the remote `https://api.opper.ai/mcp` server as `opper`. It leaves
+your inference provider, model, tool permissions, and other MCP servers alone.
+It needs no API key and does not log in, launch OpenCode, or approve consent.
+The default connection contains only the server URL and connection settings:
+
+```json
+{
+  "mcp": {
+    "opper": {
+      "type": "remote",
+      "url": "https://api.opper.ai/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+Reopen OpenCode, connect the server, and choose your organization and permissions
+in Opper in your browser. Available permissions are discovered from Opper; only
+the permissions you approve are granted. If the
+client requires manual authentication, use `opencode mcp auth opper`, then
+reopen OpenCode to load the authenticated tools.
+For names that need shell quoting or conflict with command options, setup
+suggests `opencode mcp auth` so you can select the server in OpenCode's picker.
+Availability of the endpoint depends on the Opper MCP deployment.
+
+OpenCode 1.18.29 cannot automatically complete a permission upgrade after a tool
+reports insufficient scope. Start its native authentication flow again and
+approve the additional permissions in Opper. With the default URL-only setup,
+this does not require editing the MCP config. An agent can guide the workflow;
+the account owner approves access in the browser.
+
+For an advanced client-side restriction, use `--scopes` to limit the
+permissions that can be offered during consent:
+
+```bash
+# Restrict this client to account and project inspection.
+opper mcp add opencode --scopes 'account:read projects:read'
+```
+
+`--scopes` replaces only the matched server's requested scope setting. It
+never adds unselected permissions, grants access, or changes existing tokens.
+Reopen OpenCode after changing this restriction and use its native authentication
+flow to review and approve permissions in the browser. Consent cannot exceed
+the explicit restriction. To return an existing connection to normal discovery,
+remove its `oauth.scope` property from the effective OpenCode config, preserving
+any other OAuth settings, then reopen OpenCode and authenticate again. Plain
+`opper mcp add opencode` preserves existing restrictions, including those from
+earlier CLI versions.
+To revoke an existing grant, disconnect it in the Opper app. Config changes alone
+do not revoke grants.
+
+The setup preserves JSONC comments and reads both `opencode.json` and
+`opencode.jsonc` (plus global `config.json`) in OpenCode's merge order. New MCP
+settings go into the existing JSONC file when present, otherwise the JSON file.
+Explicit scope updates edit the highest-precedence file containing the matched
+server's complete remote definition. Other preference layers remain untouched;
+private headers and OAuth settings are not copied between files.
+An existing server with the same URL keeps its current name, auth settings,
+and enabled/disabled preference; an explicit `--scopes` updates only its
+OAuth scope. If OAuth is disabled, an explicit `--scopes` change asks you to
+review that setting instead of enabling it; plain setup preserves it and
+explains how to enable browser consent. Remove the matched server's
+`oauth: false` setting from the effective config, then reopen OpenCode.
+A conflicting `opper` entry, malformed config,
+or duplicate JSON keys produces an error without changing the files. `--url` accepts
+HTTPS endpoints or HTTP loopback addresses, without credentials, query parameters,
+or fragments.
+
+When setup updates an existing regular config, it retains the original file in
+a private `.opper-mcp-*` backup directory beside it and prints that backup path.
+The backup directory excludes its contents from ordinary Git staging.
+It captures and checks the current file before installing the update without
+replacing a competing save. A detected conflict stops setup and preserves both
+versions for review. Backups also retain late saves through an editor's already
+open file; compare them if you edited the config during setup. Repeated setup
+that makes no change creates no backup. Symlinked target files require a manual
+merge. New files are created exclusively, so setup never replaces a file that
+appeared after inspection.
+
+Use `--global` or `--local` to select where the MCP configuration is written.
+For a native OpenCode setup instead, run `opencode mcp add` and choose a remote
+server with the same URL. That is also suitable for demonstrating server setup
+before asking the agent to connect.
+
+The previous syntax remains a compatibility alias:
+
+```bash
+opper editors opencode --mcp
+opper editors opencode --mcp --local --mcp-url http://localhost:8080/mcp
+opper editors opencode --mcp --mcp-scopes 'account:read projects:read'
+```
+
+Its `--mcp-url` and `--mcp-scopes` flags correspond to `--url` and `--scopes` on
+`opper mcp add opencode`. The alias still configures only MCP; `--overwrite`
+remains an inference setup option.
+
+To use Opper for both account tools and model inference, run
+`opper mcp add opencode`, then `opper launch opencode`. Inference authentication
+(`opper login` / `OPPER_API_KEY`) is independent of MCP browser authorization.
 
 ## Platform
 
@@ -209,6 +325,7 @@ Direct access to the platform endpoints:
 | Command | Description |
 |---------|-------------|
 | `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
+| `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
 | `opper functions list [filter]` / `get <name>` / `delete <name>` | Manage functions. |
 | `opper models list [filter]` | List available models (built-in + custom). |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
@@ -223,6 +340,58 @@ Direct access to the platform endpoints:
 | `opper image generate <prompt> [-o <file>] [--base64] [-m <model>]` | Generate an image. |
 
 ## Recipes
+
+### Creating an application key without putting its secret in a conversation
+
+```bash
+opper keys create --project <project-uuid> --name 'My app' --output .env.opper
+```
+
+The command opens Opper consent for project read access and API key creation.
+Choose the organization containing that project and explicitly select API key
+creation. The CLI checks the project, creates one runtime key through the
+delegated API, then writes `OPPER_API_KEY=...` into the new file with POSIX mode
+`0600`. The parent directory must already exist. Existing files and symlinks are
+never replaced, including when another process creates the destination during
+browser approval. Stdout contains only the key ID, name, project UUID, and saved
+path as JSON; progress and the browser URL go to stderr. Load the env file in
+your application without printing or pasting it into an agent conversation.
+
+This authorization is independent of `opper login`, `--key`, `OPPER_API_KEY`,
+and OpenCode's credentials. It uses the maintained MCP SDK for discovery, public
+client registration, and PKCE. Only the public client registration is retained
+under `~/.opper/mcp-clients` (or `$OPPER_HOME/mcp-clients`), keyed by MCP URL and
+issuer; OAuth tokens stay in memory. The temporary OAuth connection is revoked
+when the operation finishes, including on errors. The application key remains
+usable after that connection is revoked.
+
+For local development, append `--mcp-url http://localhost:8080/mcp`. A production
+server must have the delegated MCP/OAuth endpoints deployed before this command
+can authorize. Ordinary API errors and SDK errors are sanitized, including with
+`--debug`.
+
+The CLI retries an uncertain create once with the same idempotency UUID. If the
+outcome is still unknown, its error includes `--idempotency-key <uuid>`: reuse
+that value only with the same project, name, MCP URL, account, organization, and
+retained public client registration. Never generate another operation ID to
+resolve an unknown outcome. A replay identifies the existing key but cannot
+return its secret again; the CLI revokes that key and reports that a fresh
+creation is needed. A failed file installation also attempts to revoke only
+the newly created key. If key or connection cleanup fails, the CLI reports the
+remaining action and exits with an error; an already installed env file is kept.
+
+If a server reset or client deletion leaves the browser reporting `invalid_client`,
+use `--reset-client` with a **fresh** key creation to replace only that MCP URL
+and issuer's retained public registration. The next authorization needs fresh
+browser consent. A token endpoint rejection also removes the rejected registration
+and asks you to restart; the CLI never exchanges an old authorization code under a
+new client identity. Existing OAuth grants are not revoked by resetting local
+registration; manage those in Agent connections.
+
+Do not reset a client while a previous key creation is uncertain. `--reset-client`
+cannot be combined with `--idempotency-key`; recovery also refuses to register a
+new identity if the original cache is missing or invalid. Restore the original
+registration or reconcile the earlier key in Opper before starting a fresh create.
 
 ### Calling a function from the shell or stdin
 
@@ -343,7 +512,7 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 ## Requirements
 
 - Node.js ≥20.12 (for `util.styleText`, used by interactive prompts).
-- macOS, Linux, or WSL. Native Windows shells aren't tested.
+- macOS, Linux, or WSL. Native Windows shells aren't tested; OAuth approval URLs must be opened manually there.
 
 ## Releasing
 

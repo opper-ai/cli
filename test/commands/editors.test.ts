@@ -83,4 +83,46 @@ describe("editors commands", () => {
       log.mockRestore();
     }
   });
+
+  it("MCP setup preserves inference and does not resolve a model catalog or log in", async () => {
+    mocks.resolveOpenCodeModels.mockClear();
+    mocks.configureOpenCode.mockResolvedValue({ path: "/tmp/opencode.jsonc", wrote: true, mcpName: "opper", mcpEnabled: true });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await editorsOpenCodeCommand({ location: "local", overwrite: false, mcp: true, mcpUrl: "http://localhost:8080/mcp" });
+      expect(mocks.resolveOpenCodeModels).not.toHaveBeenCalled();
+      expect(mocks.configureOpenCode).toHaveBeenLastCalledWith({ location: "local", mcp: true, mcpUrl: "http://localhost:8080/mcp" });
+      const output = log.mock.calls.map(([message]) => message).join("\n");
+      expect(output).toContain("opper");
+      expect(output).toMatch(/browser/i);
+      expect(output).toMatch(/restart|reopen/i);
+      expect(output).toContain("choose permissions in Opper");
+      expect(output).not.toContain("Requested permissions:");
+    } finally { log.mockRestore(); }
+  });
+
+  it("reports an existing disabled connection without enabling it", async () => {
+    mocks.configureOpenCode.mockResolvedValue({ path: "/tmp/opencode.json", wrote: false, reason: "exists", mcpName: "opper_demo", mcpEnabled: false });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await editorsOpenCodeCommand({ location: "global", overwrite: false, mcp: true });
+      const output = log.mock.calls.map(([message]) => message).join("\n");
+      expect(output).toContain("opper_demo");
+      expect(output).toContain("disabled");
+      expect(output).not.toContain("--overwrite");
+    } finally { log.mockRestore(); }
+  });
+
+  it("forwards explicit MCP scopes and explains that updated config still needs browser consent", async () => {
+    mocks.configureOpenCode.mockResolvedValue({ path: "/tmp/opencode.jsonc", wrote: true, mcpName: "opper_demo", mcpEnabled: true, mcpScopes: "account:read projects:write" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await editorsOpenCodeCommand({ location: "global", overwrite: false, mcp: true, mcpScopes: "account:read projects:write" });
+      expect(mocks.configureOpenCode).toHaveBeenLastCalledWith({ location: "global", mcp: true, mcpScopes: "account:read projects:write" });
+      const output = log.mock.calls.map(([message]) => message).join("\n");
+      expect(output).toContain("account:read projects:write");
+      expect(output).toMatch(/browser/i);
+      expect(output).toContain("opencode mcp auth opper_demo");
+    } finally { log.mockRestore(); }
+  });
 });

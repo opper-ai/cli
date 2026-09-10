@@ -10,10 +10,14 @@ import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
 import type { Location } from "../util/editor-paths.js";
+import { mcpAddCommand } from "./mcp.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
+  mcp?: boolean;
+  mcpUrl?: string;
+  mcpScopes?: string;
 }
 
 
@@ -42,6 +46,17 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
+    throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
+  }
+  if (opts.mcp) {
+    await mcpAddCommand("opencode", {
+      location: opts.location,
+      ...(opts.mcpUrl !== undefined ? { url: opts.mcpUrl } : {}),
+      ...(opts.mcpScopes !== undefined ? { scopes: opts.mcpScopes } : {}),
+    });
+    return;
+  }
   const models = await resolveOpenCodeModels();
   const result = await configureOpenCode({
     location: opts.location,

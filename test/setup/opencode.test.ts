@@ -61,12 +61,12 @@ describe("configureOpenCode", () => {
     expect(parsed.provider.opper.existing).toBeUndefined();
   });
 
-  it("writes the template when existing config is unparseable", async () => {
+  it("rejects invalid config without overwriting it, even with --overwrite", async () => {
     const target = opencodeConfigPath("global");
     mkdirSync(join(home, ".config", "opencode"), { recursive: true });
     writeFileSync(target, "{not json", "utf8");
-    const result = await configureOpenCode({ location: "global" });
-    expect(result.wrote).toBe(true);
+    await expect(configureOpenCode({ location: "global", overwrite: true })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(readFileSync(target, "utf8")).toBe("{not json");
   });
 
   it("grafts the Opper provider into an existing config that has no provider key", async () => {

@@ -27,9 +27,14 @@ const GROUPS: HelpGroup[] = [
     commands: ["agents", "launch"],
   },
   {
+    title: "MCP",
+    commands: ["mcp"],
+  },
+  {
     title: "Platform",
     commands: [
       "call",
+      "keys",
       "functions",
       "models",
       "indexes",
