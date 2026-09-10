@@ -20,6 +20,7 @@ export interface LaunchOptions {
   install?: boolean;
   passthrough?: string[];
   configScope?: SpawnOptions["configScope"];
+  codexHome?: string;
   tags?: Record<string, string>;
 }
 
@@ -31,6 +32,9 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       `Unknown agent "${opts.agent}"`,
       "Run `opper agents list` to see supported agents.",
     );
+  }
+  if (opts.codexHome !== undefined && adapter.name !== "codex-desktop") {
+    throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
   if (!isLaunchable(adapter)) {
     throw new OpperError(
@@ -87,6 +91,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
   const routing: OpperRouting = {
+    keyName: opts.key,
     apiBaseUrl: apiContext.baseUrl,
     baseUrl,
     apiKey: apiContext.apiKey,
@@ -109,9 +114,10 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
   const startedAt = new Date();
   let code: number;
-  const spawnOpts: SpawnOptions = opts.configScope
-    ? { configScope: opts.configScope }
-    : {};
+  const spawnOpts: SpawnOptions = {
+    ...(opts.configScope ? { configScope: opts.configScope } : {}),
+    ...(opts.codexHome !== undefined ? { codexHome: opts.codexHome } : {}),
+  };
   try {
     code = await adapter.spawn(opts.passthrough ?? [], routing, spawnOpts);
   } finally {
@@ -122,6 +128,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   // Best-effort session summary. Failures are silent — we never block or
   // change the agent's exit code on a summary error.
   try {
+    if (adapter.launchesInBackground) return code;
     await printSessionSummary({
       apiContext,
       sessionId,

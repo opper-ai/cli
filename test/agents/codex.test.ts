@@ -13,6 +13,12 @@ import { join } from "node:path";
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 
+const { homedirMock } = vi.hoisted(() => ({ homedirMock: vi.fn() }));
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return { ...actual, homedir: homedirMock };
+});
+
 const runMock = vi.fn();
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
@@ -29,313 +35,213 @@ const { codex } = await import("../../src/agents/codex.js");
 const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
 
+const ROUTING = {
+  baseUrl: SESSION_URL,
+  apiKey: "op_test_selected",
+  model: "claude-sonnet-5",
+  compatShape: "responses" as const,
+};
+const LEGACY = [
+  "# >>> opper-cli >>>",
+  "# Managed by `opper`. Edits between these markers will be overwritten",
+  "# the next time you reconfigure Codex via the Opper CLI.",
+  "",
+  "[model_providers.opper]",
+  'name = "Opper"',
+  'base_url = "https://api.opper.ai/v3/compat"',
+  'env_key = "OPPER_API_KEY"',
+  'wire_api = "responses"',
+  "",
+  "[profiles.opper-opus]",
+  'model = "claude-opus-5"',
+  'model_provider = "opper"',
+  "# <<< opper-cli <<<",
+  "",
+].join("\n");
+const DESKTOP = 'model = "gpt-5.5"\nmodel_provider = "opper-desktop"\n[model_providers.opper-desktop]\nname = "Desktop"\nbase_url = "https://api.opper.ai/v3/compat"\n';
+
 describe("codex adapter", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
+  let cfgPath: string;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
     spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ status: 0 });
     sandbox = mkdtempSync(join(tmpdir(), "opper-codex-"));
-    prevHome = process.env.HOME;
-    process.env.HOME = sandbox;
+    homedirMock.mockReturnValue(sandbox);
+    cfgPath = join(sandbox, ".codex", "config.toml");
+    vi.stubEnv("CODEX_HOME", "");
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    vi.unstubAllEnvs();
   });
 
-  it("metadata is correct", () => {
-    expect(codex.name).toBe("codex");
-    expect(codex.displayName).toBe("Codex");
-    expect(typeof codex.spawn).toBe("function");
-    expect(typeof codex.install).toBe("function");
-  });
+  function writeConfig(text: string): void {
+    mkdirSync(join(sandbox, ".codex"), { recursive: true });
+    writeFileSync(cfgPath, text);
+  }
 
-  it("detect returns installed=false when codex not on PATH", async () => {
+  function spawnedArgs(): string[] {
+    return spawnSyncMock.mock.calls[0]![1] as string[];
+  }
+
+  it("detects only the CLI on PATH and reports its configuration location", async () => {
     whichMock.mockResolvedValue(null);
-    const result = await codex.detect();
-    expect(result.installed).toBe(false);
-  });
-
-  it("detect returns installed=true and the config path when found", async () => {
-    whichMock.mockResolvedValue("/usr/local/bin/codex");
-    const result = await codex.detect();
-    expect(result.installed).toBe(true);
-    expect(result.configPath).toMatch(/\.codex\/config\.toml$/);
-  });
-
-  it("isConfigured is false when ~/.codex/config.toml does not exist", async () => {
+    expect(await codex.detect()).toEqual({ installed: false });
     expect(await codex.isConfigured()).toBe(false);
-  });
-
-  it("configure writes the opper block with sentinels and the v3/compat base url", async () => {
-    await codex.configure({});
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    expect(existsSync(cfgPath)).toBe(true);
-    const text = readFileSync(cfgPath, "utf8");
-    expect(text).toContain("# >>> opper-cli >>>");
-    expect(text).toContain("# <<< opper-cli <<<");
-    expect(text).toContain('base_url = "https://api.opper.ai/v3/compat"');
-    expect(text).toContain('wire_api = "responses"');
-    expect(text).toContain("[profiles.opper-opus]");
-    expect(text).toContain("[profiles.opper-sonnet]");
+    whichMock.mockResolvedValue("/usr/local/bin/codex");
+    expect(await codex.detect()).toEqual({ installed: true, configPath: cfgPath });
     expect(await codex.isConfigured()).toBe(true);
   });
 
-  it("configure writes one profile block per PICKER_MODELS entry", async () => {
-    const { PICKER_MODELS } = await import("../../src/config/models.js");
-    await codex.configure({});
-    const text = readFileSync(join(sandbox, ".codex", "config.toml"), "utf8");
-    for (const m of PICKER_MODELS) {
-      // Profile header + the corresponding model id appear in the block.
-      expect(text).toContain(`[profiles.opper-${m.codexProfile}]`);
-      expect(text).toContain(`model = "${m.id}"`);
-    }
+  it("respects CODEX_HOME for detection and passes it into the child", async () => {
+    const customHome = join(sandbox, "isolated-codex");
+    vi.stubEnv("CODEX_HOME", customHome);
+    whichMock.mockResolvedValue("/usr/local/bin/codex");
+    expect((await codex.detect()).configPath).toBe(join(customHome, "config.toml"));
+    await codex.spawn!([], ROUTING);
+    expect(spawnSyncMock.mock.calls[0]![2].env.CODEX_HOME).toBe(customHome);
+    expect(existsSync(cfgPath)).toBe(false);
   });
 
-  it("configure preserves user content outside the sentinels", async () => {
-    const cfgDir = join(sandbox, ".codex");
-    const cfgPath = join(cfgDir, "config.toml");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(
-      cfgPath,
-      [
-        "# user customisation",
-        "[settings]",
-        'theme = "dark"',
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+  it("needs no persistent configuration to configure or launch", async () => {
     await codex.configure({});
-    const text = readFileSync(cfgPath, "utf8");
-    expect(text).toContain("# user customisation");
-    expect(text).toContain("[settings]");
-    expect(text).toContain('theme = "dark"');
-    expect(text).toContain("[model_providers.opper]");
+    await codex.spawn!([], ROUTING);
+    expect(existsSync(cfgPath)).toBe(false);
   });
 
-  it("configure is idempotent — re-running replaces the previous block", async () => {
-    await codex.configure({});
-    const first = readFileSync(join(sandbox, ".codex", "config.toml"), "utf8");
-    await codex.configure({});
-    const second = readFileSync(join(sandbox, ".codex", "config.toml"), "utf8");
-    // Sentinels appear exactly once each.
-    expect((second.match(/# >>> opper-cli >>>/g) ?? []).length).toBe(1);
-    expect((second.match(/# <<< opper-cli <<</g) ?? []).length).toBe(1);
-    expect(second).toBe(first);
+  it("launches current Codex without legacy profiles and honors the selected model", async () => {
+    await codex.spawn!(["exec", "hello"], ROUTING);
+    expect(spawnSyncMock.mock.calls[0]![0]).toBe("codex");
+    const args = spawnedArgs();
+    expect(args).not.toContain("--profile");
+    expect(args.slice(-4)).toEqual(["--model", "claude-sonnet-5", "exec", "hello"]);
+    expect(args).toContain('model_provider="opper-cli"');
+    expect(args.find((a) => a.startsWith("model_providers.opper-cli="))).toContain(`base_url = "${SESSION_URL}"`);
+    expect(args.join(" ")).toContain('wire_api = "responses"');
+    expect(args.join(" ")).toContain('env_key = "OPPER_API_KEY"');
+    expect(args.join(" ")).toContain("requires_openai_auth = false");
+    expect(args.join(" ")).not.toContain(ROUTING.apiKey);
   });
 
-  it("unconfigure removes the opper block but keeps user content", async () => {
-    const cfgDir = join(sandbox, ".codex");
-    const cfgPath = join(cfgDir, "config.toml");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(cfgPath, '[settings]\ntheme = "dark"\n', "utf8");
+  it("injects the selected credential only into the child", async () => {
+    vi.stubEnv("OPPER_API_KEY", "op_test_parent");
+    await codex.spawn!([], ROUTING);
+    expect(spawnSyncMock.mock.calls[0]![2].env.OPPER_API_KEY).toBe(ROUTING.apiKey);
+    expect(process.env.OPPER_API_KEY).toBe("op_test_parent");
+  });
+
+  it("disables unsupported cached web search only for this invocation", async () => {
+    const before = 'web_search = "cached"\n' + DESKTOP;
+    writeConfig(before);
+    await codex.spawn!(["exec", "hello"], ROUTING);
+    expect(spawnedArgs()).toContain('web_search="disabled"');
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it.each([
+    ["--model", "gpt-5.5"],
+    ["--model=gpt-5.5"],
+    ["-m", "gpt-5.5"],
+    ["-mgpt-5.5"],
+    ["--profile", "work"],
+    ["--profile=work"],
+    ["-p", "work"],
+    ["-pwork"],
+    ["-c", 'model="gpt-5.5"'],
+    ["--config=model=\"gpt-5.5\""],
+  ])("preserves explicit native model/profile selection: %j", async (...args: string[]) => {
+    await codex.spawn!(args, ROUTING);
+    expect(spawnedArgs().slice(-args.length)).toEqual(args);
+    expect(spawnedArgs()).not.toContain(ROUTING.model);
+    expect(spawnedArgs()).toContain('model_provider="opper-cli"');
+  });
+
+  it("does not treat prompt text after -- as model flags", async () => {
+    await codex.spawn!(["exec", "--", "--model"], ROUTING);
+    expect(spawnedArgs()).toContain(ROUTING.model);
+  });
+
+  it.each([0, 17])("leaves desktop defaults and legacy profiles unchanged during and after exit %d", async (exitCode) => {
+    const before = DESKTOP + LEGACY;
+    writeConfig(before);
     await codex.configure({});
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+    spawnSyncMock.mockImplementation(() => {
+      expect(readFileSync(cfgPath, "utf8")).toBe(before);
+      return { status: exitCode };
+    });
+    expect(await codex.spawn!([], ROUTING)).toBe(exitCode);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("preserves concurrent configuration edits without a restore overwrite", async () => {
+    writeConfig(DESKTOP + LEGACY);
+    spawnSyncMock.mockImplementation(() => {
+      writeFileSync(cfgPath, DESKTOP.replace("gpt-5.5", "gpt-5.6") + LEGACY);
+      return { status: 0 };
+    });
+    await codex.spawn!([], ROUTING);
+    expect(readFileSync(cfgPath, "utf8")).toBe(DESKTOP.replace("gpt-5.5", "gpt-5.6") + LEGACY);
+  });
+
+  it("keeps configuration intact if the child cannot spawn", async () => {
+    writeConfig(DESKTOP);
+    spawnSyncMock.mockReturnValue({ status: null, error: new Error("spawn failed") });
+    expect(await codex.spawn!([], ROUTING)).toBe(-1);
+    expect(readFileSync(cfgPath, "utf8")).toBe(DESKTOP);
+  });
+
+  it("removes only the old managed CLI block without changing desktop settings", async () => {
+    writeConfig(DESKTOP + LEGACY + '# User note\n');
     await codex.unconfigure();
-    const text = readFileSync(cfgPath, "utf8");
-    expect(text).not.toContain("# >>> opper-cli >>>");
-    expect(text).not.toContain("[model_providers.opper]");
-    expect(text).toContain("[settings]");
-    expect(text).toContain('theme = "dark"');
+    expect(readFileSync(cfgPath, "utf8")).toBe(DESKTOP + '# User note\n');
+    await codex.unconfigure();
+    expect(readFileSync(cfgPath, "utf8")).toBe(DESKTOP + '# User note\n');
   });
 
-  it("install runs `npm i -g @openai/codex` and resolves on exit 0", async () => {
+  it("removes legacy settings only from the selected CODEX_HOME", async () => {
+    writeConfig(DESKTOP + LEGACY);
+    const customHome = join(sandbox, "isolated-codex");
+    mkdirSync(customHome);
+    const otherPath = join(customHome, "config.toml");
+    writeFileSync(otherPath, LEGACY);
+    vi.stubEnv("CODEX_HOME", customHome);
+    await codex.unconfigure();
+    expect(readFileSync(otherPath, "utf8")).toBe("");
+    expect(readFileSync(cfgPath, "utf8")).toBe(DESKTOP + LEGACY);
+  });
+
+  it.each([
+    '# >>> opper-cli >>>\n# incomplete\n' + DESKTOP,
+    '# >>> opper-cli >>>\n' + DESKTOP + LEGACY,
+    LEGACY.replace("# <<< opper-cli <<<", '[settings]\ntheme="dark"\n# <<< opper-cli <<<'),
+    LEGACY.replace('env_key = "OPPER_API_KEY"', 'env_key = "MY_KEY"'),
+  ])("preserves ambiguous legacy configuration on remove", async (text) => {
+    writeConfig(text);
+    await codex.unconfigure();
+    expect(readFileSync(cfgPath, "utf8")).toBe(text);
+  });
+
+  it("does not create configuration on remove when absent", async () => {
+    await codex.unconfigure();
+    expect(existsSync(cfgPath)).toBe(false);
+  });
+
+  it("installs the Codex CLI through npm", async () => {
     whichMock.mockResolvedValue("/usr/bin/npm");
     runMock.mockReturnValue({ code: 0, stdout: "", stderr: "" });
-    await expect(codex.install!()).resolves.toBeUndefined();
-    const [cmd, args, options] = runMock.mock.calls[0]!;
-    expect(cmd).toMatch(/^npm(\.cmd)?$/);
-    expect(args).toEqual(["install", "-g", "@openai/codex"]);
-    expect(options).toMatchObject({ inherit: true });
+    await codex.install!();
+    expect(runMock.mock.calls[0]![1]).toEqual(["install", "-g", "@openai/codex"]);
   });
 
-  it("install throws AGENT_NOT_FOUND when npm exits non-zero", async () => {
+  it("reports failed installation", async () => {
     whichMock.mockResolvedValue("/usr/bin/npm");
     runMock.mockReturnValue({ code: 1, stdout: "", stderr: "boom" });
-    await expect(codex.install!()).rejects.toMatchObject({
-      code: "AGENT_NOT_FOUND",
-    });
-  });
-
-  it("spawn injects OPPER_API_KEY and prepends --profile opper-opus when no profile is set", async () => {
-    // The session URL from routing.baseUrl is written into the config.toml
-    // managed block during spawn — that's how Codex picks up the per-launch
-    // session. Capture the file mid-run since we restore on exit.
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    let midRunCfg = "";
-    spawnSyncMock.mockImplementation(() => {
-      midRunCfg = readFileSync(cfgPath, "utf8");
-      return { status: 0 };
-    });
-    const code = await codex.spawn!(["chat"], {
-      baseUrl: SESSION_URL,
-      apiKey: "op_live_run",
-      model: "claude-opus-4-7",
-      compatShape: "openai",
-    });
-    expect(code).toBe(0);
-
-    const call = spawnSyncMock.mock.calls[0]!;
-    expect(call[0]).toBe("codex");
-    expect(call[1]).toEqual(["--profile", "opper-opus", "chat"]);
-    const init = call[2] as { env: NodeJS.ProcessEnv };
-    expect(init.env.OPPER_API_KEY).toBe("op_live_run");
-
-    expect(midRunCfg).toContain(`base_url = "${SESSION_URL}"`);
-    expect(midRunCfg).not.toContain('base_url = "https://api.opper.ai/v3/compat"');
-  });
-
-  it("spawn does not add --profile when the user already passed one", async () => {
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await codex.spawn!(["--profile", "opper-sonnet", "chat"], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-    const call = spawnSyncMock.mock.calls[0]!;
-    expect(call[1]).toEqual(["--profile", "opper-sonnet", "chat"]);
-  });
-
-  it("spawn propagates non-zero exit codes", async () => {
-    spawnSyncMock.mockReturnValue({ status: 2 });
-    const code = await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-    expect(code).toBe(2);
-  });
-
-  it("spawn restores the pre-launch config so direct `codex` runs don't inherit the session URL", async () => {
-    // User has run `opper agents add codex` previously — config has the
-    // default compat URL baked in. When `opper launch` runs we rewrite
-    // base_url to the session URL during the run, but afterwards it must
-    // be back to what the user had.
-    await codex.configure({});
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    const before = readFileSync(cfgPath, "utf8");
-    expect(before).toContain('base_url = "https://api.opper.ai/v3/compat"');
-
-    spawnSyncMock.mockImplementation(() => {
-      // Mid-run the session URL is active — that's how Codex picks it up.
-      const mid = readFileSync(cfgPath, "utf8");
-      expect(mid).toContain(`base_url = "${SESSION_URL}"`);
-      return { status: 0 };
-    });
-    await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-
-    expect(readFileSync(cfgPath, "utf8")).toBe(before);
-  });
-
-  it("spawn deletes the config it created when none existed before", async () => {
-    // User never configured codex through opper. `opper launch codex`
-    // shouldn't leave a config file behind.
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    expect(existsSync(cfgPath)).toBe(false);
-
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-
-    expect(existsSync(cfgPath)).toBe(false);
-  });
-
-  it("spawn restores the pre-launch config even if the agent exits non-zero", async () => {
-    await codex.configure({});
-    const cfgPath = join(sandbox, ".codex", "config.toml");
-    const before = readFileSync(cfgPath, "utf8");
-
-    spawnSyncMock.mockReturnValue({ status: 17 });
-    const code = await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-    expect(code).toBe(17);
-    expect(readFileSync(cfgPath, "utf8")).toBe(before);
-  });
-
-  it("spawn restore does not destroy user data when the pre-launch config has a stale unclosed sentinel marker", async () => {
-    // Repro for the malformed-config case: a partial manual edit left
-    // a `# >>> opper-cli >>>` opener with no matching closer. Without
-    // lastIndexOf-based strip, our restore would treat the stale opener
-    // and our newly-written closer as a single block and erase everything
-    // between them — including unrelated user content.
-    const cfgDir = join(sandbox, ".codex");
-    const cfgPath = join(cfgDir, "config.toml");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(
-      cfgPath,
-      "# >>> opper-cli >>>\n# unclosed leftover from a partial edit\n[settings]\ntheme = \"dark\"\n",
-      "utf8",
-    );
-    const before = readFileSync(cfgPath, "utf8");
-
-    spawnSyncMock.mockReturnValue({ status: 0 });
-    await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-
-    // The user's [settings] section MUST still be there.
-    const after = readFileSync(cfgPath, "utf8");
-    expect(after).toContain("[settings]");
-    expect(after).toContain('theme = "dark"');
-    // Our newly-written block has been removed (no SESSION_URL in the
-    // restored file). The stale unclosed opener stays in place — we
-    // never touched it.
-    expect(after).not.toContain(SESSION_URL);
-    // before may or may not equal after — the key invariant is that
-    // user content is preserved.
-    void before;
-  });
-
-  it("spawn restore preserves user edits outside the sentinel block made mid-spawn", async () => {
-    // Anything outside the SENTINEL_OPEN/CLOSE markers is the user's
-    // own config (theme, settings, etc.). The narrow restore must
-    // not clobber edits made there during the session.
-    const cfgDir = join(sandbox, ".codex");
-    const cfgPath = join(cfgDir, "config.toml");
-    mkdirSync(cfgDir, { recursive: true });
-    writeFileSync(cfgPath, "[settings]\ntheme = \"dark\"\n", "utf8");
-    await codex.configure({});
-
-    spawnSyncMock.mockImplementation(() => {
-      // Simulate the user editing the [settings] block mid-session.
-      const cur = readFileSync(cfgPath, "utf8");
-      writeFileSync(cfgPath, cur.replace('theme = "dark"', 'theme = "light"'), "utf8");
-      return { status: 0 };
-    });
-
-    await codex.spawn!([], {
-      baseUrl: SESSION_URL,
-      apiKey: "k",
-      model: "m",
-      compatShape: "openai",
-    });
-
-    const after = readFileSync(cfgPath, "utf8");
-    expect(after).toContain('theme = "light"'); // sibling edit survived
-    expect(after).toContain('base_url = "https://api.opper.ai/v3/compat"'); // our block reverted
-    expect(after).not.toContain(SESSION_URL);
+    await expect(codex.install!()).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
   });
 });

@@ -123,6 +123,8 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
         case "configure": {
           const slot = await getSlot(opts.key);
           await adapter.configure({
+            keyName: opts.key,
+            baseUrl: process.env.OPPER_BASE_URL ?? slot?.baseUrl ?? "https://api.opper.ai",
             ...(slot?.apiKey ? { apiKey: slot.apiKey } : {}),
           });
           log.success(`${adapter.displayName} configured.`);
