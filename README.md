@@ -88,6 +88,17 @@ For OpenCode, each launch fetches `/v3/compat/models` using the same key and API
 
 If the allowed list is empty, OpenCode has no Opper models to select. If the authenticated catalog request fails, launch stops before changing configuration; it does not substitute the bundled catalog. `opper editors opencode` also writes a whitelist when it fetches models; use `--overwrite` to refresh an existing Opper provider block.
 
+For Claude Code, use version **2.1.257 or later**. `opper launch claude` starts on Opus 5 and enables gateway model discovery, adding the Claude models available to your Opper key to Claude Code's `/model` picker. Claude Code keeps its built-in choices and filters discovered IDs to those containing `claude` or `anthropic`; Opper enforces model access on each request. Discovery refreshes at startup, so restart after changing your Opper model rules. If discovery fails, Claude Code can fall back to its cached or built-in list. Nonessential traffic stays disabled, which also disables Claude Code's automatic updates during these launches; update Claude Code separately before a demo.
+
+```bash
+opper launch claude --model claude-sonnet-5
+opper launch claude --model claude-fable-5-1
+# Request the full context window supported by these models:
+opper launch claude --model 'claude-opus-5[1m]'
+```
+
+The Opper routing and credential apply only to the launched process. Claude Code can still save model selections and its discovery cache; use the picker's session-only selection to keep your existing default. See [Claude Code's gateway compatibility guide](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery) for discovery and client-version behavior.
+
 To remove an agent's Opper integration without uninstalling the agent itself:
 
 ```bash

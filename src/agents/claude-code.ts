@@ -10,8 +10,8 @@ import type {
 
 // Claude Code reads ANTHROPIC_BASE_URL and appends `/v1/messages` for
 // inference and `/v1/models` for the /model picker. Opper's compat
-// endpoint at `/v3/compat` serves both, so the picker auto-populates
-// with Opper's catalogue.
+// and session endpoints serve both. Gateway model discovery must be
+// explicitly enabled for Claude Code to populate the picker.
 
 const DOCS_URL = "https://docs.claude.com/en/docs/claude-code/setup";
 const INSTALL_HINT = `Install via \`npm i -g @anthropic-ai/claude-code\` or see ${DOCS_URL}`;
@@ -45,13 +45,14 @@ async function unconfigure(): Promise<void> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // ANTHROPIC_MODEL pins the initial active selection; the picker pulls
-  // the rest from `${ANTHROPIC_BASE_URL}/v1/models`.
+  // ANTHROPIC_MODEL pins the initial active selection; opt in to fetching
+  // the picker models from the same authenticated Opper session endpoint.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ANTHROPIC_BASE_URL: routing.baseUrl,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
     ANTHROPIC_MODEL: routing.model,
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
     // Suppress telemetry/auto-update/error-report calls that Claude Code
     // would otherwise send to api.anthropic.com directly. Users routing
     // through Opper typically have no Anthropic key, so those calls fail
