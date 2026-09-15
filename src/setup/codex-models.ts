@@ -11,9 +11,24 @@ const compatModelSchema = z.object({
   opper: z.object({
     kind: z.enum(["model", "pool", "dynamic_route"]).optional(),
     type: z.string().optional(),
+    members: z.array(z.string().min(1)).optional(),
     capabilities: z.array(z.string()).optional(),
   }).optional(),
 });
+
+const modelMetadataSchema = z.object({
+  id: z.string().min(1),
+  params: z.object({
+    reasoning: z.object({
+      supported: z.array(z.string()),
+      default: z.string().optional(),
+    }).nullish(),
+  }).nullish(),
+});
+
+export type CodexModelMetadata = z.infer<typeof modelMetadataSchema>;
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+type ReasoningEffort = typeof REASONING_EFFORTS[number];
 
 export type CodexCompatModel = z.infer<typeof compatModelSchema>;
 
@@ -22,7 +37,9 @@ export interface CodexModel {
   slug: string;
   display_name: string;
   description: string;
-  supported_reasoning_levels: [];
+  supported_reasoning_levels: { effort: ReasoningEffort; description: string }[];
+  default_reasoning_level?: ReasoningEffort;
+  supports_reasoning_summaries: boolean;
   shell_type: "shell_command";
   visibility: "list";
   supported_in_api: true;
@@ -49,6 +66,32 @@ const BASE_INSTRUCTIONS = "You are a coding assistant working with the user in a
 
 const FALLBACK_CONTEXT = 32_000;
 
+function reasoningFor(entry: CodexCompatModel, metadata: Map<string, CodexModelMetadata>) {
+  const ids = entry.opper?.kind === "pool"
+    ? entry.opper.members ?? []
+    : entry.opper?.kind === "dynamic_route" ? [] : [entry.id];
+  const members = ids.map((id) => metadata.get(id)?.params?.reasoning);
+  // A pool can land on any permitted member. Unknown metadata must therefore
+  // remove choices, even when other members advertise reasoning capabilities.
+  const efforts = members.length === 0 ? [] : REASONING_EFFORTS.filter((effort) =>
+    members.every((member) => member?.supported.includes(effort)),
+  );
+  const commonDefault = members[0]?.default;
+  const defaultEffort = efforts.find((effort) => effort === commonDefault &&
+    members.every((member) => member?.default === commonDefault)) ??
+    efforts.find((effort) => effort === "medium") ?? efforts[0];
+  return {
+    supported_reasoning_levels: efforts.map((effort) => ({
+      effort,
+      description: effort === "none" ? "Disable reasoning" : `${effort[0]!.toUpperCase()}${effort.slice(1)} reasoning effort`,
+    })),
+    ...(defaultEffort ? { default_reasoning_level: defaultEffort } : {}),
+    // Some Codex versions use this flag when constructing reasoning options.
+    // Keep summary generation opted out with default_reasoning_summary: "none".
+    supports_reasoning_summaries: efforts.length > 0,
+  };
+}
+
 /**
  * Only advertise models with confirmed tool support: Codex requires tools for
  * ordinary coding work. A route with unknown capabilities is not sufficient
@@ -57,7 +100,9 @@ const FALLBACK_CONTEXT = 32_000;
 export function toCodexModelCatalog(
   entries: CodexCompatModel[],
   selectedModel: string,
+  modelMetadata: CodexModelMetadata[] = [],
 ): CodexModelCatalog {
+  const metadata = new Map(modelMetadata.map((entry) => [entry.id, entry]));
   const usable = entries.filter((entry) =>
     (entry.opper?.type === "llm" || entry.opper?.kind === "dynamic_route") &&
     entry.opper.capabilities?.includes("tools"),
@@ -88,9 +133,7 @@ export function toCodexModelCatalog(
         slug: entry.id,
         display_name: entry.display_name || entry.name || displayName(entry.id),
         description: `Via Opper · ${entry.id}`,
-        // The gateway's "reasoning" capability doesn't specify effort levels or
-        // Responses reasoning-summary support. Do not invent either for Codex.
-        supported_reasoning_levels: [],
+        ...reasoningFor(entry, metadata),
         shell_type: "shell_command",
         visibility: "list",
         supported_in_api: true,
@@ -117,10 +160,18 @@ export async function fetchCodexModelCatalog(
   context: OpperApiConfig,
   selectedModel: string,
 ): Promise<CodexModelCatalog> {
-  const response = await new OpperApi(context).get<unknown>("/v3/compat/models");
+  const api = new OpperApi(context);
+  const response = await api.get<unknown>("/v3/compat/models");
   const parsed = z.object({ data: z.array(compatModelSchema) }).safeParse(response);
   if (!parsed.success) {
     throw new OpperError("API_ERROR", "Opper returned an invalid model catalog.");
   }
-  return toCodexModelCatalog(parsed.data.data, selectedModel);
+  // The gateway explicitly supports limit=0 for the complete catalog. This
+  // adds effort metadata only; the compat catalog remains the ID authority.
+  const metadataResponse = await api.get<unknown>("/v3/models?limit=0");
+  const metadata = z.object({ models: z.array(modelMetadataSchema) }).safeParse(metadataResponse);
+  if (!metadata.success) {
+    throw new OpperError("API_ERROR", "Opper returned invalid model reasoning metadata.");
+  }
+  return toCodexModelCatalog(parsed.data.data, selectedModel, metadata.data.models);
 }
