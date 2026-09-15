@@ -128,6 +128,8 @@ If the app is already running, the CLI saves the configuration and reports that 
 
 Setup refreshes the model picker from the selected key's authorized, tool-capable Opper catalog, using the same API root as inference. Run the launch or configure command again to refresh the catalog or change keys/models. Models without confirmed tool support are excluded.
 
+The effort slider uses each model's advertised reasoning levels. Pools offer only levels supported by every permitted member; models or pools without confirmed effort metadata keep the slider disabled. Rerun configure and restart the app to refresh an existing installation's effort choices.
+
 Codex's built-in web search is disabled while this integration is enabled: its default cached-only search relies on an OpenAI service that Opper cannot reproduce across model providers. The previous search setting is restored when removing the integration. File tools and sub-agents remain enabled.
 
 With the default `~/.codex` home, the app reads the selected slot through a local credential helper, so it also works when opened from Finder. The API key stays in the Opper credential store. Rotating that slot's key is picked up when Codex refreshes credentials; deleting the slot stops future credential retrieval. If the slot's API host changes, rerun setup before using it.
