@@ -6,6 +6,7 @@ import { parseJsoncObject } from "../util/jsonc.js";
 import { OpperError } from "../errors.js";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
+import { configureOpenCodeMcp } from "./opencode-mcp.js";
 
 export interface ProjectConfigState {
   exists: boolean;
@@ -44,12 +45,23 @@ export interface ConfigureOpenCodeOptions {
    * handled before calling the config writer.
    */
   models?: Record<string, unknown>;
+  /** Add only the account-management MCP, preserving inference settings. */
+  mcp?: boolean;
+  /** Optional MCP development/staging endpoint; requires explicit mcp=true. */
+  mcpUrl?: string;
+  /** Optional explicit OAuth restriction; default setup discovers permissions from Opper. */
+  mcpScopes?: string;
 }
 
 export interface ConfigureOpenCodeResult {
   path: string;
   wrote: boolean;
   reason?: "exists";
+  mcpName?: string;
+  mcpEnabled?: boolean;
+  mcpOAuthEnabled?: boolean;
+  mcpScopes?: string;
+  backupPath?: string;
 }
 
 // NOTE: OpenCode's template uses `{env:OPPER_API_KEY}` placeholders so the
@@ -63,6 +75,10 @@ export interface ConfigureOpenCodeResult {
 export async function configureOpenCode(
   opts: ConfigureOpenCodeOptions,
 ): Promise<ConfigureOpenCodeResult> {
+  if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
+    throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
+  }
+  if (opts.mcp) return configureOpenCodeMcp(opts.location, opts.mcpUrl, opts.mcpScopes);
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
@@ -96,7 +112,11 @@ export async function configureOpenCode(
       );
     }
 
-    if (existing && typeof existing === "object") {
+    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+      if (existing.provider !== undefined &&
+        (!existing.provider || typeof existing.provider !== "object" || Array.isArray(existing.provider))) {
+        throw new OpperError("AGENT_CONFIG_CONFLICT", `Invalid provider settings in ${path}; existing content was preserved.`);
+      }
       const providers =
         existing.provider && typeof existing.provider === "object"
           ? (existing.provider as Record<string, unknown>)
@@ -114,6 +134,7 @@ export async function configureOpenCode(
       await writeFile(path, merged, "utf8");
       return { path, wrote: true };
     }
+    throw new OpperError("AGENT_CONFIG_CONFLICT", `OpenCode config at ${path} must be an object; existing content was preserved.`);
   }
 
   await writeFile(path, serialised, "utf8");
