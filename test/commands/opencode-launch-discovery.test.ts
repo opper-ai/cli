@@ -48,6 +48,10 @@ describe("OpenCode launch model discovery", () => {
 
   beforeEach(() => {
     sandbox = mkdtempSync(join(tmpdir(), "opper-launch-discovery-"));
+    // Capture cleanup assertions must not observe other parallel suites.
+    vi.stubEnv("TMPDIR", sandbox);
+    vi.stubEnv("TEMP", sandbox);
+    vi.stubEnv("TMP", sandbox);
     previousCwd = process.cwd();
     const project = join(sandbox, "project");
     mkdirSync(project);
@@ -175,6 +179,7 @@ describe("OpenCode launch model discovery", () => {
       it.each([
         { status: 1, stdout: "secret config stdout", stderr: "secret config stderr" },
         { status: null, stdout: "", error: new Error("secret spawn error") },
+        { status: null, stdout: "secret partial config", error: Object.assign(new Error("secret timeout"), { code: "ETIMEDOUT" }) },
         { status: 0, stdout: "secret malformed config" },
       ])("fails closed without leaking output when effective configuration cannot be inspected: %j", async (result) => {
         await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost });
@@ -202,6 +207,7 @@ describe("OpenCode launch model discovery", () => {
         let descriptor: number | undefined;
         spawnSyncMock.mockImplementation((command, args, opts) => {
           if (command === "opencode" && args[0] === "debug") {
+            expect(opts.timeout).toBe(30_000);
             descriptor = opts.stdio[1];
             expect(typeof descriptor).toBe("number");
             expect(fstatSync(descriptor!).mode & 0o777).toBe(0o600);
@@ -211,6 +217,24 @@ describe("OpenCode launch model discovery", () => {
         await launchAndCheck(selectedHost);
         expect(() => fstatSync(descriptor!)).toThrow();
         expect(readdirSync(tmpdir()).filter((name) => name.startsWith("opper-opencode-inspect-"))).toEqual(before);
+      });
+
+      it("rejects an Authorization header beyond the first 64 KB of configuration", async () => {
+        await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost });
+        preflightResult = { status: 0, stdout: JSON.stringify({
+          padding: "x".repeat(500_000),
+          provider: { opper: { models: {
+            "allowed/selected-model": { options: { headers: { AUTHORIZATION: "secret conflicting credential" } } },
+          } } },
+        }) };
+        const originalBytes = readFileSync(configPath, "utf8");
+        await expect(launchCommand({ agent: "opencode", key: "team", configScope: scope })).rejects.toMatchObject({
+          code: "AGENT_CONFIG_CONFLICT",
+          message: expect.stringContaining("contains an Authorization header"),
+        });
+        expect(child).toBeUndefined();
+        expect(readFileSync(configPath, "utf8")).toBe(originalBytes);
+        expect(readdirSync(tmpdir()).filter((name) => name.startsWith("opper-opencode-inspect-"))).toEqual([]);
       });
 
       it("discovers with the selected key and host instead of the default slot", async () => {
