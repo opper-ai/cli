@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { writeFile } from "node:fs/promises";
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
 import { deleteJsoncProperty, parseJsoncObject } from "../util/jsonc.js";
@@ -183,18 +185,24 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
  */
 function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv): void {
   let config: Record<string, unknown>;
+  let directory: string | undefined;
+  let output: number | undefined;
   try {
+    // OpenCode can exit before buffered pipe output has drained. A regular
+    // file captures large catalogs completely; debug output may contain keys.
+    directory = mkdtempSync(join(tmpdir(), "opper-opencode-inspect-"));
+    const path = join(directory, "config.json");
+    output = openSync(path, "wx", 0o600);
     const result = spawnSync("opencode", ["debug", "config"], {
       env,
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", output, "ignore"],
       timeout: 30_000,
-      maxBuffer: 16 * 1024 * 1024,
     });
-    if (result.error || result.status !== 0 || typeof result.stdout !== "string") {
+    if (result.error || result.status !== 0) {
       throw new Error("Configuration inspection failed");
     }
-    config = parseJsoncObject(result.stdout);
+    config = parseJsoncObject(readFileSync(path, "utf8"));
   } catch {
     // Debug output can contain credentials. Never include it (or subprocess
     // errors) in the user-facing failure.
@@ -203,6 +211,12 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
       "Could not inspect OpenCode's effective configuration before launch.",
       "Run `opencode debug config` locally to diagnose the configuration, then retry.",
     );
+  } finally {
+    try {
+      if (output !== undefined) closeSync(output);
+    } finally {
+      if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
+    }
   }
   const record = (value: unknown): Record<string, unknown> | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value)

@@ -37,7 +37,11 @@ vi.mock("node:child_process", async () => {
   );
   return { ...actual, spawnSync: (...args: any[]) =>
     args[0] === "opencode" && args[1]?.[0] === "debug" && args[1]?.[1] === "config"
-      ? debugConfigMock(...args) : spawnSyncMock(...args) };
+      ? (() => {
+          const result = debugConfigMock(...args);
+          if (typeof args[2]?.stdio?.[1] === "number") writeFileSync(args[2].stdio[1], result.stdout ?? "");
+          return result;
+        })() : spawnSyncMock(...args) };
 });
 
 const { opencode } = await import("../../src/agents/opencode.js");
