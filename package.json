@@ -1,6 +1,6 @@
 {
   "name": "@opperai/cli",
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "The official Opper CLI — authenticate, route agent inference, and manage the Opper platform",
   "type": "module",
   "bin": {
@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.0",
+    "@modelcontextprotocol/client": "2.0.0",
     "@opperai/agents": "^0.8.0",
     "@opperai/login": "^0.4.0",
     "commander": "^12.1.0",
