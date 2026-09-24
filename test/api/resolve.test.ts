@@ -40,6 +40,13 @@ describe("resolveApiContext", () => {
     expect(ctx.apiKey).toBe("op_live_env");
   });
 
+  it("rejects an expired slot but permits an independent environment key", async () => {
+    await setSlot("default", { apiKey: "op_live_old", expiresAt: "2020-01-01T00:00:00Z" });
+    await expect(resolveApiContext("default")).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+    process.env.OPPER_API_KEY = "op_live_env";
+    expect((await resolveApiContext("default")).apiKey).toBe("op_live_env");
+  });
+
   it("OPPER_BASE_URL overrides the slot's baseUrl", async () => {
     await setSlot("default", { apiKey: "k", baseUrl: "https://slot" });
     process.env.OPPER_BASE_URL = "https://env";

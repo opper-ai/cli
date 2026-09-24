@@ -1,6 +1,7 @@
 import { intro, outro, note, spinner, log, isCancel, cancel } from "@clack/prompts";
 import { runDeviceFlow } from "../auth/device-flow.js";
-import { getSlot, setSlot } from "../auth/config.js";
+import { getSlot, isSlotExpired, setSlot } from "../auth/config.js";
+import { OpperError } from "../errors.js";
 import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
@@ -10,11 +11,13 @@ export interface LoginOptions {
   key: string;
   baseUrl?: string;
   force?: boolean;
+  renew?: boolean;
   /** Override legacy file path (for tests). */
   legacyPath?: string;
 }
 
 export async function loginCommand(opts: LoginOptions): Promise<void> {
+  let existing = await getSlot(opts.key);
   if (!opts.force) {
     const migrated = await maybeMigrateLegacyConfig(
       opts.legacyPath ?? legacyConfigPath(),
@@ -24,13 +27,15 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
         "Migrated legacy ~/.oppercli into ~/.opper/config.json (one-time).",
       );
     }
-    const existing = await getSlot(opts.key);
-    if (existing) {
+    existing = await getSlot(opts.key);
+    if (existing && !opts.renew && !isSlotExpired(existing)) {
       const who = existing.user ? ` as ${existing.user.email}` : "";
-      log.success(`Already signed in${who}. Use --force to re-authenticate.`);
+      log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
       return;
     }
   }
+
+  const renew = Boolean(opts.renew || (existing && isSlotExpired(existing)));
 
   intro(brand.accent("Sign in to Opper"));
 
@@ -40,6 +45,8 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
   try {
     const slot = await runDeviceFlow({
       ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+      ...(renew ? { renew: true } : {}),
+      ...(renew && existing?.credentialId ? { currentCredentialId: existing.credentialId } : {}),
       onPrompt(p) {
         const url = p.verificationUriComplete ?? p.verificationUri;
         note(
@@ -53,6 +60,14 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
         promptShown = true;
       },
     });
+
+    if (renew && existing && slot.apiKey === existing.apiKey) {
+      throw new OpperError(
+        "API_ERROR",
+        "The server returned the existing API key instead of a replacement.",
+        "The stored key was preserved. Check that credential renewal is enabled, then retry.",
+      );
+    }
 
     await setSlot(opts.key, slot);
     const who = slot.user ? slot.user.email : opts.key;

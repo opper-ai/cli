@@ -1,6 +1,6 @@
 import { getAdapter } from "../agents/registry.js";
 import { adapterSupportsModel, isLaunchable } from "../agents/types.js";
-import { getSlot } from "../auth/config.js";
+import { getSlot, isSlotExpired } from "../auth/config.js";
 import { loginCommand } from "./login.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
@@ -52,7 +52,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   }
 
   let slot = await getSlot(opts.key);
-  if (!slot) {
+  if (!slot || isSlotExpired(slot)) {
     await loginCommand({ key: opts.key });
     slot = await getSlot(opts.key);
     if (!slot) {
@@ -62,6 +62,13 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
         "Run `opper login` first.",
       );
     }
+  }
+  if (isSlotExpired(slot)) {
+    throw new OpperError(
+      "AUTH_EXPIRED",
+      `Stored API key for slot "${opts.key}" has expired.`,
+      "Run `opper login` to obtain a new credential.",
+    );
   }
 
   const detection = await adapter.detect();

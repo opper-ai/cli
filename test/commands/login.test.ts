@@ -80,6 +80,40 @@ describe("login", () => {
     expect(out.toLowerCase()).toContain("already");
   });
 
+  it("starts a new browser flow for an expired stored credential", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old", expiresAt: "2020-01-01T00:00:00Z" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_new",
+      expiresAt: "2030-01-01T00:00:00Z",
+      obtainedAt: "2026-09-24T11:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ renew: true, currentCredentialId: "key-old" }));
+    expect((await readConfig())?.keys.default?.apiKey).toBe("op_live_new");
+  });
+
+  it("renews an unexpired credential only with explicit --renew", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_new", credentialId: "key-new", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+
+    await loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ renew: true, currentCredentialId: "key-old" }));
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-new");
+  });
+
+  it("keeps the old slot if renewal returns the same key", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_old", credentialId: "key-old", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+
+    await expect(loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" })).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.apiKey).toBe("op_live_old");
+  });
+
   it("force flag re-runs the flow", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_old" });

@@ -32,4 +32,27 @@ describe("whoami", () => {
       code: "AUTH_REQUIRED",
     });
   });
+
+  it("shows the server-issued expiry and expired state", async () => {
+    await setSlot("default", {
+      apiKey: "op_live_expired",
+      credentialId: "key-123",
+      orgId: 42,
+      projectName: "Agent sandbox",
+      projectUuid: "project-uuid",
+      expiresAt: "2020-01-01T00:00:00Z",
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await whoamiCommand({ key: "default" });
+      const out = spy.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("2020-01-01T00:00:00Z");
+      expect(out).toContain("expired");
+      expect(out).toContain("42");
+      expect(out).toContain("key-123");
+      expect(out).toContain("Agent sandbox");
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

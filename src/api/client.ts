@@ -150,10 +150,13 @@ export class OpperApi {
 
   private async throwApiError(res: Response): Promise<never> {
     if (res.status === 401) {
+      const expired = res.headers.get("X-Opper-Error-Code") === "credential_expired";
       throw new OpperError(
         "AUTH_EXPIRED",
-        "API key was rejected by the server.",
-        "Run `opper login --force` to re-authenticate.",
+        expired ? "API key expired." : "API key was rejected by the server.",
+        expired
+          ? "Run `opper login --renew` to obtain a replacement credential."
+          : "Check account access or replace the stored key, then retry.",
       );
     }
     let body: ErrorBody | null = null;

@@ -5,10 +5,27 @@ import { configPath } from "./paths.js";
 
 export interface AuthSlot {
   apiKey: string;
+  /** Opaque server identifier for targeted renewal or revocation. */
+  credentialId?: string;
+  /** Organization that issued this personal credential. */
+  orgId?: number;
+  /** Project used for inference and budget attribution. */
+  projectId?: number;
+  projectUuid?: string;
+  projectName?: string;
+  /** Absolute server-issued expiry. Omitted for credentials without a lifetime. */
+  expiresAt?: string;
   baseUrl?: string;
   user?: { email: string; name: string };
   obtainedAt?: string;
   source?: "device-flow" | "manual" | "migrated";
+}
+
+export function isSlotExpired(slot: AuthSlot, now = Date.now()): boolean {
+  if (!slot.expiresAt) return false;
+  const expiry = Date.parse(slot.expiresAt);
+  // Invalid stored expiry metadata must not make a key appear valid forever.
+  return !Number.isFinite(expiry) || expiry <= now;
 }
 
 export interface Config {

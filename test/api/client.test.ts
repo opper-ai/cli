@@ -69,6 +69,19 @@ describe("OpperApi", () => {
     });
   });
 
+  it("gives a renewal instruction only for the server's explicit expiry code", async () => {
+    globalThis.fetch = vi.fn(async () => new Response("unauthorized", {
+      status: 401,
+      headers: { "X-Opper-Error-Code": "credential_expired" },
+    })) as unknown as typeof fetch;
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k" });
+    await expect(api.get("/v3/models")).rejects.toMatchObject({
+      code: "AUTH_EXPIRED",
+      message: expect.stringContaining("expired"),
+      hint: expect.stringContaining("opper login --renew"),
+    });
+  });
+
   it("maps other non-2xx to API_ERROR and extracts error.message when present", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response(
