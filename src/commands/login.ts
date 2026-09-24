@@ -70,6 +70,17 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
 
+    // Another login may have replaced this slot while browser approval was
+    // open. Do not overwrite that newer credential with this flow's result.
+    const current = await getSlot(opts.key);
+    if (current?.apiKey !== existing?.apiKey || current?.credentialId !== existing?.credentialId) {
+      throw new OpperError(
+        "API_ERROR",
+        "The stored credential changed while browser approval was in progress.",
+        "The newer stored key was preserved. Check `opper whoami` before retrying.",
+      );
+    }
+
     await setSlot(opts.key, slot);
     const who = slot.user ? slot.user.email : opts.key;
     if (promptShown) s.stop(`Signed in as ${who}`);

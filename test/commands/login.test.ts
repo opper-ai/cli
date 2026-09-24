@@ -126,6 +126,18 @@ describe("login", () => {
     expect((await readConfig())?.keys.default?.apiKey).toBe("op_live_old");
   });
 
+  it("preserves a newer local credential written during browser renewal", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockImplementation(async () => {
+      await setSlot("default", { apiKey: "op_live_newer", credentialId: "key-newer" });
+      return { apiKey: "op_live_result", credentialId: "key-result", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" };
+    });
+
+    await expect(loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" })).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-newer");
+  });
+
   it("force flag re-runs the flow", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_old" });
