@@ -36,6 +36,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
   }
 
   const renew = Boolean(opts.renew || (existing && isSlotExpired(existing)));
+  const baseUrl = opts.baseUrl ?? existing?.baseUrl;
 
   intro(brand.accent("Sign in to Opper"));
 
@@ -44,7 +45,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
 
   try {
     const slot = await runDeviceFlow({
-      ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
       ...(renew ? { renew: true } : {}),
       ...(renew && existing?.credentialId ? { currentCredentialId: existing.credentialId } : {}),
       onPrompt(p) {

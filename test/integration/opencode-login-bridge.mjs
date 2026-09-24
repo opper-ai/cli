@@ -10,8 +10,20 @@ import { dirname, join } from "node:path";
 
 const run = promisify(execFile);
 const home = await mkdtemp(join(tmpdir(), "opper-opencode-bridge-real-"));
+let inferenceCalls = 0;
 const server = createServer((request, response) => {
   const auth = request.headers.authorization;
+  if (request.url === "/v3/compat/chat/completions" && request.method === "POST" && auth === "Bearer synthetic-opper-key") {
+    inferenceCalls++;
+    request.resume();
+    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+    const chunk = (delta, finish_reason = null) => JSON.stringify({
+      id: "chatcmpl-synthetic", object: "chat.completion.chunk", created: 1,
+      model: "anthropic/claude-sonnet-test", choices: [{ index: 0, delta, finish_reason }],
+    });
+    response.end(`data: ${chunk({ role: "assistant" })}\n\ndata: ${chunk({ content: "Bridge inference OK" })}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`);
+    return;
+  }
   if (request.url !== "/v3/compat/models" || !["Bearer synthetic-opper-key", "Bearer synthetic-opper-renewed"].includes(auth)) {
     response.writeHead(403).end();
     return;
@@ -33,10 +45,10 @@ try {
   const env = {
     ...process.env,
     HOME: home,
-    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_CONFIG_HOME: join(home, "xdg-config"),
     XDG_CACHE_HOME: join(home, ".cache"),
     XDG_DATA_HOME: join(home, ".local", "share"),
-    OPPER_EDITOR_HOME: home,
+    OPPER_HOME: join(home, ".opper"),
   };
   delete env.OPPER_API_KEY;
   delete env.OPPER_BASE_URL;
@@ -48,7 +60,8 @@ try {
     keys: { default: { apiKey: "synthetic-opper-key", baseUrl: host } },
   }), { mode: 0o600 });
 
-  const openCodeConfig = join(home, ".config", "opencode", "opencode.json");
+  delete env.OPPER_EDITOR_HOME;
+  const openCodeConfig = join(env.XDG_CONFIG_HOME, "opencode", "opencode.json");
   await mkdir(dirname(openCodeConfig), { recursive: true });
   await writeFile(openCodeConfig, JSON.stringify({ "$schema": "https://opencode.ai/config.json", theme: "opencode" }));
 
@@ -69,6 +82,20 @@ try {
   assert.deepEqual(config.provider?.opper?.whitelist, ["anthropic/claude-sonnet-test"]);
   assert.equal(JSON.parse(await readFile(openCodeConfig, "utf8")).theme, "opencode");
 
+  // OpenCode's `run` can stall during runtime init in some local environments,
+  // even with an empty config. Keep the inference probe available for a host
+  // where `opencode run` itself is known to start.
+  if (process.env.OPPER_TEST_OPENCODE_INFERENCE === "1") {
+    try {
+      await run("opencode", ["run", "--print-logs", "--log-level", "DEBUG", "--model", "opper/anthropic/claude-sonnet-test", "Say hi"], {
+        cwd: home, env, timeout: 30000, maxBuffer: 4_000_000,
+      });
+    } catch (error) {
+      throw new Error(`OpenCode did not complete synthetic inference through the Opper bridge (calls=${inferenceCalls}, code=${error.code}, signal=${error.signal}): ${error.stderr || error.stdout || error.message}`);
+    }
+    assert.equal(inferenceCalls, 1);
+  }
+
   await writeFile(opperConfig, JSON.stringify({ version: 1, defaultKey: "default", keys: {
     default: { apiKey: "synthetic-opper-key", baseUrl: host, expiresAt: "2020-01-01T00:00:00Z" },
   } }), { mode: 0o600 });
@@ -80,7 +107,7 @@ try {
   const renewed = await debugConfig();
   assert.equal(renewed.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
   assert.deepEqual(renewed.provider?.opper?.whitelist, ["anthropic/claude-sonnet-renewed"]);
-  console.log("Real OpenCode loaded, rejected expired, and reloaded renewed CLI credentials with current models.");
+  console.log(`Real OpenCode loaded the CLI key, rejected expiry, and reloaded renewed credentials${inferenceCalls ? "; synthetic inference passed" : ""}.`);
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(home, { recursive: true, force: true });

@@ -105,6 +105,18 @@ describe("login", () => {
     expect((await readConfig())?.keys.default?.credentialId).toBe("key-new");
   });
 
+  it("renews against the stored slot host unless --base-url overrides it", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", baseUrl: "https://staging.example", expiresAt: "2020-01-01T00:00:00Z" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_new", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "https://staging.example", renew: true }));
+
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_newer", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+    await loginCommand({ key: "default", renew: true, baseUrl: "https://override.example", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "https://override.example", renew: true }));
+  });
+
   it("keeps the old slot if renewal returns the same key", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });

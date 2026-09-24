@@ -9,6 +9,7 @@ let oldHome: string | undefined;
 let oldKey: string | undefined;
 let oldBase: string | undefined;
 let oldSlot: string | undefined;
+let oldOpperHome: string | undefined;
 
 const catalog = (ids: string[]) => ({ data: ids.map((id) => ({
   id,
@@ -37,10 +38,12 @@ beforeEach(async () => {
   oldKey = process.env.OPPER_API_KEY;
   oldBase = process.env.OPPER_BASE_URL;
   oldSlot = process.env.OPPER_KEY_SLOT;
+  oldOpperHome = process.env.OPPER_HOME;
   process.env.OPPER_EDITOR_HOME = home;
   delete process.env.OPPER_API_KEY;
   delete process.env.OPPER_BASE_URL;
   delete process.env.OPPER_KEY_SLOT;
+  delete process.env.OPPER_HOME;
 });
 
 afterEach(async () => {
@@ -54,6 +57,8 @@ afterEach(async () => {
   else process.env.OPPER_BASE_URL = oldBase;
   if (oldSlot === undefined) delete process.env.OPPER_KEY_SLOT;
   else process.env.OPPER_KEY_SLOT = oldSlot;
+  if (oldOpperHome === undefined) delete process.env.OPPER_HOME;
+  else process.env.OPPER_HOME = oldOpperHome;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -105,8 +110,34 @@ describe("OpenCode login plugin", () => {
     vi.stubGlobal("fetch", fetchMock);
     const first = await run({ model: "opper/model/one" });
     expect(first.provider.opper.whitelist).toEqual(["model/one"]);
-    const second = await run({ model: "opper/model/one" });
+    const second = await run({ model: "opper/model/one", small_model: "opper/model/one" });
     expect(second.provider.opper.whitelist).toEqual(["model/two"]);
     expect(second.model).toBeUndefined();
+    expect(second.small_model).toBeUndefined();
+  });
+
+  it("reads the same OPPER_HOME override as the CLI", async () => {
+    process.env.OPPER_HOME = join(home, "custom-operator-home");
+    await mkdir(process.env.OPPER_HOME, { recursive: true });
+    await writeFile(join(process.env.OPPER_HOME, "config.json"), JSON.stringify({
+      version: 1, defaultKey: "default", keys: { default: { apiKey: "custom-home-key" } },
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) }));
+    expect((await run({})).provider.opper.options.apiKey).toBe("custom-home-key");
+  });
+
+  it("uses the CLI's literal default slot even when another slot was created first", async () => {
+    const directory = join(home, ".opper");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "config.json"), JSON.stringify({
+      version: 1, defaultKey: "staging", keys: {
+        staging: { apiKey: "staging-key" },
+        default: { apiKey: "production-key" },
+      },
+    }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) }));
+    expect((await run({})).provider.opper.options.apiKey).toBe("production-key");
+    process.env.OPPER_KEY_SLOT = "staging";
+    expect((await run({})).provider.opper.options.apiKey).toBe("staging-key");
   });
 });

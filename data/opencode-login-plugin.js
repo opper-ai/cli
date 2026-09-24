@@ -75,8 +75,10 @@ async function credential() {
   let slot;
   try {
     const root = process.env.OPPER_EDITOR_HOME || homedir();
-    const config = JSON.parse(await readFile(join(root, ".opper", "config.json"), "utf8"));
-    slot = config.keys?.[process.env.OPPER_KEY_SLOT || config.defaultKey || "default"];
+    const config = JSON.parse(await readFile(join(process.env.OPPER_HOME || join(root, ".opper"), "config.json"), "utf8"));
+    // The CLI's unqualified commands use the literal `default` slot, even if
+    // config.defaultKey points at the first (differently named) slot created.
+    slot = config.keys?.[process.env.OPPER_KEY_SLOT || "default"];
   } catch {
     // A missing or invalid CLI config is equivalent to no selected credential.
   }
@@ -134,5 +136,8 @@ export const OpperLoginPlugin = async () => ({
     const selected = typeof config.model === "string" && config.model.startsWith("opper/")
       ? config.model.slice("opper/".length) : undefined;
     if (selected && !(selected in models)) delete config.model;
+    const small = typeof config.small_model === "string" && config.small_model.startsWith("opper/")
+      ? config.small_model.slice("opper/".length) : undefined;
+    if (small && !(small in models)) delete config.small_model;
   },
 });
