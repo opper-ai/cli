@@ -18,17 +18,21 @@ const register: RegisterFn = (program) => {
 
   editors
     .command("opencode")
-    .description("Legacy OpenCode setup (MCP: use opper mcp add opencode)")
+    .description("Configure OpenCode inference (MCP: use opper mcp add opencode)")
     .option("--global", "write to ~/.config/opencode/opencode.json", true)
     .option("--local", "write to ./opencode.json in the current directory")
     .option("--overwrite", "replace an existing Opper provider if present")
+    .option("--login-bridge", "let plain OpenCode read the CLI login and refresh Opper models at startup")
+    .option("--remove-login-bridge", "remove the Opper-managed OpenCode login plugin")
     .option("--mcp", "compatibility alias for opper mcp add opencode; preserve inference settings")
     .option("--mcp-url <url>", "MCP endpoint override (requires --mcp; default https://api.opper.ai/mcp)")
     .option("--mcp-scopes <scopes>", "advanced: restrict available permissions to these space-separated OAuth scopes (requires --mcp)")
-    .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean; mcp?: boolean; mcpUrl?: string; mcpScopes?: string }) => {
+    .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean; loginBridge?: boolean; removeLoginBridge?: boolean; mcp?: boolean; mcpUrl?: string; mcpScopes?: string }) => {
       await editorsOpenCodeCommand({
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
+        ...(cmdOpts.loginBridge ? { loginBridge: true } : {}),
+        ...(cmdOpts.removeLoginBridge ? { removeLoginBridge: true } : {}),
         ...(cmdOpts.mcp ? { mcp: true } : {}),
         ...(cmdOpts.mcpUrl !== undefined ? { mcpUrl: cmdOpts.mcpUrl } : {}),
         ...(cmdOpts.mcpScopes !== undefined ? { mcpScopes: cmdOpts.mcpScopes } : {}),
