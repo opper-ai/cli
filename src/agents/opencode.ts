@@ -258,6 +258,7 @@ async function spawn(
   // overriding the catalog and credentials chosen for this launch.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    OPPER_CLI_LAUNCH_OPENCODE: "1",
     OPPER_API_KEY: routing.apiKey,
     OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
   };

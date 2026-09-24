@@ -241,6 +241,7 @@ describe("opencode adapter", () => {
     expect(call[1]).toEqual(["chat"]);
     const init = call[2] as { env: NodeJS.ProcessEnv };
     expect(init.env.OPPER_API_KEY).toBe("op_live_run");
+    expect(init.env.OPPER_CLI_LAUNCH_OPENCODE).toBe("1");
   });
 
   it("spawn writes the live catalogue, so every launch refreshes the model list", async () => {

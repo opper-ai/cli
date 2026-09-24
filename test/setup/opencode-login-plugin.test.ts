@@ -10,6 +10,7 @@ let oldKey: string | undefined;
 let oldBase: string | undefined;
 let oldSlot: string | undefined;
 let oldOpperHome: string | undefined;
+let oldLaunch: string | undefined;
 
 const catalog = (ids: string[]) => ({ data: ids.map((id) => ({
   id,
@@ -39,11 +40,13 @@ beforeEach(async () => {
   oldBase = process.env.OPPER_BASE_URL;
   oldSlot = process.env.OPPER_KEY_SLOT;
   oldOpperHome = process.env.OPPER_HOME;
+  oldLaunch = process.env.OPPER_CLI_LAUNCH_OPENCODE;
   process.env.OPPER_EDITOR_HOME = home;
   delete process.env.OPPER_API_KEY;
   delete process.env.OPPER_BASE_URL;
   delete process.env.OPPER_KEY_SLOT;
   delete process.env.OPPER_HOME;
+  delete process.env.OPPER_CLI_LAUNCH_OPENCODE;
 });
 
 afterEach(async () => {
@@ -59,6 +62,8 @@ afterEach(async () => {
   else process.env.OPPER_KEY_SLOT = oldSlot;
   if (oldOpperHome === undefined) delete process.env.OPPER_HOME;
   else process.env.OPPER_HOME = oldOpperHome;
+  if (oldLaunch === undefined) delete process.env.OPPER_CLI_LAUNCH_OPENCODE;
+  else process.env.OPPER_CLI_LAUNCH_OPENCODE = oldLaunch;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -84,6 +89,17 @@ describe("OpenCode login plugin", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) }));
     const config = await run({});
     expect(config.provider.opper.options).toEqual({ baseURL: "https://finnova.example/v3/compat", apiKey: "finnova-key" });
+  });
+
+  it("preserves the session route supplied by opper launch opencode", async () => {
+    await slot({ apiKey: "plain-key" });
+    process.env.OPPER_CLI_LAUNCH_OPENCODE = "1";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const launchConfig = { provider: { opper: { options: { baseURL: "https://api.opper.ai/v3/session/example", apiKey: "launch-key" } } } };
+    expect(await run(launchConfig)).toBe(launchConfig);
+    expect(launchConfig.provider.opper.options.apiKey).toBe("launch-key");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("removes Opper in memory when the key is missing or expired", async () => {

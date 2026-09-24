@@ -85,7 +85,7 @@ async function credential() {
   }
   if (!slot || typeof slot.apiKey !== "string" || !slot.apiKey) return;
   if (expired(slot.expiresAt)) {
-    console.warn("Opper credential expired. Run `opper login --renew` and restart OpenCode.");
+    console.warn("Opper credential expired. Renew the selected CLI slot with `opper --key <slot> login --renew` and restart OpenCode.");
     return;
   }
   return { apiKey: slot.apiKey, baseUrl: slot.baseUrl };
@@ -99,6 +99,10 @@ function removeOpper(config) {
 
 export const OpperLoginPlugin = async () => ({
   config: async (config) => {
+    // `opper launch opencode` provides a session URL and its selected key in
+    // OPENCODE_CONFIG_CONTENT. Its runtime route must take precedence over the
+    // persistent plain-OpenCode bridge.
+    if (process.env.OPPER_CLI_LAUNCH_OPENCODE === "1") return;
     const current = await credential();
     if (!current) {
       removeOpper(config);

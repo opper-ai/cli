@@ -119,7 +119,18 @@ try {
   env.OPPER_BASE_URL = "https://personal.example";
   const selected = await debugConfig();
   assert.equal(selected.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
-  console.log(`Real OpenCode loaded, expired, renewed, and selected the CLI credential slot${inferenceCalls ? "; synthetic inference passed" : ""}.`);
+
+  env.OPPER_CLI_LAUNCH_OPENCODE = "1";
+  env.OPPER_API_KEY = "synthetic-launch-key";
+  env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { opper: {
+    npm: "@ai-sdk/openai-compatible",
+    options: { baseURL: `${host}/v3/session/synthetic`, apiKey: "{env:OPPER_API_KEY}" },
+    models: { "anthropic/claude-sonnet-test": { name: "Synthetic", limit: { context: 200000, output: 8192 } } },
+  } } });
+  const launched = await debugConfig();
+  assert.equal(launched.provider?.opper?.options?.baseURL, `${host}/v3/session/synthetic`);
+  assert.equal(launched.provider?.opper?.options?.apiKey, "synthetic-launch-key");
+  console.log(`Real OpenCode loaded, expired, renewed, and selected the CLI credential slot; launch kept its session route${inferenceCalls ? "; synthetic inference passed" : ""}.`);
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(home, { recursive: true, force: true });
