@@ -1,4 +1,4 @@
-// Optional local integration check: exercises the installed bridge in real OpenCode.
+// Local integration check: exercises the installed bridge and synthetic inference in real OpenCode.
 // Run after `npm run build` with OpenCode on PATH. Uses only a synthetic key.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -9,6 +9,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const run = promisify(execFile);
+function runOpenCodeInference(args, options) {
+  return new Promise((resolve, reject) => {
+    const child = execFile("opencode", args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(Object.assign(error, { stdout, stderr }));
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+    // OpenCode reads piped stdin before starting a session. execFile otherwise
+    // leaves that pipe open until the child exits, so both processes wait.
+    child.stdin?.end();
+  });
+}
 const home = await mkdtemp(join(tmpdir(), "opper-opencode-bridge-real-"));
 let inferenceCalls = 0;
 const server = createServer((request, response) => {
@@ -82,19 +96,17 @@ try {
   assert.deepEqual(config.provider?.opper?.whitelist, ["anthropic/claude-sonnet-test"]);
   assert.equal(JSON.parse(await readFile(openCodeConfig, "utf8")).theme, "opencode");
 
-  // OpenCode's `run` can stall during runtime init in some local environments,
-  // even with an empty config. Keep the inference probe available for a host
-  // where `opencode run` itself is known to start.
-  if (process.env.OPPER_TEST_OPENCODE_INFERENCE === "1") {
-    try {
-      await run("opencode", ["run", "--print-logs", "--log-level", "DEBUG", "--model", "opper/anthropic/claude-sonnet-test", "Say hi"], {
-        cwd: home, env, timeout: 30000, maxBuffer: 4_000_000,
-      });
-    } catch (error) {
-      throw new Error(`OpenCode did not complete synthetic inference through the Opper bridge (calls=${inferenceCalls}, code=${error.code}, signal=${error.signal}): ${error.stderr || error.stdout || error.message}`);
-    }
-    assert.equal(inferenceCalls, 1);
+  try {
+    const result = await runOpenCodeInference(["run", "--print-logs", "--log-level", "DEBUG", "--model", "opper/anthropic/claude-sonnet-test", "Say hi"], {
+      cwd: home, env, timeout: 30000, maxBuffer: 4_000_000,
+    });
+    assert.match(result.stdout, /Bridge inference OK/);
+  } catch (error) {
+    throw new Error(`OpenCode did not complete synthetic inference through the Opper bridge (calls=${inferenceCalls}, code=${error.code}, signal=${error.signal}): ${error.stderr || error.stdout || error.message}`);
   }
+  // OpenCode may also call the model to title the session. Every counted call
+  // reached the mock compat endpoint with the synthetic bearer key.
+  assert.ok(inferenceCalls >= 1);
 
   await writeFile(opperConfig, JSON.stringify({ version: 1, defaultKey: "default", keys: {
     default: { apiKey: "synthetic-opper-key", baseUrl: host, expiresAt: "2020-01-01T00:00:00Z" },
@@ -130,7 +142,7 @@ try {
   const launched = await debugConfig();
   assert.equal(launched.provider?.opper?.options?.baseURL, `${host}/v3/session/synthetic`);
   assert.equal(launched.provider?.opper?.options?.apiKey, "synthetic-launch-key");
-  console.log(`Real OpenCode loaded, expired, renewed, and selected the CLI credential slot; launch kept its session route${inferenceCalls ? "; synthetic inference passed" : ""}.`);
+  console.log("Real OpenCode completed synthetic inference, loaded/expired/renewed the CLI credential slot, and kept the launch session route.");
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(home, { recursive: true, force: true });
