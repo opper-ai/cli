@@ -2,7 +2,7 @@ import { readFile, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse as parseYaml } from "yaml";
-import { writeConfig, type Config } from "./config.js";
+import { writeConfigIfAbsent, type Config } from "./config.js";
 import { configPath, legacyMigrationSentinelPath } from "./paths.js";
 
 interface LegacyFile {
@@ -56,9 +56,9 @@ export async function maybeMigrateLegacyConfig(legacyPath: string): Promise<bool
   const firstKey = Object.keys(slots)[0]!;
   const defaultKey = "default" in slots ? "default" : firstKey;
 
-  await writeConfig({ version: 1, defaultKey, keys: slots });
+  const wrote = await writeConfigIfAbsent({ version: 1, defaultKey, keys: slots });
   await stampSentinel(sentinel);
-  return true;
+  return wrote;
 }
 
 async function stampSentinel(path: string): Promise<void> {

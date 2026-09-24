@@ -138,6 +138,27 @@ describe("login", () => {
     expect((await readConfig())?.keys.default?.credentialId).toBe("key-newer");
   });
 
+  it("keeps the first completed login when two browser approvals overlap", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockClear();
+    let finishFirst!: (slot: { apiKey: string; credentialId: string }) => void;
+    let finishSecond!: (slot: { apiKey: string; credentialId: string }) => void;
+    vi.mocked(runDeviceFlow)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+
+    const first = loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    await vi.waitFor(() => expect(runDeviceFlow).toHaveBeenCalledTimes(1));
+    const second = loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    await vi.waitFor(() => expect(runDeviceFlow).toHaveBeenCalledTimes(2));
+    finishFirst({ apiKey: "op_live_first", credentialId: "key-first" });
+    await first;
+    finishSecond({ apiKey: "op_live_second", credentialId: "key-second" });
+    await expect(second).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-first");
+  });
+
   it("force flag re-runs the flow", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_old" });

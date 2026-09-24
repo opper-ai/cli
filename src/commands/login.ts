@@ -1,6 +1,6 @@
 import { intro, outro, note, spinner, log, isCancel, cancel } from "@clack/prompts";
 import { runDeviceFlow } from "../auth/device-flow.js";
-import { getSlot, isSlotExpired, setSlot } from "../auth/config.js";
+import { getSlot, isSlotExpired, replaceSlotIfUnchanged } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
@@ -70,10 +70,9 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
 
-    // Another login may have replaced this slot while browser approval was
-    // open. Do not overwrite that newer credential with this flow's result.
-    const current = await getSlot(opts.key);
-    if (current?.apiKey !== existing?.apiKey || current?.credentialId !== existing?.credentialId) {
+    // Browser approval can take minutes. Compare and write under one lock so
+    // another process's newer credential cannot be overwritten by this result.
+    if (!await replaceSlotIfUnchanged(opts.key, existing, slot)) {
       throw new OpperError(
         "API_ERROR",
         "The stored credential changed while browser approval was in progress.",
@@ -81,7 +80,6 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
 
-    await setSlot(opts.key, slot);
     const who = slot.user ? slot.user.email : opts.key;
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);
