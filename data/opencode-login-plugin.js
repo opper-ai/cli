@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 const FALLBACK_CONTEXT = 128_000;
 const FALLBACK_OUTPUT = 8_192;
+const DEFAULT_SLOT = "default";
 
 function expired(value) {
   if (!value) return false;
@@ -78,7 +79,7 @@ async function credential() {
     const config = JSON.parse(await readFile(join(process.env.OPPER_HOME || join(root, ".opper"), "config.json"), "utf8"));
     // The CLI's unqualified commands use the literal `default` slot, even if
     // config.defaultKey points at the first (differently named) slot created.
-    slot = config.keys?.[process.env.OPPER_KEY_SLOT || "default"];
+    slot = config.keys?.[process.env.OPPER_KEY_SLOT || DEFAULT_SLOT];
   } catch {
     // A missing or invalid CLI config is equivalent to no selected credential.
   }

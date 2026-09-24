@@ -35,6 +35,14 @@ describe("OpenCode login bridge setup", () => {
     await expect(readFile(result.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("binds the installed plugin to the selected CLI slot without storing a secret", async () => {
+    const result = await installOpenCodeLoginBridge("finnova");
+    const file = await readFile(result.path, "utf8");
+    expect(file).toContain('const DEFAULT_SLOT = "finnova";');
+    expect(file).toContain("process.env.OPPER_KEY_SLOT || DEFAULT_SLOT");
+    expect(file).not.toContain("op_live_");
+  });
+
   it("refuses to overwrite or remove a plugin file that the CLI does not own", async () => {
     const path = openCodeLoginBridgePath();
     await mkdir(dirname(path), { recursive: true });

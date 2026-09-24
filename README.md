@@ -269,13 +269,27 @@ opper editors opencode --login-bridge
 opencode
 ```
 
+If you already use Opper in another organization, choose a separate CLI slot
+while signing in and installing the bridge:
+
+```bash
+opper --key finnova login
+opper --key finnova editors opencode --login-bridge
+opencode
+```
+
+Select Finnova in the browser approval screen, then use
+`opper --key finnova whoami` to confirm the organization before starting
+OpenCode. Renew that slot with `opper --key finnova login --renew`.
+
 The bridge is a local OpenCode startup plugin at
 `~/.config/opencode/plugins/opper-login.js`. It reads the CLI's selected key
 from `~/.opper/config.json`, fetches that key's `/v3/compat/models` catalog on
 each OpenCode startup, and injects the Opper provider and allowed models in
 memory. It does not copy the key into `opencode.json` or rewrite other provider
-settings. The default CLI slot is used; set `OPPER_KEY_SLOT` before starting
-OpenCode to select another slot. `OPPER_API_KEY` and `OPPER_BASE_URL`, when set,
+settings. Setup binds the selected CLI slot to plain OpenCode; reinstall with
+another `--key` to switch it, or set `OPPER_KEY_SLOT` for one OpenCode process.
+`OPPER_API_KEY` and `OPPER_BASE_URL`, when set,
 override the stored credential and host. If the stored key is expired or the
 catalog cannot be fetched, Opper is unavailable in that OpenCode process;
 other providers stay available. Renew with `opper login --renew` and restart

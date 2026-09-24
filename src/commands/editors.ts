@@ -16,6 +16,7 @@ import { installOpenCodeLoginBridge, removeOpenCodeLoginBridge, openCodeLoginBri
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
+  key?: string;
   mcp?: boolean;
   mcpUrl?: string;
   mcpScopes?: string;
@@ -61,9 +62,10 @@ export async function editorsOpenCodeCommand(
       console.log(removed ? `Removed Opper login bridge from ${openCodeLoginBridgePath()}.` : "No Opper login bridge installed.");
       return;
     }
-    const result = await installOpenCodeLoginBridge();
+    const selectedSlot = opts.key ?? "default";
+    const result = await installOpenCodeLoginBridge(selectedSlot);
     console.log(brand.accent(`✓ Installed OpenCode login bridge at ${result.path}.`));
-    console.log("Start plain `opencode` to use the current Opper CLI key. Restart OpenCode after `opper login --renew`.");
+    console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot}. Restart OpenCode after renewing that slot.`);
     return;
   }
   if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {

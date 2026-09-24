@@ -6,7 +6,7 @@ import {
 } from "../commands/editors.js";
 import type { RegisterFn } from "./types.js";
 
-const register: RegisterFn = (program) => {
+const register: RegisterFn = (program, ctx) => {
   const editors = program
     .command("editors")
     .description("Configure editor integrations and legacy client settings");
@@ -31,6 +31,7 @@ const register: RegisterFn = (program) => {
       await editorsOpenCodeCommand({
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
+        key: ctx.key(),
         ...(cmdOpts.loginBridge ? { loginBridge: true } : {}),
         ...(cmdOpts.removeLoginBridge ? { removeLoginBridge: true } : {}),
         ...(cmdOpts.mcp ? { mcp: true } : {}),

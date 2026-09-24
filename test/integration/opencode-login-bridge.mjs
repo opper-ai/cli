@@ -107,7 +107,17 @@ try {
   const renewed = await debugConfig();
   assert.equal(renewed.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
   assert.deepEqual(renewed.provider?.opper?.whitelist, ["anthropic/claude-sonnet-renewed"]);
-  console.log(`Real OpenCode loaded the CLI key, rejected expiry, and reloaded renewed credentials${inferenceCalls ? "; synthetic inference passed" : ""}.`);
+
+  await writeFile(opperConfig, JSON.stringify({ version: 1, defaultKey: "default", keys: {
+    default: { apiKey: "synthetic-personal-key", baseUrl: host },
+    finnova: { apiKey: "synthetic-opper-renewed", baseUrl: host },
+  } }), { mode: 0o600 });
+  await run(process.execPath, [join(process.cwd(), "dist", "index.js"), "--key", "finnova", "editors", "opencode", "--login-bridge"], {
+    cwd: home, env, timeout: 30000,
+  });
+  const selected = await debugConfig();
+  assert.equal(selected.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
+  console.log(`Real OpenCode loaded, expired, renewed, and selected the CLI credential slot${inferenceCalls ? "; synthetic inference passed" : ""}.`);
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(home, { recursive: true, force: true });

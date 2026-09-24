@@ -20,7 +20,7 @@ async function existingManaged(path: string): Promise<boolean | null> {
   }
 }
 
-export async function installOpenCodeLoginBridge(): Promise<{ path: string }> {
+export async function installOpenCodeLoginBridge(slot = "default"): Promise<{ path: string }> {
   const path = openCodeLoginBridgePath();
   const managed = await existingManaged(path);
   if (managed === false) {
@@ -29,7 +29,12 @@ export async function installOpenCodeLoginBridge(): Promise<{ path: string }> {
       `OpenCode plugin at ${path} is not managed by Opper; it was preserved.`,
     );
   }
-  const source = await readFile(assetPath("opencode-login-plugin.js"), "utf8");
+  const template = await readFile(assetPath("opencode-login-plugin.js"), "utf8");
+  const marker = 'const DEFAULT_SLOT = "default";';
+  if (!template.includes(marker)) {
+    throw new OpperError("API_ERROR", "OpenCode login bridge template is missing its slot marker.");
+  }
+  const source = template.replace(marker, `const DEFAULT_SLOT = ${JSON.stringify(slot)};`);
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp.${process.pid}`;
   try {
