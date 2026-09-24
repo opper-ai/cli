@@ -289,10 +289,10 @@ each OpenCode startup, and injects the Opper provider and allowed models in
 memory. It does not copy the key into `opencode.json` or rewrite other provider
 settings. Setup binds the selected CLI slot to plain OpenCode; reinstall with
 another `--key` to switch it, or set `OPPER_KEY_SLOT` for one OpenCode process.
-`OPPER_API_KEY` and `OPPER_BASE_URL`, when set,
-override the stored credential and host. If the stored key is expired or the
+Ambient `OPPER_API_KEY` and `OPPER_BASE_URL` do not override that slot. If the stored key is expired or the
 catalog cannot be fetched, Opper is unavailable in that OpenCode process;
-other providers stay available. Renew with `opper login --renew` and restart
+other providers stay available. Renew the selected slot (for example,
+`opper --key finnova login --renew`) and restart
 OpenCode to load the replacement key. Plain OpenCode uses the normal compat
 endpoint, so it does not get the per-launch session grouping of
 `opper launch opencode`. OpenCode's `debug config` output can contain the

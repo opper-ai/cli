@@ -83,15 +83,12 @@ async function credential() {
   } catch {
     // A missing or invalid CLI config is equivalent to no selected credential.
   }
-  if (process.env.OPPER_API_KEY) {
-    return { apiKey: process.env.OPPER_API_KEY, baseUrl: process.env.OPPER_BASE_URL || slot?.baseUrl };
-  }
   if (!slot || typeof slot.apiKey !== "string" || !slot.apiKey) return;
   if (expired(slot.expiresAt)) {
     console.warn("Opper credential expired. Run `opper login --renew` and restart OpenCode.");
     return;
   }
-  return { apiKey: slot.apiKey, baseUrl: process.env.OPPER_BASE_URL || slot.baseUrl };
+  return { apiKey: slot.apiKey, baseUrl: slot.baseUrl };
 }
 
 function removeOpper(config) {

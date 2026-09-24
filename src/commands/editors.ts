@@ -87,7 +87,7 @@ export async function editorsOpenCodeCommand(
     return;
   }
 
-  const models = await resolveOpenCodeModels();
+  const models = await resolveOpenCodeModels(opts.key);
   const result = await configureOpenCode({
     location: opts.location,
     ...(opts.overwrite ? { overwrite: true } : {}),

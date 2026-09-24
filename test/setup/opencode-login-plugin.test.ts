@@ -77,6 +77,15 @@ describe("OpenCode login plugin", () => {
     expect(await readFile(join(home, ".opper", "config.json"), "utf8")).not.toContain("old-key");
   });
 
+  it("does not let an ambient personal API key override the selected CLI slot", async () => {
+    await slot({ apiKey: "finnova-key", baseUrl: "https://finnova.example" });
+    process.env.OPPER_API_KEY = "personal-env-key";
+    process.env.OPPER_BASE_URL = "https://personal.example";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) }));
+    const config = await run({});
+    expect(config.provider.opper.options).toEqual({ baseURL: "https://finnova.example/v3/compat", apiKey: "finnova-key" });
+  });
+
   it("removes Opper in memory when the key is missing or expired", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

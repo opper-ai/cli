@@ -115,6 +115,8 @@ try {
   await run(process.execPath, [join(process.cwd(), "dist", "index.js"), "--key", "finnova", "editors", "opencode", "--login-bridge"], {
     cwd: home, env, timeout: 30000,
   });
+  env.OPPER_API_KEY = "synthetic-personal-env-key";
+  env.OPPER_BASE_URL = "https://personal.example";
   const selected = await debugConfig();
   assert.equal(selected.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
   console.log(`Real OpenCode loaded, expired, renewed, and selected the CLI credential slot${inferenceCalls ? "; synthetic inference passed" : ""}.`);
