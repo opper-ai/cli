@@ -36,7 +36,9 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
   }
 
   const renew = Boolean(opts.renew || (existing && isSlotExpired(existing)));
-  const baseUrl = opts.baseUrl ?? existing?.baseUrl;
+  // Use the same host for browser approval and the inference request that
+  // follows a launch. An explicit --base-url still has highest precedence.
+  const baseUrl = opts.baseUrl ?? process.env.OPPER_BASE_URL ?? existing?.baseUrl;
 
   intro(brand.accent("Sign in to Opper"));
 

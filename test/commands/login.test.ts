@@ -48,7 +48,10 @@ const { loginCommand } = await import("../../src/commands/login.js");
 
 useTempOpperHome();
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-afterEach(() => Object.defineProperty(process, "platform", platform));
+afterEach(() => {
+  Object.defineProperty(process, "platform", platform);
+  vi.unstubAllEnvs();
+});
 
 describe("login", () => {
   beforeEach(() => {
@@ -68,6 +71,19 @@ describe("login", () => {
     expect(cfg?.keys.default?.user?.email).toBe("me@example.com");
     const out = clackMessages.join("\n");
     expect(out).toContain("me@example.com");
+  });
+
+  it("starts a fresh device login against OPPER_BASE_URL", async () => {
+    vi.stubEnv("OPPER_BASE_URL", "http://localhost:18080");
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_local",
+      obtainedAt: "2026-09-28T12:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "http://localhost:18080" }));
   });
 
   it("short-circuits when slot already has a key", async () => {
@@ -115,6 +131,30 @@ describe("login", () => {
     vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_newer", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
     await loginCommand({ key: "default", renew: true, baseUrl: "https://override.example", legacyPath: "/nonexistent" });
     expect(runDeviceFlow).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "https://override.example", renew: true }));
+  });
+
+  it("uses OPPER_BASE_URL over a stored host for renewal", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", {
+      apiKey: "op_live_old",
+      credentialId: "key-old",
+      baseUrl: "https://staging.example",
+      expiresAt: "2020-01-01T00:00:00Z",
+    });
+    vi.stubEnv("OPPER_BASE_URL", "http://localhost:18080");
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_new",
+      obtainedAt: "2026-09-28T12:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: "http://localhost:18080",
+      renew: true,
+      currentCredentialId: "key-old",
+    }));
   });
 
   it("keeps the old slot if renewal returns the same key", async () => {
