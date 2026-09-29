@@ -12,6 +12,8 @@ export interface OpperRouting {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** Model explicitly selected with `opper launch --model`, if any. */
+  modelOverride?: string;
   compatShape: "openai" | "anthropic" | "responses";
 }
 

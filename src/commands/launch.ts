@@ -103,6 +103,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     baseUrl,
     apiKey: apiContext.apiKey,
     model: opts.model ?? DEFAULT_MODELS.opus,
+    ...(opts.model ? { modelOverride: opts.model } : {}),
     compatShape: "openai",
   };
 

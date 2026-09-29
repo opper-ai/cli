@@ -165,6 +165,11 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   );
   return JSON.stringify({
     ...config,
+    ...(routing.modelOverride ? {
+      model: routing.modelOverride.startsWith("opper/")
+        ? routing.modelOverride
+        : `opper/${routing.modelOverride}`,
+    } : {}),
     provider: {
       ...providers,
       opper: {

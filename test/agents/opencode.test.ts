@@ -244,6 +244,24 @@ describe("opencode adapter", () => {
     expect(init.env.OPPER_CLI_LAUNCH_OPENCODE).toBe("1");
   });
 
+  it.each([
+    ["anthropic/claude-sonnet-4-6", "opper/anthropic/claude-sonnet-4-6"],
+    ["opper/anthropic/claude-sonnet-4-6", "opper/anthropic/claude-sonnet-4-6"],
+  ])("applies launch --model %s to OpenCode's runtime config", async (selected, expected) => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!(["run", "hello"], {
+      ...ROUTING,
+      modelOverride: selected,
+    });
+
+    const call = spawnSyncMock.mock.calls[0]!;
+    expect(call[1]).toEqual(["run", "hello"]);
+    const init = call[2] as { env: NodeJS.ProcessEnv };
+    expect(JSON.parse(init.env.OPENCODE_CONFIG_CONTENT!)).toMatchObject({
+      model: expected,
+    });
+  });
+
   it("spawn writes the live catalogue, so every launch refreshes the model list", async () => {
     // spawn() rewrites the config on every launch. If it did not pass the
     // fetched models through, `opper launch opencode` would keep writing the
