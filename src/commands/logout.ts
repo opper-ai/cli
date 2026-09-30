@@ -1,4 +1,4 @@
-import { deleteSlot, readConfig, writeConfig } from "../auth/config.js";
+import { clearAllSlots, deleteSlot, readConfig } from "../auth/config.js";
 import { brand } from "../ui/colors.js";
 
 export interface LogoutOptions {
@@ -22,7 +22,7 @@ export async function logoutCommand(opts: LogoutOptions): Promise<void> {
       console.log("Pass --yes to confirm clearing every slot.");
       return;
     }
-    await writeConfig({ ...cfg, keys: {}, defaultKey: "default" });
+    await clearAllSlots();
     console.log(brand.accent("✓ Logged out of all slots."));
     return;
   }

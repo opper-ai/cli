@@ -13,6 +13,8 @@ export interface DevicePrompt {
 
 export interface RunDeviceFlowOptions {
   baseUrl?: string;
+  renew?: boolean;
+  currentCredentialId?: string;
   onPrompt?: (p: DevicePrompt) => void;
 }
 
@@ -24,7 +26,9 @@ export async function runDeviceFlow(
     ...(opts.baseUrl ? { opperUrl: opts.baseUrl } : {}),
   });
 
-  const device = await login.startDeviceAuth();
+  const device = await login.startDeviceAuth(opts.renew
+    ? { renew: true, ...(opts.currentCredentialId ? { currentCredentialId: opts.currentCredentialId } : {}) }
+    : undefined);
   opts.onPrompt?.({
     userCode: device.userCode,
     verificationUri: device.verificationUri,
@@ -38,6 +42,12 @@ export async function runDeviceFlow(
   return {
     apiKey: result.apiKey,
     user: result.user,
+    ...(typeof result.credentialId === "string" ? { credentialId: result.credentialId } : {}),
+    ...(typeof result.orgId === "number" ? { orgId: result.orgId } : {}),
+    ...(typeof result.projectId === "number" ? { projectId: result.projectId } : {}),
+    ...(typeof result.projectUuid === "string" ? { projectUuid: result.projectUuid } : {}),
+    ...(typeof result.projectName === "string" ? { projectName: result.projectName } : {}),
+    ...(typeof result.expiresAt === "string" ? { expiresAt: result.expiresAt } : {}),
     obtainedAt: new Date().toISOString(),
     source: "device-flow",
     ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),

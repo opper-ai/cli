@@ -10,7 +10,12 @@ export type VSCodeChannel = "stable" | "insiders";
 
 export function opencodeConfigPath(location: Location): string {
   return location === "global"
-    ? join(home(), ".config", "opencode", "opencode.json")
+    ? join(
+        process.env.OPPER_EDITOR_HOME
+          ? join(home(), ".config")
+          : (process.env.XDG_CONFIG_HOME ?? join(home(), ".config")),
+        "opencode", "opencode.json",
+      )
     : join(process.cwd(), "opencode.json");
 }
 

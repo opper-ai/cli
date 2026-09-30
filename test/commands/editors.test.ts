@@ -71,6 +71,15 @@ describe("editors commands", () => {
     mocks.resolveOpenCodeModels.mockReset();
   });
 
+  it("resolves the static OpenCode catalog with the explicitly selected CLI slot", async () => {
+    mocks.resolveOpenCodeModels.mockResolvedValue({ "model/finnova": { name: "Finnova" } });
+    mocks.configureOpenCode.mockResolvedValue({ path: "/tmp/opencode.json", wrote: true });
+    await editorsOpenCodeCommand({ location: "global", overwrite: true, key: "finnova" });
+    expect(mocks.resolveOpenCodeModels).toHaveBeenLastCalledWith("finnova");
+    expect(mocks.configureOpenCode).toHaveBeenLastCalledWith(expect.objectContaining({ models: { "model/finnova": { name: "Finnova" } } }));
+    mocks.resolveOpenCodeModels.mockReset();
+  });
+
   it("opencode forwards --overwrite", async () => {
     mocks.configureOpenCode.mockResolvedValue({
       path: "/tmp/opencode.json",

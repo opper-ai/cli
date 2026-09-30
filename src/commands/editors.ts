@@ -11,13 +11,17 @@ import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import { mcpAddCommand } from "./mcp.js";
+import { installOpenCodeLoginBridge, removeOpenCodeLoginBridge, openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
+  key?: string;
   mcp?: boolean;
   mcpUrl?: string;
   mcpScopes?: string;
+  loginBridge?: boolean;
+  removeLoginBridge?: boolean;
 }
 
 
@@ -46,6 +50,24 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  if (opts.loginBridge || opts.removeLoginBridge) {
+    if (opts.loginBridge && opts.removeLoginBridge) {
+      throw new OpperError("INVALID_ARGUMENT", "Choose either --login-bridge or --remove-login-bridge.");
+    }
+    if (opts.location !== "global" || opts.mcp || opts.mcpUrl || opts.mcpScopes || opts.overwrite) {
+      throw new OpperError("INVALID_ARGUMENT", "OpenCode login bridge setup is global and cannot be combined with other editor options.");
+    }
+    if (opts.removeLoginBridge) {
+      const removed = await removeOpenCodeLoginBridge();
+      console.log(removed ? `Removed Opper login bridge from ${openCodeLoginBridgePath()}.` : "No Opper login bridge installed.");
+      return;
+    }
+    const selectedSlot = opts.key ?? "default";
+    const result = await installOpenCodeLoginBridge(selectedSlot);
+    console.log(brand.accent(`✓ Installed OpenCode login bridge at ${result.path}.`));
+    console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot}. Restart OpenCode after renewing that slot.`);
+    return;
+  }
   if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
     throw new OpperError("INVALID_ARGUMENT", "--mcp-url and --mcp-scopes require --mcp.");
   }
@@ -65,7 +87,7 @@ export async function editorsOpenCodeCommand(
     return;
   }
 
-  const models = await resolveOpenCodeModels();
+  const models = await resolveOpenCodeModels(opts.key);
   const result = await configureOpenCode({
     location: opts.location,
     ...(opts.overwrite ? { overwrite: true } : {}),

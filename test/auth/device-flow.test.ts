@@ -33,6 +33,12 @@ describe("runDeviceFlow", () => {
     pollDeviceToken.mockResolvedValue({
       apiKey: "op_live_abc",
       user: { email: "me@example.com", name: "Me" },
+      credentialId: "key-123",
+      orgId: 42,
+      projectId: 7,
+      projectUuid: "project-uuid",
+      projectName: "Agent sandbox",
+      expiresAt: "2026-10-24T11:00:00Z",
     });
 
     const onPrompt = vi.fn();
@@ -47,6 +53,14 @@ describe("runDeviceFlow", () => {
     );
     expect(result.apiKey).toBe("op_live_abc");
     expect(result.user).toEqual({ email: "me@example.com", name: "Me" });
+    expect(result).toMatchObject({
+      credentialId: "key-123",
+      orgId: 42,
+      projectId: 7,
+      projectUuid: "project-uuid",
+      projectName: "Agent sandbox",
+      expiresAt: "2026-10-24T11:00:00Z",
+    });
     expect(result.source).toBe("device-flow");
     expect(typeof result.obtainedAt).toBe("string");
 
@@ -78,5 +92,15 @@ describe("runDeviceFlow", () => {
         opperUrl: "https://custom.example",
       }),
     );
+  });
+
+  it("passes explicit renewal intent and the stored credential ID", async () => {
+    startDeviceAuth.mockResolvedValue({
+      deviceCode: "dc", userCode: "x", verificationUri: "x", expiresIn: 600, interval: 5,
+    });
+    pollDeviceToken.mockResolvedValue({ apiKey: "op_live_new", user: { email: "a", name: "b" } });
+
+    await runDeviceFlow({ renew: true, currentCredentialId: "key-old" });
+    expect(startDeviceAuth).toHaveBeenCalledWith({ renew: true, currentCredentialId: "key-old" });
   });
 });

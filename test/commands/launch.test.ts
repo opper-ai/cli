@@ -81,6 +81,21 @@ describe("launchCommand", () => {
     ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
   });
 
+  it("re-authenticates an expired slot before launching", async () => {
+    await setSlot("default", { apiKey: "op_live_old", expiresAt: "2020-01-01T00:00:00Z" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    adapter.spawn.mockResolvedValue(0);
+    loginMock.mockImplementation(async () => {
+      await setSlot("default", { apiKey: "op_live_new", expiresAt: "2030-01-01T00:00:00Z" });
+    });
+
+    await launchCommand({ agent: "hermes", key: "default" });
+    expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+    expect(adapter.spawn).toHaveBeenCalledWith(
+      [], expect.objectContaining({ apiKey: "op_live_new" }), expect.any(Object),
+    );
+  });
+
   it("throws AGENT_NOT_FOUND when the agent isn't installed and --install wasn't passed", async () => {
     await setSlot("default", { apiKey: "op_live_x" });
     adapter.detect.mockResolvedValue({ installed: false });

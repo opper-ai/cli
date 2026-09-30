@@ -21,12 +21,14 @@ const register: RegisterFn = (program, ctx) => {
     .command("login")
     .description("Authenticate with Opper via the OAuth device flow")
     .option("--force", "re-authenticate even if a key is already stored")
+    .option("--renew", "replace the stored key after fresh browser approval")
     .option("--base-url <url>", "override the Opper API base URL")
-    .action(async (cmdOpts: { force?: boolean; baseUrl?: string }) => {
+    .action(async (cmdOpts: { force?: boolean; renew?: boolean; baseUrl?: string }) => {
       await loginCommand({
         key: ctx.key(),
         ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
         ...(cmdOpts.force ? { force: true } : {}),
+        ...(cmdOpts.renew ? { renew: true } : {}),
       });
     });
 

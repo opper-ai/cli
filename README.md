@@ -40,7 +40,7 @@ Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each ho
 
 | Command | Description |
 |---------|-------------|
-| `opper login [--force] [--base-url <url>]` | OAuth device flow; stores into the active slot. |
+| `opper login [--force] [--renew] [--base-url <url>]` | OAuth device flow; stores into the active slot. `--renew` requests a replacement key after fresh browser approval. |
 | `opper logout [--all] [--yes]` | Clear credentials for the active slot, or every slot. |
 | `opper whoami` | Show the authenticated user for the active slot. |
 | `opper config add <name> <api-key> [--base-url <url>]` | Manually store an API key in a slot. |
@@ -49,6 +49,14 @@ Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each ho
 | `opper config remove <name>` | Delete a stored slot. |
 
 Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--key` (or `default`).
+
+The browser flow also stores the server-issued credential ID, organization ID,
+and expiry when available. `opper whoami` shows that expiry. An expired slot
+starts renewal on the next `opper login` or `opper launch`; `opper login --renew`
+requests renewal early. `--force` repeats authentication but is not a rotation
+command. Renewal requires an Opper server that supports agent-login renewal and
+a client registered for that policy. Failed renewal leaves the old local slot
+untouched. Keys without an expiry keep their current behavior.
 
 ## Agents
 
@@ -245,10 +253,50 @@ opper skills uninstall   # remove + clean up legacy bundled-copy installs
 ```bash
 opper editors list
 opper editors opencode [--global|--local] [--overwrite]   # configure inference without launching
+opper editors opencode --login-bridge                 # one-time setup for plain opencode
+opper editors opencode --remove-login-bridge          # remove only the managed plugin
 ```
 
 OpenCode is a coding agent; its inference setup remains under `editors` for
 compatibility. Use `opper launch opencode` to run it with inference through Opper.
+
+For a plain `opencode` command that works after the CLI exits, sign in once and
+install the optional global login bridge:
+
+```bash
+opper login
+opper editors opencode --login-bridge
+opencode
+```
+
+If you already use Opper in another organization, choose a separate CLI slot
+while signing in and installing the bridge:
+
+```bash
+opper --key work login
+opper --key work editors opencode --login-bridge
+opencode
+```
+
+Select your work organization in the browser approval screen, then use
+`opper --key work whoami` to confirm it before starting OpenCode. Renew that
+slot with `opper --key work login --renew`.
+
+The bridge is a local OpenCode startup plugin at
+`~/.config/opencode/plugins/opper-login.js`. It reads the CLI's selected key
+from `~/.opper/config.json`, fetches that key's `/v3/compat/models` catalog on
+each OpenCode startup, and injects the Opper provider and allowed models in
+memory. It does not copy the key into `opencode.json` or rewrite other provider
+settings. Setup binds the selected CLI slot to plain OpenCode; reinstall with
+another `--key` to switch it, or set `OPPER_KEY_SLOT` for one OpenCode process.
+Ambient `OPPER_API_KEY` and `OPPER_BASE_URL` do not override that slot. If the stored key is expired or the
+catalog cannot be fetched, Opper is unavailable in that OpenCode process;
+other providers stay available. Renew the selected slot (for example,
+`opper --key work login --renew`) and restart
+OpenCode to load the replacement key. Plain OpenCode uses the normal compat
+endpoint, so it does not get the per-launch session grouping of
+`opper launch opencode`. OpenCode's `debug config` output can contain the
+resolved key; do not share that output.
 
 ## MCP client setup
 

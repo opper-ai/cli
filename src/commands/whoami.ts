@@ -1,4 +1,4 @@
-import { getSlot } from "../auth/config.js";
+import { getSlot, isSlotExpired } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 
@@ -25,6 +25,14 @@ export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
     console.log(`${brand.bold("user:")}    ${slot.user.name} <${slot.user.email}>`);
   }
   console.log(`${brand.bold("api key:")} ${fingerprint(slot.apiKey)}`);
+  if (slot.credentialId) console.log(`${brand.bold("key id:")}  ${slot.credentialId}`);
+  if (slot.orgId !== undefined) console.log(`${brand.bold("org id:")}  ${slot.orgId}`);
+  if (slot.projectName) console.log(`${brand.bold("project:")} ${slot.projectName}${slot.projectUuid ? ` (${slot.projectUuid})` : ""}`);
+  else if (slot.projectUuid) console.log(`${brand.bold("project:")} ${slot.projectUuid}`);
+  else if (slot.projectId !== undefined) console.log(`${brand.bold("project:")} ${slot.projectId}`);
+  if (slot.expiresAt) {
+    console.log(`${brand.bold("expires:")} ${slot.expiresAt}${isSlotExpired(slot) ? " (expired)" : ""}`);
+  }
   console.log(`${brand.bold("base url:")} ${slot.baseUrl ?? "https://api.opper.ai"}`);
   if (slot.obtainedAt) {
     console.log(`${brand.bold("since:")}   ${slot.obtainedAt}`);

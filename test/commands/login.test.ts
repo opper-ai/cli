@@ -48,7 +48,10 @@ const { loginCommand } = await import("../../src/commands/login.js");
 
 useTempOpperHome();
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-afterEach(() => Object.defineProperty(process, "platform", platform));
+afterEach(() => {
+  Object.defineProperty(process, "platform", platform);
+  vi.unstubAllEnvs();
+});
 
 describe("login", () => {
   beforeEach(() => {
@@ -70,6 +73,19 @@ describe("login", () => {
     expect(out).toContain("me@example.com");
   });
 
+  it("starts a fresh device login against OPPER_BASE_URL", async () => {
+    vi.stubEnv("OPPER_BASE_URL", "http://localhost:18080");
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_local",
+      obtainedAt: "2026-09-28T12:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "http://localhost:18080" }));
+  });
+
   it("short-circuits when slot already has a key", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_existing" });
@@ -78,6 +94,109 @@ describe("login", () => {
     expect(runDeviceFlow).not.toHaveBeenCalled();
     const out = clackMessages.join("\n");
     expect(out.toLowerCase()).toContain("already");
+  });
+
+  it("starts a new browser flow for an expired stored credential", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old", expiresAt: "2020-01-01T00:00:00Z" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_new",
+      expiresAt: "2030-01-01T00:00:00Z",
+      obtainedAt: "2026-09-24T11:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ renew: true, currentCredentialId: "key-old" }));
+    expect((await readConfig())?.keys.default?.apiKey).toBe("op_live_new");
+  });
+
+  it("renews an unexpired credential only with explicit --renew", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_new", credentialId: "key-new", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+
+    await loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ renew: true, currentCredentialId: "key-old" }));
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-new");
+  });
+
+  it("renews against the stored slot host unless --base-url overrides it", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", baseUrl: "https://staging.example", expiresAt: "2020-01-01T00:00:00Z" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_new", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "https://staging.example", renew: true }));
+
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_newer", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+    await loginCommand({ key: "default", renew: true, baseUrl: "https://override.example", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "https://override.example", renew: true }));
+  });
+
+  it("uses OPPER_BASE_URL over a stored host for renewal", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", {
+      apiKey: "op_live_old",
+      credentialId: "key-old",
+      baseUrl: "https://staging.example",
+      expiresAt: "2020-01-01T00:00:00Z",
+    });
+    vi.stubEnv("OPPER_BASE_URL", "http://localhost:18080");
+    vi.mocked(runDeviceFlow).mockResolvedValue({
+      apiKey: "op_live_new",
+      obtainedAt: "2026-09-28T12:00:00Z",
+      source: "device-flow",
+    });
+
+    await loginCommand({ key: "default", legacyPath: "/nonexistent" });
+
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({
+      baseUrl: "http://localhost:18080",
+      renew: true,
+      currentCredentialId: "key-old",
+    }));
+  });
+
+  it("keeps the old slot if renewal returns the same key", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_old", credentialId: "key-old", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
+
+    await expect(loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" })).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.apiKey).toBe("op_live_old");
+  });
+
+  it("preserves a newer local credential written during browser renewal", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockImplementation(async () => {
+      await setSlot("default", { apiKey: "op_live_newer", credentialId: "key-newer" });
+      return { apiKey: "op_live_result", credentialId: "key-result", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" };
+    });
+
+    await expect(loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" })).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-newer");
+  });
+
+  it("keeps the first completed login when two browser approvals overlap", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "op_live_old", credentialId: "key-old" });
+    vi.mocked(runDeviceFlow).mockClear();
+    let finishFirst!: (slot: { apiKey: string; credentialId: string }) => void;
+    let finishSecond!: (slot: { apiKey: string; credentialId: string }) => void;
+    vi.mocked(runDeviceFlow)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+
+    const first = loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    await vi.waitFor(() => expect(runDeviceFlow).toHaveBeenCalledTimes(1));
+    const second = loginCommand({ key: "default", renew: true, legacyPath: "/nonexistent" });
+    await vi.waitFor(() => expect(runDeviceFlow).toHaveBeenCalledTimes(2));
+    finishFirst({ apiKey: "op_live_first", credentialId: "key-first" });
+    await first;
+    finishSecond({ apiKey: "op_live_second", credentialId: "key-second" });
+    await expect(second).rejects.toMatchObject({ code: "API_ERROR" });
+    expect((await readConfig())?.keys.default?.credentialId).toBe("key-first");
   });
 
   it("force flag re-runs the flow", async () => {
