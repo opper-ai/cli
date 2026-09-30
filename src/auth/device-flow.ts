@@ -26,13 +26,7 @@ export async function runDeviceFlow(
     ...(opts.baseUrl ? { opperUrl: opts.baseUrl } : {}),
   });
 
-  // The renewal options are additive to the shared login package. They are
-  // passed only for renewal so existing device sign-ins keep their transport.
-  const startDeviceAuth = login.startDeviceAuth as (options?: {
-    renew?: boolean;
-    currentCredentialId?: string;
-  }) => ReturnType<OpperLogin["startDeviceAuth"]>;
-  const device = await startDeviceAuth.call(login, opts.renew
+  const device = await login.startDeviceAuth(opts.renew
     ? { renew: true, ...(opts.currentCredentialId ? { currentCredentialId: opts.currentCredentialId } : {}) }
     : undefined);
   opts.onPrompt?.({
@@ -44,16 +38,7 @@ export async function runDeviceFlow(
     expiresIn: device.expiresIn,
   });
 
-  // @opperai/login exposes these optional fields in its shared AuthResult
-  // contract. Older package releases omit them, so this remains additive.
-  const result = await login.pollDeviceToken(device) as Awaited<ReturnType<OpperLogin["pollDeviceToken"]>> & {
-    credentialId?: string;
-    orgId?: number;
-    projectId?: number;
-    projectUuid?: string;
-    projectName?: string;
-    expiresAt?: string;
-  };
+  const result = await login.pollDeviceToken(device);
   return {
     apiKey: result.apiKey,
     user: result.user,

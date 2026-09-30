@@ -1,4 +1,4 @@
-// Optional cross-package check with a locally packed @opperai/login 0.4.1.
+// Cross-package check with the installed @opperai/login dependency.
 // No browser, network request, or real credential is used.
 import assert from "node:assert/strict";
 import { runDeviceFlow } from "../../dist/auth/device-flow.js";
@@ -34,7 +34,7 @@ try {
   assert.equal(slot.projectId, 34);
   assert.equal(slot.projectName, "Developer project");
   assert.equal(slot.expiresAt, "2030-01-01T00:00:00Z");
-  console.log("Packed shared login and CLI renewal metadata contract passed.");
+  console.log("Installed shared login and CLI renewal metadata contract passed.");
 } finally {
   globalThis.fetch = prior;
 }
