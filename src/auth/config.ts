@@ -1,7 +1,7 @@
-import { readFile, mkdir, writeFile, chmod, rename, rmdir } from "node:fs/promises";
+import { readFile, mkdir, writeFile, chmod, rename } from "node:fs/promises";
 import { dirname } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
+import lockfile from "proper-lockfile";
 import { OpperError } from "../errors.js";
 import { configPath } from "./paths.js";
 
@@ -59,33 +59,33 @@ export async function readConfig(): Promise<Config | null> {
   }
 }
 
-const LOCK_WAIT_MS = 10_000;
-
 /** Serialize credential writes across CLI processes without holding a lock during browser approval. */
 export async function withConfigLock<T>(fn: () => Promise<T>): Promise<T> {
-  const lock = `${configPath()}.lock`;
-  await mkdir(dirname(lock), { recursive: true });
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  while (true) {
-    try {
-      await mkdir(lock, { mode: 0o700 });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (Date.now() >= deadline) {
-        throw new OpperError(
-          "API_ERROR",
-          "Credential config is busy; could not acquire its write lock.",
-          `If no Opper process is writing credentials, remove ${lock} and retry.`,
-        );
-      }
-      await delay(25 + Math.floor(Math.random() * 25));
-    }
+  const path = configPath();
+  await mkdir(dirname(path), { recursive: true });
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(path, {
+      // The config does not exist yet on first login. Refresh the lease while
+      // writing; a crashed writer's lock becomes reclaimable after ten seconds.
+      realpath: false,
+      stale: 10_000,
+      update: 2_000,
+      retries: { retries: 500, factor: 1, minTimeout: 40, maxTimeout: 40 },
+      // Keep the default fail-fast handling if our lock is compromised.
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ELOCKED") throw error;
+    throw new OpperError(
+      "API_ERROR",
+      "Credential config is busy; could not acquire its write lock.",
+      "Another Opper process is writing credentials. Wait for it to finish and retry.",
+    );
   }
   try {
     return await fn();
   } finally {
-    await rmdir(lock);
+    await release();
   }
 }
 
