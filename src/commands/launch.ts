@@ -219,7 +219,11 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
       durationMs,
       usageUnavailable,
       models: Array.from(byModel.values()),
-      tracesUrl: TRACES_URL,
+      // Custom API hosts have no implied platform origin. A production link
+      // would point at a different environment, including for local launches.
+      tracesUrl: new URL(opts.apiContext.baseUrl).href.replace(/\/+$/, "") === "https://api.opper.ai"
+        ? TRACES_URL
+        : undefined,
     }),
   );
 }

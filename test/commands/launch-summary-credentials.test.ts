@@ -141,7 +141,47 @@ describe("launch session summary credentials and availability", () => {
     expect(text).toMatch(/Cost\s+\$0\.0350/);
     expect(text).toMatch(/sonnet\s+3 reqs\s+3,000 tok\s+\$0\.0300/);
     expect(text).not.toMatch(/usage unavailable|usage rollup lags/i);
+    expect(text).not.toContain("platform.opper.ai");
+    expect(text).not.toMatch(/^\s*Traces\s/m);
     expectNoSecretsOrRawErrors(text);
+  });
+
+  it.each(["https://api.opper.ai", "https://api.opper.ai/", "https://api.opper.ai:443/"])(
+    "keeps the production trace link for the canonical API endpoint %s",
+    async (baseUrl) => {
+      await setSlot("team", { apiKey: selectedKey, baseUrl });
+      await launch();
+      expect(summaryText()).toContain("https://platform.opper.ai/traces");
+    },
+  );
+
+  it.each([
+    "http://localhost:8184",
+    "http://127.0.0.1:8184",
+    selectedHost,
+    "https://staging.opper.ai",
+    "https://api.opper.ai:8443",
+    "https://api.opper.ai/gateway",
+    "http://api.opper.ai",
+    "https://api.opper.ai.example.test",
+  ])("omits a production trace link for the custom API endpoint %s", async (baseUrl) => {
+    await setSlot("team", { apiKey: selectedKey, baseUrl });
+    await launch();
+    const text = summaryText();
+    expect(text).toContain("Session summary");
+    expect(text).not.toContain("platform.opper.ai");
+    expect(text).not.toMatch(/^\s*Traces\s/m);
+    expectCapturedCredentials(baseUrl);
+  });
+
+  it("keeps the trace destination tied to the captured launch host", async () => {
+    await setSlot("team", { apiKey: selectedKey, baseUrl: "https://api.opper.ai" });
+    duringRun = async () => {
+      vi.stubEnv("OPPER_BASE_URL", "http://localhost:8184");
+    };
+    await launch();
+    expect(summaryText()).toContain("https://platform.opper.ai/traces");
+    expectCapturedCredentials("https://api.opper.ai");
   });
 
   it("keeps explicit target attribution in the session summary but ignores resource defaults for inference", async () => {
@@ -216,7 +256,8 @@ describe("launch session summary credentials and availability", () => {
     expect.soft(text).not.toContain("usage rollup lags");
     expect(text).toContain("Session summary");
     expect(text).toMatch(/Duration\s+2s/);
-    expect(text).toContain("https://platform.opper.ai/traces");
+    expect(text).not.toContain("https://platform.opper.ai/traces");
+    expect(text).not.toMatch(/^\s*Traces\s/m);
     expect(text).not.toMatch(/^\s*(Cost|Tokens|Requests)\s/m);
     expectNoSecretsOrRawErrors(text);
   });

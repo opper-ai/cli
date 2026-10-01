@@ -10,7 +10,8 @@ export interface ModelUsage {
 export interface SessionSummaryOptions {
   durationMs: number;
   models: ModelUsage[];
-  tracesUrl: string;
+  /** Only set when the platform destination for this API host is known. */
+  tracesUrl?: string | undefined;
   /** The request failed, rather than returning an empty usage rollup. */
   usageUnavailable?: boolean;
 }
@@ -37,7 +38,7 @@ export function formatSessionSummary(opts: SessionSummaryOptions): string {
   lines.push(`  ${label("Duration")}${formatDuration(opts.durationMs)}`);
 
   if (opts.models.length === 0) {
-    lines.push(`  ${label("Traces")}${opts.tracesUrl}`);
+    if (opts.tracesUrl) lines.push(`  ${label("Traces")}${opts.tracesUrl}`);
     lines.push(
       brand.dim(
         opts.usageUnavailable
@@ -81,7 +82,7 @@ export function formatSessionSummary(opts: SessionSummaryOptions): string {
     lines.push(`  ${label("Cost")}$${totalCost.toFixed(4)}`);
   }
 
-  lines.push(`  ${label("Traces")}${opts.tracesUrl}`);
+  if (opts.tracesUrl) lines.push(`  ${label("Traces")}${opts.tracesUrl}`);
   lines.push("");
   return lines.join("\n") + "\n";
 }
