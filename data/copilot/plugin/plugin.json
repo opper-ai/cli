@@ -1,0 +1,6 @@
+{
+  "name": "opper-budget",
+  "version": "0.1.0",
+  "description": "Opper sign-in renewal, expiry warnings, and allowance tracking.",
+  "extensions": ["extensions"]
+}

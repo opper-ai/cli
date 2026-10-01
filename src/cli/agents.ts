@@ -65,7 +65,9 @@ const register: RegisterFn = (program, ctx) => {
         "Anything after the agent name (flags or args) is forwarded to " +
         "the agent's CLI verbatim, e.g.\n" +
         "  opper launch pi -p \"summarise this\"\n" +
-        "  opper launch claude --resume",
+        "  opper launch claude --resume\n" +
+        "  opper launch copilot --kinds pools,routes\n" +
+        "Copilot options: --kinds models,pools,routes|all, --list, --no-budget, --no-extension.",
     )
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
