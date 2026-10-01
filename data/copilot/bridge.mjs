@@ -4,7 +4,7 @@ import {readSlot} from './core.mjs';
 import {randomBytes} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import {credential,credentialFingerprint} from './core.mjs';
+import {credential} from './core.mjs';
 import {budgetSnapshot} from './budget.mjs';
 
 // Copilot 1.0.88's registry supports static credentials, not apiKeyCommand.
@@ -32,18 +32,17 @@ export async function startBridge(binding, models, traceId, inferenceBase) {
     if(req.method==='GET'&&['/opper/budget','/opper/budget?refresh=1'].includes(req.url)) {
       try {
         const key=await credential(binding);
-        const hash=credentialFingerprint(key);
-        if(!budgetCache||budgetCache.hash!==hash||Date.now()-budgetCache.time>60000||req.url.endsWith('refresh=1')) {
-          if(!budgetPending||budgetPending.hash!==hash) {
+        if(!budgetCache||budgetCache.key!==key||Date.now()-budgetCache.time>60000||req.url.endsWith('refresh=1')) {
+          if(!budgetPending||budgetPending.key!==key) {
             const promise=(async()=>{
               const upstream=await fetch(binding.origin+'/v3/me',{headers:{Authorization:`Bearer ${key}`},redirect:'error',signal:AbortSignal.timeout(15000)});
               if(!upstream.ok)throw Error('budget unavailable');
               const value=budgetSnapshot(await upstream.json());
               // Do not return one identity's financial data after a slot change.
               if(await credential(binding)!==key)throw Error('credential changed');
-              budgetCache={hash,time:Date.now(),value};return value;
+              budgetCache={key,time:Date.now(),value};return value;
             })();
-            budgetPending={hash,promise};
+            budgetPending={key,promise};
             promise.finally(()=>{if(budgetPending?.promise===promise)budgetPending=undefined;}).catch(()=>{});
           }
           await budgetPending.promise;

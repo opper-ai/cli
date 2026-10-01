@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { createHmac, randomBytes } from 'node:crypto';
 
 export function origin(value = 'https://api.opper.ai') {
   const url = new URL(value);
@@ -22,15 +21,15 @@ export function checkExpiry(slot) {
   const expiry = Date.parse(slot.expiresAt);
   if (!Number.isFinite(expiry) || expiry <= Date.now()) throw Error('Opper sign-in expired. Run /opper-login, then retry your message.');
 }
-// Process-local credential comparison, not password storage or a persistent verifier.
-const fingerprintKey=randomBytes(32);
-export const credentialFingerprint=key=>createHmac('sha256',fingerprintKey).update(key).digest('hex');
-const hash=credentialFingerprint;
+// Keep legacy-key comparison private to the live binding; never serialize it.
+const boundKeys=new WeakMap();
 export function bindSlot(slot, configPath, name) {
   checkExpiry(slot);
   const identity = slot.orgId != null && slot.projectId != null && slot.user?.email
     ? { orgId:slot.orgId, projectId:slot.projectId, email:slot.user.email } : undefined;
-  return { configPath, name, origin:origin(slot.baseUrl), identity, keyHash:identity ? undefined : hash(slot.apiKey) };
+  const binding={configPath,name,origin:origin(slot.baseUrl),identity};
+  if(!identity)boundKeys.set(binding,slot.apiKey);
+  return binding;
 }
 export async function credential(binding) {
   const slot = await readSlot(binding.configPath, binding.name);
@@ -42,7 +41,7 @@ export async function credential(binding) {
 export function assertBoundSlot(binding,slot) {
   if (origin(slot.baseUrl) !== binding.origin) throw Error('Opper endpoint changed. Restart this launcher.');
   const expected = binding.identity;
-  if (expected ? slot.orgId !== expected.orgId || slot.projectId !== expected.projectId || slot.user?.email !== expected.email : hash(slot.apiKey) !== binding.keyHash) {
+  if (expected ? slot.orgId !== expected.orgId || slot.projectId !== expected.projectId || slot.user?.email !== expected.email : slot.apiKey !== boundKeys.get(binding)) {
     throw Error('Opper login identity changed or cannot be verified. Restart this launcher.');
   }
 }
@@ -65,7 +64,7 @@ export function allowedModels(data,kinds=MODEL_KINDS) {
 }
 export async function getJson(host, path, key) {
   const response = await fetch(host + path, {headers:{Authorization:`Bearer ${key}`}, signal:AbortSignal.timeout(20000),redirect:'error'});
-  if (!response.ok) throw Error(response.status === 401 ? 'Opper rejected this login. Sign in or renew, then restart.' : `Opper request failed (HTTP ${response.status}).`);
+  if (!response.ok) throw Object.assign(Error(response.status === 401 ? 'Opper rejected this login. Run opper login --force, then launch again.' : `Opper request failed (HTTP ${response.status}).`),{status:response.status});
   return response.json();
 }
 export function childEnvironment(parent, binding, model, helperCommand, profile) {

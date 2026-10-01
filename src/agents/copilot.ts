@@ -1,3 +1,5 @@
+import { withLoginRecovery } from "../auth/launch-recovery.js";
+import { loginCommand } from "../commands/login.js";
 import { pathToFileURL } from "node:url";
 import { assetPath } from "../util/assets.js";
 import { configPath, opperHome } from "../auth/paths.js";
@@ -19,7 +21,7 @@ export const copilot: AgentAdapter = {
   async unconfigure() { /* Launch configuration is temporary and removed on exit. */ },
   async spawn(args, routing) {
     const { launchCopilot } = await import(pathToFileURL(assetPath("copilot/launch.mjs")).href);
-    return launchCopilot(args, routing, {
+    return withLoginRecovery(() => launchCopilot(args, routing, {
       home: opperHome(), configPath: configPath(), getSlot,
       replaceSlot: replaceSlotIfUnchanged, openBrowser,
       async renew({ previous, signal, onPrompt }: {
@@ -28,6 +30,6 @@ export const copilot: AgentAdapter = {
       }) {
         return renewAgentCredential({previous,signal,onPrompt,baseUrl:routing.apiBaseUrl});
       },
-    });
+    }), () => loginCommand({key:routing.keyName ?? "default",baseUrl:routing.apiBaseUrl,force:true}));
   },
 };
