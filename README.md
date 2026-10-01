@@ -54,20 +54,25 @@ An environment key uses `OPPER_BASE_URL` or the production API root; it does not
 borrow a stored slot's host, expiry, organization, or resource project.
 
 Organization personal agent credentials have no project binding. Inference,
-models, and usage work at organization scope without a target. Pass the global
-`--project-uuid <uuid>` flag to target a project explicitly. Functions, indexes,
+models, project discovery, and usage work at organization scope without a target.
+Pass the global `--project-uuid <uuid>` flag to target a project explicitly. Functions, indexes,
 named calls, and SDK `ask` require an explicit project or a resource default.
 Traces without a target use the organization's projectless trace group; a
 configured resource default also applies to trace commands. Resource defaults
 never apply implicitly to inference or agent launches.
 
 ```bash
+opper projects list                            # names and UUIDs in this organization
+opper projects list research                   # filter by name or UUID
 opper --project-uuid <uuid> functions list
 opper config project work <uuid>
 opper --key work functions list
 opper --key work launch opencode                  # organization inference
 opper --key work --project-uuid <uuid> launch opencode
 ```
+
+`projects list` uses the selected key's organization and ignores resource defaults
+and `--project-uuid`; listing projects does not change the active resource target.
 
 Renewal replaces server credential metadata. The resource default is retained
 only when the renewed credential has the same verified organization and API host.

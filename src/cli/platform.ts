@@ -26,6 +26,7 @@ import {
 } from "../commands/indexes.js";
 import { usageListCommand } from "../commands/usage.js";
 import { imageGenerateCommand } from "../commands/image.js";
+import { projectsListCommand } from "../commands/projects.js";
 import type { RegisterFn } from "./types.js";
 
 async function readStdinIfPiped(): Promise<string | null> {
@@ -36,6 +37,15 @@ async function readStdinIfPiped(): Promise<string | null> {
 }
 
 const register: RegisterFn = (program, ctx) => {
+  program.command("projects")
+    .description("List Opper projects")
+    .command("list")
+    .description("List live projects in the credential's organization")
+    .argument("[filter]", "optional substring filter on name or UUID")
+    .action(async (filter: string | undefined) => {
+      await projectsListCommand({ key: ctx.key(), ...(filter ? { filter } : {}) });
+    });
+
   // ---- call --------------------------------------------------------------
   program
     .command("call")

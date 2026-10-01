@@ -1,5 +1,6 @@
 import { callCommand } from "../call.js";
 import { modelsListCommand } from "../models.js";
+import { projectsListCommand } from "../projects.js";
 import {
   functionsListCommand,
   functionsGetCommand,
@@ -30,6 +31,7 @@ import {
 export async function platformMenu(opts: MenuOptions): Promise<void> {
   while (true) {
     const choice = await pickMenuChoice("Opper", [
+      { value: "projects", label: "Projects", hint: "Project names and UUIDs" },
       { value: "functions", label: "Functions", hint: "Saved functions in your project" },
       { value: "models", label: "Models", hint: "Available models" },
       { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
@@ -42,6 +44,9 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
 
     try {
       switch (choice) {
+        case "projects":
+          await projectsListCommand({ key: opts.key });
+          break;
         case "functions":
           await functionsMenu(opts);
           break;
