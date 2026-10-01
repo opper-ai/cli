@@ -660,9 +660,10 @@ Inside Copilot, `/model` selects from the credential's current allowed catalog.
 shared project usage. Organization billing requires explicit server permission.
 `/opper-login` opens browser renewal and continues the same conversation after
 validation of the same user, organization, project and endpoint. It does not
-replay failed requests. The footer and terminal warn within 24 hours of known
-expiry. Commands use Copilot's experimental extension support; `--no-extension`
-disables them, and `--no-budget` disables the footer.
+replay failed requests. The terminal warns within 24 hours of known expiry. Commands use Copilot's experimental extension support; `--no-extension`
+disables them. The native Copilot footer is preserved by default;
+`--budget-footer` optionally adds an Opper allowance line. Use `/opper-usage`
+for allowance details and Copilot’s `/context` for context usage.
 
 The last model and type filter are remembered. A fresh isolated Copilot profile
 is created per launch; existing Copilot settings are untouched. Restart/resume

@@ -22,7 +22,7 @@ export async function launchCopilot(args,routing,runtime) {
   if(process.platform==='win32')throw Error('Copilot through Opper currently supports macOS/Linux.');
   if(Number(process.versions.node.split('.')[0])<22)throw Error('Copilot through Opper requires Node.js 22 or newer.');
   configureLoginRuntime(runtime);
-  const forwarded=[];let kinds,budgetExtension=true,noBudget=false,list=false;
+  const forwarded=[];let kinds,budgetExtension=true,noBudget=true,list=false;
   for(let i=0;i<args.length;i++){
     if(args[i]==='--'){forwarded.push(...args.slice(i+1));break;}
     if(args[i]==='--kinds')kinds=parseKinds(args[++i]);
@@ -30,6 +30,7 @@ export async function launchCopilot(args,routing,runtime) {
     else if(args[i]==='--no-extension')budgetExtension=false;
     else if(args[i]==='--budget-extension')budgetExtension=true;
     else if(args[i]==='--no-budget')noBudget=true;
+    else if(args[i]==='--budget-footer')noBudget=false;
     else if(args[i]==='--list')list=true;
     else forwarded.push(args[i]);
   }
