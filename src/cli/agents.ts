@@ -67,7 +67,7 @@ const register: RegisterFn = (program, ctx) => {
         "  opper launch pi -p \"summarise this\"\n" +
         "  opper launch claude --resume\n" +
         "  opper launch copilot --kinds pools,routes\n" +
-        "Copilot options: --kinds models,pools,routes|all, --list, --budget-footer, --no-extension.",
+        "Copilot options: --kinds models,pools,routes|all, --list, --no-budget, --no-extension.",
     )
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
