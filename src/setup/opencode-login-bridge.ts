@@ -20,7 +20,7 @@ async function existingManaged(path: string): Promise<boolean | null> {
   }
 }
 
-export async function installOpenCodeLoginBridge(slot = "default"): Promise<{ path: string }> {
+export async function installOpenCodeLoginBridge(slot = "default", projectUuid?: string): Promise<{ path: string }> {
   const path = openCodeLoginBridgePath();
   const managed = await existingManaged(path);
   if (managed === false) {
@@ -34,7 +34,8 @@ export async function installOpenCodeLoginBridge(slot = "default"): Promise<{ pa
   if (!template.includes(marker)) {
     throw new OpperError("API_ERROR", "OpenCode login bridge template is missing its slot marker.");
   }
-  const source = template.replace(marker, `const DEFAULT_SLOT = ${JSON.stringify(slot)};`);
+  const source = template.replace(marker, `const DEFAULT_SLOT = ${JSON.stringify(slot)};`)
+    .replace("const DEFAULT_PROJECT_UUID = undefined;", `const DEFAULT_PROJECT_UUID = ${projectUuid ? JSON.stringify(projectUuid) : "undefined"};`);
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp.${process.pid}`;
   try {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { Agent, SilentLogger, setDefaultLogger } from "@opperai/agents";
+import { Agent, SilentLogger, setDefaultLogger, type OpperClient } from "@opperai/agents";
 import { z } from "zod";
 import { spinner } from "@clack/prompts";
 import { resolveApiContext } from "../api/resolve.js";
@@ -8,16 +8,23 @@ import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { installedTargets } from "../setup/skills.js";
+import { createAgentClient, getAgentGatewayFinalResult, getAgentGatewayUsage, mapAgentApiError } from "../api/agent-client.js";
 
 export interface AskOptions {
   question: string;
   key: string;
+  projectUuid?: string | undefined;
   model?: string;
 }
 
 const OutputSchema = z.object({
   answer: z.string().describe("The answer in plain markdown — examples first, prose second."),
 });
+
+/** The installed SDK coerces string leaves such as "123" during assembly. */
+export function createAskOutputSchema(client: OpperClient) {
+  return z.preprocess((value) => getAgentGatewayFinalResult(client) ?? value, OutputSchema);
+}
 
 const SYSTEM_PROMPT = `You are the Opper CLI's built-in support agent.
 
@@ -80,7 +87,7 @@ export async function askCommand(opts: AskOptions): Promise<void> {
     );
   }
 
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
 
   // Suppress the agent SDK's noisy default logger — span tracing 404s on
   // the platform side spam the terminal even when the run succeeds.
@@ -96,12 +103,6 @@ export async function askCommand(opts: AskOptions): Promise<void> {
   }
   const instructions = `${SYSTEM_PROMPT}\n\n# Opper documentation\n${corpus}`;
 
-  // Only override baseUrl when the user has set a non-default. The opperai
-  // SDK defaults to https://api.opper.ai/v2; passing our bare-host
-  // DEFAULT_BASE_URL would strip the /v2 path and 404 on /spans.
-  const isCustomBaseUrl =
-    ctx.baseUrl !== undefined && ctx.baseUrl !== "https://api.opper.ai";
-
   const s = spinner();
   s.start("Thinking");
   // Track how much of the answer field we've already written so we can
@@ -109,12 +110,13 @@ export async function askCommand(opts: AskOptions): Promise<void> {
   // gives us per-field running buffers via `fieldBuffers`.
   let printed = 0;
 
+  const opperClient = createAgentClient(ctx);
   const agent = new Agent<string, z.infer<typeof OutputSchema>>({
     name: "OpperAsk",
     instructions,
     tools: [],
     model: opts.model ?? DEFAULT_MODELS.sonnet,
-    outputSchema: OutputSchema,
+    outputSchema: createAskOutputSchema(opperClient),
     enableStreaming: true,
     onStreamChunk: ({ chunkData }) => {
       // Single-iteration tool-less agents stream the answer field under
@@ -130,16 +132,14 @@ export async function askCommand(opts: AskOptions): Promise<void> {
       process.stdout.write(delta);
       printed += delta.length;
     },
-    opperConfig: {
-      apiKey: ctx.apiKey,
-      baseUrl: isCustomBaseUrl ? ctx.baseUrl : undefined,
-    },
+    opperClient,
   });
 
   let usage: { totalTokens: number; requests: number };
   try {
     const r = await agent.run(opts.question);
     usage = { totalTokens: r.usage.totalTokens, requests: r.usage.requests };
+    if (usage.totalTokens === 0) usage = getAgentGatewayUsage(opperClient) ?? usage;
     if (printed === 0) {
       // Streaming chunks didn't fire — fall back to printing the resolved
       // answer once.
@@ -148,7 +148,7 @@ export async function askCommand(opts: AskOptions): Promise<void> {
     }
   } catch (err) {
     s.stop("Failed");
-    throw err;
+    throw mapAgentApiError(err);
   }
 
   process.stdout.write(

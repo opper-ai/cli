@@ -86,6 +86,23 @@ function seedOpencodeConfig(sandbox: string): void {
 }
 
 describe("opencode adapter", () => {
+  it("uses an explicit target for discovery and runtime config", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { options: { headers: { "X-Opper-Project": "stale", "X-Team": "team" } } } } }));
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], { ...ROUTING, projectUuid });
+    expect(resolveOpenCodeModelsMock).toHaveBeenCalledWith({ apiKey: ROUTING.apiKey, baseUrl: ROUTING.apiBaseUrl, projectUuid });
+    const config = JSON.parse(spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT);
+    expect(config.provider.opper.options.headers).toEqual({ "X-Team": "team", "X-Opper-Project": projectUuid });
+    vi.unstubAllEnvs();
+  });
+
+  it("rejects an inherited model project header before launching", async () => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ "model/one": {} });
+    debugConfigMock.mockReturnValue({ status: 0, stdout: JSON.stringify({ provider: { opper: { models: { "model/one": { headers: { "x-opper-project": "stale" } } } } } }) });
+    await expect(opencode.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("project header") });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
   let sandbox: string;
   let prevHome: string | undefined;
   let prevEditorHome: string | undefined;

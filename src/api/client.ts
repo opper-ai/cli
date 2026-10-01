@@ -3,15 +3,17 @@ import { OpperError } from "../errors.js";
 export interface OpperApiConfig {
   baseUrl: string;
   apiKey: string;
+  projectUuid?: string | undefined;
 }
 
 interface ErrorBody {
   // `error` is an object on most surfaces ({message, type}) but a bare string
   // on some (e.g. POST /v3/images' validation 400s). Without the string arm we
   // fall through to printing the raw JSON body at the user.
-  error?: { message?: string; type?: string } | string;
+  error?: { message?: string; type?: string; code?: string } | string;
   detail?: string;
   message?: string;
+  code?: string;
 }
 
 export class OpperApi {
@@ -126,6 +128,7 @@ export class OpperApi {
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
       Authorization: `Bearer ${this.config.apiKey}`,
+      ...(this.config.projectUuid ? { "X-Opper-Project": this.config.projectUuid } : {}),
       ...extra,
     };
   }
@@ -170,6 +173,11 @@ export class OpperApi {
     }
     const err = body?.error;
     const errMessage = typeof err === "string" ? err : err?.message;
+    if (res.headers.get("X-Opper-Error-Code") === "project_required" || body?.code === "project_required" ||
+        (typeof err === "object" && (err?.type === "project_required" || err?.code === "project_required"))) {
+      throw new OpperError("PROJECT_REQUIRED", "This command requires a project.",
+        "Pass --project-uuid <uuid>, or set a resource default with `opper config project <slot> <uuid>`.");
+    }
     const detail = errMessage ?? body?.detail ?? body?.message ?? text;
     throw new OpperError(
       "API_ERROR",

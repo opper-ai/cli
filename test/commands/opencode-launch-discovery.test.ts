@@ -113,7 +113,7 @@ describe("OpenCode launch model discovery", () => {
         writeFileSync(configPath, JSON.stringify(originalConfig));
       });
 
-      async function launchAndCheck(expectedHost: string): Promise<void> {
+      async function launchAndCheck(expectedHost: string, expectedKey = selectedKey): Promise<void> {
         const exitCode = await launchCommand({
           agent: "opencode",
           key: "team",
@@ -125,7 +125,7 @@ describe("OpenCode launch model discovery", () => {
 
         expect(exitCode).toBe(0);
         expect(child).toBeDefined();
-        expect(child!.apiKey).toBe(selectedKey);
+        expect(child!.apiKey).toBe(expectedKey);
         expect(child!.config.provider.opper.options.apiKey).toBe("{env:OPPER_API_KEY}");
         const inferenceUrl = child!.config.provider.opper.options.baseURL;
         expect(inferenceUrl.startsWith(`${expectedHost}/v3/session/sess_`)).toBe(true);
@@ -140,9 +140,10 @@ describe("OpenCode launch model discovery", () => {
         expect.soft(String(url)).toBe(`${expectedHost}/v3/compat/models`);
         expect.soft(init?.method).toBe("GET");
         expect.soft(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${child!.apiKey}`);
-        expect.soft(Object.keys(child!.config.provider.opper.models)).toEqual(["allowed/selected-model"]);
+        const expectedModel = expectedKey === selectedKey ? "allowed/selected-model" : "other/foreign-model";
+        expect.soft(Object.keys(child!.config.provider.opper.models)).toEqual([expectedModel]);
         // Runtime content is loaded after project and custom config files.
-        expect(child!.inline.provider.opper.whitelist).toEqual(["allowed/selected-model"]);
+        expect(child!.inline.provider.opper.whitelist).toEqual([expectedModel]);
         expect(child!.inline.provider.opper.models).toBeUndefined();
         expect(child!.inline.provider.opper.options.baseURL).toBe(inferenceUrl);
         expect(child!.inline.provider.opper.options.apiKey).toBe("{env:OPPER_API_KEY}");
@@ -259,7 +260,7 @@ describe("OpenCode launch model discovery", () => {
         vi.stubEnv("OPPER_API_KEY", "op_live_ambient_test_key");
         vi.stubEnv("OPPER_BASE_URL", "https://override.opper.test/proxy");
 
-        await launchAndCheck("https://override.opper.test/proxy");
+        await launchAndCheck("https://override.opper.test/proxy", "op_live_ambient_test_key");
       });
 
       it("preserves unrelated inline JSONC settings while replacing stale Opper routing and whitelist", async () => {

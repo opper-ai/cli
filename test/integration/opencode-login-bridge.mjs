@@ -25,8 +25,10 @@ function runOpenCodeInference(args, options) {
 }
 const home = await mkdtemp(join(tmpdir(), "opper-opencode-bridge-real-"));
 let inferenceCalls = 0;
+const requests = [];
 const server = createServer((request, response) => {
   const auth = request.headers.authorization;
+  requests.push({ path: request.url, auth, project: request.headers["x-opper-project"] });
   if (request.url === "/v3/compat/chat/completions" && request.method === "POST" && auth === "Bearer synthetic-opper-key") {
     inferenceCalls++;
     request.resume();
@@ -38,7 +40,7 @@ const server = createServer((request, response) => {
     response.end(`data: ${chunk({ role: "assistant" })}\n\ndata: ${chunk({ content: "Bridge inference OK" })}\n\ndata: ${chunk({}, "stop")}\n\ndata: [DONE]\n\n`);
     return;
   }
-  if (request.url !== "/v3/compat/models" || !["Bearer synthetic-opper-key", "Bearer synthetic-opper-renewed"].includes(auth)) {
+  if (request.url !== "/v3/compat/models" || !["Bearer synthetic-opper-key", "Bearer synthetic-opper-renewed", "Bearer synthetic-personal-env-key"].includes(auth)) {
     response.writeHead(403).end();
     return;
   }
@@ -66,12 +68,13 @@ try {
   };
   delete env.OPPER_API_KEY;
   delete env.OPPER_BASE_URL;
+  delete env.OPPER_PROJECT_UUID;
 
   const opperConfig = join(home, ".opper", "config.json");
   await mkdir(dirname(opperConfig), { recursive: true });
   await writeFile(opperConfig, JSON.stringify({
     version: 1, defaultKey: "default",
-    keys: { default: { apiKey: "synthetic-opper-key", baseUrl: host } },
+    keys: { default: { apiKey: "synthetic-opper-key", baseUrl: host, orgId: 42, source: "device-flow", defaultProjectUuid: "22222222-2222-4222-8222-222222222222" } },
   }), { mode: 0o600 });
 
   delete env.OPPER_EDITOR_HOME;
@@ -107,6 +110,17 @@ try {
   // OpenCode may also call the model to title the session. Every counted call
   // reached the mock compat endpoint with the synthetic bearer key.
   assert.ok(inferenceCalls >= 1);
+  assert.ok(requests.every((request) => request.project === undefined), "resource default must not target org inference");
+
+  const projectUuid = "11111111-1111-4111-8111-111111111111";
+  await run(process.execPath, [join(process.cwd(), "dist", "index.js"), "--project-uuid", projectUuid, "editors", "opencode", "--login-bridge"], { cwd: home, env, timeout: 30000 });
+  const beforeTarget = requests.length;
+  const targeted = await debugConfig();
+  assert.equal(targeted.provider?.opper?.options?.headers?.["X-Opper-Project"], projectUuid);
+  const targetedAnswer = await runOpenCodeInference(["run", "--model", "opper/anthropic/claude-sonnet-test", "Say hi"], { cwd: home, env, timeout: 30000, maxBuffer: 4_000_000 });
+  assert.match(targetedAnswer.stdout, /Bridge inference OK/);
+  assert.ok(requests.slice(beforeTarget).some((request) => request.path === "/v3/compat/chat/completions"));
+  assert.ok(requests.slice(beforeTarget).every((request) => request.project === projectUuid), "target must match across discovery and real inference");
 
   await writeFile(opperConfig, JSON.stringify({ version: 1, defaultKey: "default", keys: {
     default: { apiKey: "synthetic-opper-key", baseUrl: host, expiresAt: "2020-01-01T00:00:00Z" },
@@ -128,9 +142,10 @@ try {
     cwd: home, env, timeout: 30000,
   });
   env.OPPER_API_KEY = "synthetic-personal-env-key";
-  env.OPPER_BASE_URL = "https://personal.example";
+  env.OPPER_BASE_URL = host;
   const selected = await debugConfig();
-  assert.equal(selected.provider?.opper?.options?.apiKey, "synthetic-opper-renewed");
+  assert.equal(selected.provider?.opper?.options?.apiKey, "synthetic-personal-env-key");
+  assert.equal(selected.provider?.opper?.options?.headers, undefined);
 
   env.OPPER_CLI_LAUNCH_OPENCODE = "1";
   env.OPPER_API_KEY = "synthetic-launch-key";
@@ -142,7 +157,7 @@ try {
   const launched = await debugConfig();
   assert.equal(launched.provider?.opper?.options?.baseURL, `${host}/v3/session/synthetic`);
   assert.equal(launched.provider?.opper?.options?.apiKey, "synthetic-launch-key");
-  console.log("Real OpenCode completed synthetic inference, loaded/expired/renewed the CLI credential slot, and kept the launch session route.");
+  console.log("Real OpenCode completed org and explicitly targeted synthetic inference, loaded/expired/renewed credentials, isolated an env key, and kept the launch session route.");
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(home, { recursive: true, force: true });

@@ -5,6 +5,7 @@ import { printTable } from "../ui/table.js";
 
 export interface TracesListOptions {
   key: string;
+  projectUuid?: string | undefined;
   limit?: number;
   offset?: number;
   name?: string;
@@ -13,15 +14,18 @@ export interface TracesListOptions {
 export interface TracesGetOptions {
   id: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export interface TracesDeleteOptions {
   id: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 interface TraceSummary {
-  uuid: string;
+  id?: string;
+  uuid?: string;
   name?: string;
   status?: string;
   start_time?: string;
@@ -29,18 +33,20 @@ interface TraceSummary {
 }
 
 interface ListResponse {
-  traces: TraceSummary[];
+  data?: TraceSummary[];
+  traces?: TraceSummary[];
 }
 
 interface GetResponse {
-  trace: TraceSummary & { [k: string]: unknown };
+  data?: TraceSummary & { spans?: Array<Record<string, unknown>> };
+  trace?: TraceSummary & { [k: string]: unknown };
   spans?: Array<Record<string, unknown>>;
 }
 
 export async function tracesListCommand(
   opts: TracesListOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true });
   const api = new OpperApi(ctx);
   const query: Record<string, string | number | undefined> = {};
   if (opts.limit !== undefined) query.limit = opts.limit;
@@ -48,8 +54,8 @@ export async function tracesListCommand(
   if (opts.name !== undefined) query.name = opts.name;
 
   const resp = await api.get<ListResponse>("/v3/traces", query);
-  const rows = resp.traces.map((t) => [
-    t.uuid,
+  const rows = (resp.data ?? resp.traces ?? []).map((t) => [
+    t.id ?? t.uuid ?? "",
     t.name ?? "",
     t.status ?? "",
     t.start_time ?? "",
@@ -61,28 +67,30 @@ export async function tracesListCommand(
 export async function tracesGetCommand(
   opts: TracesGetOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true });
   const api = new OpperApi(ctx);
   const resp = await api.get<GetResponse>(
     `/v3/traces/${encodeURIComponent(opts.id)}`,
   );
-  const t = resp.trace;
-  console.log(`${brand.bold("uuid:")}     ${t.uuid}`);
+  const t = resp.data ?? resp.trace;
+  if (!t) throw new Error("Trace response is missing trace details.");
+  console.log(`${brand.bold("uuid:")}     ${t.id ?? t.uuid ?? opts.id}`);
   if (t.name) console.log(`${brand.bold("name:")}     ${t.name}`);
   if (t.status) console.log(`${brand.bold("status:")}   ${t.status}`);
   if (t.start_time) console.log(`${brand.bold("start:")}    ${t.start_time}`);
   if (t.duration_ms !== undefined) {
     console.log(`${brand.bold("duration:")} ${t.duration_ms}ms`);
   }
-  if (resp.spans?.length) {
-    console.log(`${brand.bold("spans:")}    ${resp.spans.length}`);
+  const spans = resp.data?.spans ?? resp.spans;
+  if (spans?.length) {
+    console.log(`${brand.bold("spans:")}    ${spans.length}`);
   }
 }
 
 export async function tracesDeleteCommand(
   opts: TracesDeleteOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true });
   const api = new OpperApi(ctx);
   await api.del(`/v3/traces/${encodeURIComponent(opts.id)}`);
   console.log(brand.accent(`✓ Deleted trace "${opts.id}".`));

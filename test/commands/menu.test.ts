@@ -118,6 +118,16 @@ describe("menuCommand", () => {
     expect(launchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("carries an explicit project through an interactive launch", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    hermesDetect.mockResolvedValue({ installed: true });
+    hermesIsConfigured.mockResolvedValue(true);
+    launchMock.mockResolvedValue(0);
+    answers.push(() => "launch:hermes", () => "quit");
+    await menuCommand({ key: "default", projectUuid });
+    expect(launchMock).toHaveBeenCalledWith({ agent: "hermes", key: "default", projectUuid });
+  });
+
   it("does not show Launch entry for an unconfigured adapter", async () => {
     hermesDetect.mockResolvedValue({ installed: true });
     hermesIsConfigured.mockResolvedValue(false);

@@ -12,11 +12,13 @@ import { OpperError } from "../errors.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import { mcpAddCommand } from "./mcp.js";
 import { installOpenCodeLoginBridge, removeOpenCodeLoginBridge, openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
+import { resolveApiContext, validateProjectUuid } from "../api/resolve.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
   key?: string;
+  projectUuid?: string | undefined;
   mcp?: boolean;
   mcpUrl?: string;
   mcpScopes?: string;
@@ -50,6 +52,7 @@ export async function editorsListCommand(): Promise<void> {
 export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
+  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   if (opts.loginBridge || opts.removeLoginBridge) {
     if (opts.loginBridge && opts.removeLoginBridge) {
       throw new OpperError("INVALID_ARGUMENT", "Choose either --login-bridge or --remove-login-bridge.");
@@ -63,7 +66,7 @@ export async function editorsOpenCodeCommand(
       return;
     }
     const selectedSlot = opts.key ?? "default";
-    const result = await installOpenCodeLoginBridge(selectedSlot);
+    const result = await installOpenCodeLoginBridge(selectedSlot, opts.projectUuid);
     console.log(brand.accent(`✓ Installed OpenCode login bridge at ${result.path}.`));
     console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot}. Restart OpenCode after renewing that slot.`);
     return;
@@ -87,11 +90,18 @@ export async function editorsOpenCodeCommand(
     return;
   }
 
-  const models = await resolveOpenCodeModels(opts.key);
+  const context = await resolveApiContext(opts.key ?? "default", { projectUuid: opts.projectUuid })
+    .catch((error: unknown) => {
+      if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
+      throw error;
+    });
+  const models = context ? await resolveOpenCodeModels(context) : opts.projectUuid ? await resolveOpenCodeModels(opts.key, opts.projectUuid) : await resolveOpenCodeModels(opts.key);
   const result = await configureOpenCode({
     location: opts.location,
     ...(opts.overwrite ? { overwrite: true } : {}),
     ...(models ? { models } : {}),
+    ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
+    ...(context ? { baseUrl: context.baseUrl } : {}),
   });
   if (!result.wrote && result.reason === "exists") {
     console.log(
@@ -102,7 +112,8 @@ export async function editorsOpenCodeCommand(
   console.log(brand.accent(`✓ Wrote OpenCode config to ${result.path}.`));
 }
 
-export async function editorsGitHubCopilotVSCodeCommand(): Promise<void> {
+export async function editorsGitHubCopilotVSCodeCommand(projectUuid?: string): Promise<void> {
+  if (projectUuid) throw new OpperError("INVALID_ARGUMENT", "VS Code Copilot setup does not support an explicit project target.", "Use organization inference without --project-uuid, or launch a supported agent with the target.");
   const detect = await githubCopilotVSCode.detect();
   if (!detect.installed) {
     throw new OpperError(

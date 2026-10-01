@@ -36,7 +36,7 @@ export async function accountMenu(opts: MenuOptions): Promise<void> {
           await whoamiCommand({ key: opts.key });
           break;
         case "login":
-          await loginCommand({ key: opts.key });
+          await loginCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "logout":
           await logoutCommand({ key: opts.key, all: false });

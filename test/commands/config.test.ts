@@ -6,11 +6,24 @@ import {
   configListCommand,
   configGetCommand,
   configRemoveCommand,
+  configProjectCommand,
 } from "../../src/commands/config.js";
 
 useTempOpperHome();
 
 describe("config commands", () => {
+  it("sets and clears resource defaults without changing the credential binding", async () => {
+    await setSlot("default", { apiKey: "k", orgId: 42, projectUuid: "old-server-binding" });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await configProjectCommand("default", "11111111-1111-4111-8111-111111111111");
+      expect((await readConfig())?.keys.default).toMatchObject({ apiKey: "k", projectUuid: "old-server-binding", defaultProjectUuid: "11111111-1111-4111-8111-111111111111" });
+      await configProjectCommand("default");
+      expect((await readConfig())?.keys.default?.defaultProjectUuid).toBeUndefined();
+      expect((await readConfig())?.keys.default?.projectUuid).toBe("old-server-binding");
+      await expect(configProjectCommand("default", "bad")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    } finally { log.mockRestore(); }
+  });
   it("add stores a slot", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {

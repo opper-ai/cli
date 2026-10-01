@@ -43,6 +43,15 @@ describe("OpenCode login bridge setup", () => {
     expect(file).not.toContain("op_live_");
   });
 
+  it("persists only an explicitly chosen target alongside the slot name", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    const result = await installOpenCodeLoginBridge("org-personal", projectUuid);
+    const file = await readFile(result.path, "utf8");
+    expect(file).toContain(`const DEFAULT_PROJECT_UUID = "${projectUuid}";`);
+    expect(file).toContain('const DEFAULT_SLOT = "org-personal";');
+    expect(file).not.toContain("op_live_");
+  });
+
   it("refuses to overwrite or remove a plugin file that the CLI does not own", async () => {
     const path = openCodeLoginBridgePath();
     await mkdir(dirname(path), { recursive: true });

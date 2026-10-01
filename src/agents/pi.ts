@@ -62,6 +62,7 @@ async function setOpperProvider(
   apiKey: string,
   launchModel: string,
   baseUrl: string,
+  projectUuid?: string,
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
@@ -71,6 +72,7 @@ async function setOpperProvider(
     api: "openai-completions",
     apiKey,
     baseUrl,
+    ...(projectUuid ? { headers: { "X-Opper-Project": projectUuid } } : {}),
     models: pickerModelsForLaunch(launchModel).map((m) => ({
       id: m.id,
       contextWindow: m.contextWindow,
@@ -116,7 +118,7 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, OPPER_COMPAT_URL);
+  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid);
 }
 
 async function unconfigure(): Promise<void> {
@@ -179,7 +181,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     // Write the api key as the `$OPPER_API_KEY` env reference, not the literal —
     // pi resolves it from the env we export below, and the extension re-registers
     // from the same env, so the real key never lands in the user's config on disk.
-    await setOpperProvider("$OPPER_API_KEY", routing.model, routing.baseUrl);
+    await setOpperProvider("$OPPER_API_KEY", routing.model, routing.baseUrl, routing.projectUuid);
     const restoreExtension = await installExtension();
     try {
       // pi's CLI requires *both* --provider and --model to resolve a non-default
@@ -200,6 +202,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
           ...process.env,
           OPPER_API_KEY: routing.apiKey,
           OPPER_BASE_URL: routing.baseUrl,
+          OPPER_PROJECT_UUID: routing.projectUuid ?? "",
         },
       });
       return result.code;

@@ -32,6 +32,7 @@ const register: RegisterFn = (program, ctx) => {
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.loginBridge ? { loginBridge: true } : {}),
         ...(cmdOpts.removeLoginBridge ? { removeLoginBridge: true } : {}),
         ...(cmdOpts.mcp ? { mcp: true } : {}),
@@ -51,7 +52,7 @@ const register: RegisterFn = (program, ctx) => {
         await editorsGitHubCopilotVSCodeRemoveCommand();
         return;
       }
-      await editorsGitHubCopilotVSCodeCommand();
+      await editorsGitHubCopilotVSCodeCommand(ctx.projectUuid?.());
     });
 };
 

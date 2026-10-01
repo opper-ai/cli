@@ -97,8 +97,8 @@ describe("launch session summary credentials and availability", () => {
     });
   }
 
-  function expectCapturedCredentials(expectedHost: string): void {
-    expect(routingUsed?.apiKey).toBe(selectedKey);
+  function expectCapturedCredentials(expectedHost: string, expectedKey = selectedKey): void {
+    expect(routingUsed?.apiKey).toBe(expectedKey);
     expect(routingUsed?.apiBaseUrl).toBe(expectedHost);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [input, init] = fetchMock.mock.calls[0]!;
@@ -122,7 +122,7 @@ describe("launch session summary credentials and availability", () => {
     expect(text).not.toContain("Authorization:");
   }
 
-  it("uses the selected child key and overridden host for successful usage totals despite an ambient key", async () => {
+  it("uses the environment key and overridden host consistently for child inference and usage totals", async () => {
     const overrideHost = "https://override.example.test/proxy";
     vi.stubEnv("OPPER_API_KEY", ambientKey);
     vi.stubEnv("OPPER_BASE_URL", overrideHost);
@@ -134,7 +134,7 @@ describe("launch session summary credentials and availability", () => {
 
     expect(await launch()).toBe(childExitCode);
 
-    expectCapturedCredentials(overrideHost);
+    expectCapturedCredentials(overrideHost, ambientKey);
     const text = summaryText();
     expect(text).toMatch(/Requests\s+4/);
     expect(text).toMatch(/Tokens\s+5,000/);
@@ -142,6 +142,19 @@ describe("launch session summary credentials and availability", () => {
     expect(text).toMatch(/sonnet\s+3 reqs\s+3,000 tok\s+\$0\.0300/);
     expect(text).not.toMatch(/usage unavailable|usage rollup lags/i);
     expectNoSecretsOrRawErrors(text);
+  });
+
+  it("keeps explicit target attribution in the session summary but ignores resource defaults for inference", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await setSlot("team", { apiKey: selectedKey, baseUrl: selectedHost, orgId: 42, defaultProjectUuid: "22222222-2222-4222-8222-222222222222" });
+    await launchCommand({ agent: adapter.name, key: "team", projectUuid });
+    expect(routingUsed?.projectUuid).toBe(projectUuid);
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("X-Opper-Project")).toBe(projectUuid);
+    fetchMock.mockClear();
+    vi.setSystemTime(startedAt);
+    await launch();
+    expect(routingUsed?.projectUuid).toBeUndefined();
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("X-Opper-Project")).toBeNull();
   });
 
   it.each(["stored slot", "environment and stored slot"])(

@@ -51,6 +51,7 @@ async function setOpperProvider(
   apiKey: string,
   launchModel: string,
   baseUrl: string,
+  projectUuid?: string,
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
@@ -61,6 +62,7 @@ async function setOpperProvider(
     api: "openai-completions",
     apiKey,
     baseUrl,
+    ...(projectUuid ? { headers: { "X-Opper-Project": projectUuid } } : {}),
     models: pickerModelsForLaunch(launchModel).map((m) => ({
       id: m.id,
       name: m.id,
@@ -107,7 +109,7 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, OPPER_COMPAT_URL);
+  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid);
 }
 
 async function unconfigure(): Promise<void> {
@@ -165,7 +167,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // add openclaw` rewrites it. Acceptable — direct gateway use after a
   // launch is rare, and the leak only persists in that narrow window.
   if (isDaemonStart) {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl, routing.projectUuid);
     const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
     if (result.status === 0) {
       console.log(
@@ -183,7 +185,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // sibling providers / top-level keys the user edits mid-spawn aren't
   // clobbered on restore.
   return withJsonKeys(modelsPath(), [["providers", PROVIDER_KEY]], async () => {
-    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl);
+    await setOpperProvider(routing.apiKey, routing.model, routing.baseUrl, routing.projectUuid);
     const result = spawnSync("openclaw", finalArgs, { stdio: "inherit" });
     return result.status ?? -1;
   });

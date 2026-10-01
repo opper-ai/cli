@@ -3,9 +3,24 @@ import {
   getSlot,
   deleteSlot,
   readConfig,
+  replaceSlotIfUnchanged,
 } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
+import { validateProjectUuid } from "../api/resolve.js";
+
+export async function configProjectCommand(name: string, projectUuid?: string): Promise<void> {
+  if (projectUuid !== undefined) validateProjectUuid(projectUuid);
+  const slot = await getSlot(name);
+  if (!slot) throw new OpperError("AUTH_REQUIRED", `No slot named "${name}"`, "Run `opper login` first.");
+  const replacement = { ...slot };
+  delete replacement.defaultProjectUuid;
+  if (projectUuid !== undefined) replacement.defaultProjectUuid = projectUuid;
+  if (!await replaceSlotIfUnchanged(name, slot, replacement)) {
+    throw new OpperError("API_ERROR", "The slot changed while setting its resource default. Retry the command.");
+  }
+  console.log(projectUuid ? `Resource commands for slot "${name}" default to project ${projectUuid}.` : `Cleared the resource project default for slot "${name}".`);
+}
 
 export interface ConfigAddOptions {
   name: string;

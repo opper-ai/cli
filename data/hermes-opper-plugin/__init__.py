@@ -17,6 +17,7 @@ subagent and per /reset), falling back to a per-process id so one-shot runs
 still share one trace.
 """
 
+import os
 import uuid
 from typing import Any
 
@@ -48,12 +49,15 @@ class OpperProfile(ProviderProfile):
                 "X-Opper-Parent-Span-Id": tid,
             }
         }
+        project = os.environ.get("OPPER_PROJECT_UUID")
+        if project:
+            top["extra_headers"]["X-Opper-Project"] = project
         return {}, top
 
-    def fetch_models(self, *, api_key: str | None = None, timeout: float = 8.0):
-        if not self.base_url:
+    def fetch_models(self, *, api_key: str | None = None, timeout: float = 8.0, base_url: str | None = None):
+        if not (base_url or self.base_url):
             return None
-        return super().fetch_models(api_key=api_key, timeout=timeout)
+        return super().fetch_models(api_key=api_key, timeout=timeout, base_url=base_url)
 
 
 register_provider(OpperProfile(
@@ -65,5 +69,6 @@ register_provider(OpperProfile(
     # rejects it with 401.
     env_vars=("OPPER_API_KEY",),
     base_url="",
+    default_headers={"X-Opper-Project": os.environ["OPPER_PROJECT_UUID"]} if os.environ.get("OPPER_PROJECT_UUID") else {},
     default_max_tokens=65536,
 ))

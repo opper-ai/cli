@@ -4,7 +4,8 @@ import {
   isLaunchable,
   type AgentAdapter,
 } from "../../agents/types.js";
-import { getSlot } from "../../auth/config.js";
+import { resolveApiContext } from "../../api/resolve.js";
+import { OpperError } from "../../errors.js";
 import { launchCommand } from "../launch.js";
 import { fetchModels, type OpperModel } from "../models.js";
 import { brand } from "../../ui/colors.js";
@@ -15,10 +16,6 @@ import {
   probeAdapters,
   reportError,
 } from "./shared.js";
-
-// Cache the model list across opens of the agents menu so the picker is
-// instant after the first fetch within a session.
-let cachedModels: OpperModel[] | null = null;
 
 export async function agentsMenu(opts: MenuOptions): Promise<void> {
   while (true) {
@@ -112,20 +109,22 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
     try {
       switch (choice) {
         case "launch":
-          await launchCommand({ agent: adapter.name, key: opts.key });
+          await launchCommand({ agent: adapter.name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "launch-with-model": {
-          const model = await pickModel(opts.key, adapter);
+          const model = await pickModel(opts.key, adapter, opts.projectUuid);
           if (!model) break;
-          await launchCommand({ agent: adapter.name, key: opts.key, model });
+          await launchCommand({ agent: adapter.name, key: opts.key, model, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "configure": {
-          const slot = await getSlot(opts.key);
+          const context = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid }).catch((error: unknown) => {
+            if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
+            throw error;
+          });
           await adapter.configure({
             keyName: opts.key,
-            baseUrl: process.env.OPPER_BASE_URL ?? slot?.baseUrl ?? "https://api.opper.ai",
-            ...(slot?.apiKey ? { apiKey: slot.apiKey } : {}),
+            ...(context ?? { baseUrl: process.env.OPPER_BASE_URL ?? "https://api.opper.ai", ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }),
           });
           log.success(`${adapter.displayName} configured.`);
           break;
@@ -154,7 +153,7 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
 }
 
 /**
- * Fetch the Opper model catalog (cached for the session) and ask the user
+ * Fetch the current credential's Opper model catalog and ask the user
  * to pick one via clack's autocomplete prompt — typing "opus" filters to
  * Claude Opus models, "gpt" to OpenAI, etc. Returns the model id, or null
  * on cancel / when the catalog is empty.
@@ -162,20 +161,20 @@ async function agentMenu(initial: AdapterStatus, opts: MenuOptions): Promise<voi
 async function pickModel(
   key: string,
   adapter: AgentAdapter,
+  projectUuid?: string,
 ): Promise<string | null> {
-  if (!cachedModels) {
-    const s = spinner();
-    s.start("Fetching available models");
-    try {
-      cachedModels = await fetchModels(key);
-    } catch (err) {
-      s.stop("Failed to fetch models");
-      reportError(err);
-      return null;
-    }
-    s.stop(`Loaded ${cachedModels.length} models`);
+  let fetchedModels: OpperModel[];
+  const s = spinner();
+  s.start("Fetching available models");
+  try {
+    fetchedModels = await fetchModels(key, projectUuid);
+  } catch (err) {
+    s.stop("Failed to fetch models");
+    reportError(err);
+    return null;
   }
-  const models = filterModelsForAdapter(adapter, cachedModels);
+  s.stop(`Loaded ${fetchedModels.length} models`);
+  const models = filterModelsForAdapter(adapter, fetchedModels);
   if (models.length === 0) return null;
 
   const options = models.map((m) => {

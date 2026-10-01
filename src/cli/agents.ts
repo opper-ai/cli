@@ -40,7 +40,7 @@ const register: RegisterFn = (program, ctx) => {
     .option("--model <id>", "Opper model identifier (where supported)")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .action(async (name: string, opts: { model?: string; codexHome?: string }) => {
-      await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome);
+      await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.());
     });
 
   agentsCmd
@@ -100,6 +100,7 @@ const register: RegisterFn = (program, ctx) => {
         const code = await launchCommand({
           agent: agentName,
           key: ctx.key(),
+          ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
           ...(cmdOpts.codexHome !== undefined ? { codexHome: cmdOpts.codexHome } : {}),
           ...(cmdOpts.install ? { install: true } : {}),

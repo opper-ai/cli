@@ -198,6 +198,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
         ...process.env,
         HERMES_HOME: home,
         OPPER_API_KEY: routing.apiKey,
+        OPPER_PROJECT_UUID: routing.projectUuid ?? "",
       },
     });
     return result.code;

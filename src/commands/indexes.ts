@@ -5,6 +5,7 @@ import { printTable } from "../ui/table.js";
 
 export interface IndexesListOptions {
   key: string;
+  projectUuid?: string | undefined;
   limit?: number;
   offset?: number;
 }
@@ -12,6 +13,7 @@ export interface IndexesListOptions {
 export interface IndexesGetOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 interface ListResponse {
@@ -35,7 +37,7 @@ interface GetResponse {
 export async function indexesListCommand(
   opts: IndexesListOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const query: Record<string, string | number | undefined> = {};
   if (opts.limit !== undefined) query.limit = opts.limit;
@@ -53,7 +55,7 @@ export async function indexesListCommand(
 export async function indexesGetCommand(
   opts: IndexesGetOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const k = await api.get<GetResponse>(
     `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
@@ -74,18 +76,20 @@ export async function indexesGetCommand(
 export interface IndexesCreateOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
   embeddingModel?: string;
 }
 
 export interface IndexesDeleteOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export async function indexesCreateCommand(
   opts: IndexesCreateOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const body: Record<string, unknown> = { name: opts.name };
   if (opts.embeddingModel) body.embedding_model = opts.embeddingModel;
@@ -96,7 +100,7 @@ export async function indexesCreateCommand(
 export async function indexesDeleteCommand(
   opts: IndexesDeleteOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const kb = await api.get<GetResponse>(
     `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
@@ -109,6 +113,7 @@ export interface IndexesQueryOptions {
   name: string;
   query: string;
   key: string;
+  projectUuid?: string | undefined;
   topK?: number;
   filtersJson?: string;
 }
@@ -123,7 +128,7 @@ interface QueryResult {
 export async function indexesQueryCommand(
   opts: IndexesQueryOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const kb = await api.get<GetResponse>(
     `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,
@@ -160,12 +165,13 @@ export interface IndexesAddOptions {
   content: string;
   metadataJson?: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export async function indexesAddCommand(
   opts: IndexesAddOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const kb = await api.get<GetResponse>(
     `/v2/knowledge/by-name/${encodeURIComponent(opts.name)}`,

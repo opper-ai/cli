@@ -6,6 +6,7 @@ import {
   configListCommand,
   configGetCommand,
   configRemoveCommand,
+  configProjectCommand,
 } from "../commands/config.js";
 import type { RegisterFn } from "./types.js";
 
@@ -26,6 +27,7 @@ const register: RegisterFn = (program, ctx) => {
     .action(async (cmdOpts: { force?: boolean; renew?: boolean; baseUrl?: string }) => {
       await loginCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
         ...(cmdOpts.force ? { force: true } : {}),
         ...(cmdOpts.renew ? { renew: true } : {}),
@@ -48,6 +50,12 @@ const register: RegisterFn = (program, ctx) => {
   const config = program
     .command("config")
     .description("Manage stored API keys");
+
+  config.command("project")
+    .description("Set a resource project default for a slot (does not scope inference); omit UUID to clear")
+    .argument("<name>", "slot name")
+    .argument("[uuid]", "project UUID; omit to clear the default")
+    .action(configProjectCommand);
 
   config
     .command("add")

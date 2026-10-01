@@ -103,4 +103,14 @@ describe("runDeviceFlow", () => {
     await runDeviceFlow({ renew: true, currentCredentialId: "key-old" });
     expect(startDeviceAuth).toHaveBeenCalledWith({ renew: true, currentCredentialId: "key-old" });
   });
+
+  it("stores an organization personal credential without inventing a project binding", async () => {
+    startDeviceAuth.mockResolvedValue({ deviceCode: "dc", userCode: "x", verificationUri: "x", expiresIn: 600, interval: 0 });
+    pollDeviceToken.mockResolvedValue({ apiKey: "org-key", orgId: 42, credentialId: "key-org", projectId: null, projectUuid: null, projectName: null, user: { email: "a" } });
+    const result = await runDeviceFlow();
+    expect(result).toMatchObject({ apiKey: "org-key", orgId: 42, credentialId: "key-org", source: "device-flow" });
+    expect(result).not.toHaveProperty("projectUuid");
+    expect(result).not.toHaveProperty("projectId");
+    expect(result).not.toHaveProperty("defaultProjectUuid");
+  });
 });

@@ -1,6 +1,7 @@
 export type OpperErrorCode =
   | "AUTH_REQUIRED"
   | "AUTH_EXPIRED"
+  | "PROJECT_REQUIRED"
   | "AGENT_NOT_FOUND"
   | "AGENT_CONFIG_CONFLICT"
   | "AGENT_RESTORE_FAILED"
@@ -13,6 +14,7 @@ export type OpperErrorCode =
 export const EXIT_CODES: Record<OpperErrorCode, number> = {
   AUTH_REQUIRED: 2,
   AUTH_EXPIRED: 2,
+  PROJECT_REQUIRED: 8,
   AGENT_NOT_FOUND: 3,
   AGENT_CONFIG_CONFLICT: 4,
   AGENT_RESTORE_FAILED: 5,

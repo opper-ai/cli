@@ -10,6 +10,15 @@ describe("OpperApi", () => {
     globalThis.fetch = originalFetch;
   });
 
+  it("sends an explicit project header and maps project_required to actionable guidance", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { type: "project_required", message: "project required" } }), { status: 400 }));
+    globalThis.fetch = fetchMock as typeof fetch;
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k", projectUuid });
+    await expect(api.get("/v3/functions")).rejects.toMatchObject({ code: "PROJECT_REQUIRED", hint: expect.stringContaining("--project-uuid") });
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ "X-Opper-Project": projectUuid });
+  });
+
   it("sends Bearer auth and JSON body on POST", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ hello: "world" }), {

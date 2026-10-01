@@ -63,6 +63,7 @@ export default function (pi: any) {
       apiKey: process.env.OPPER_API_KEY,
       baseUrl: process.env.OPPER_BASE_URL,
       headers: {
+        ...(process.env.OPPER_PROJECT_UUID ? { "X-Opper-Project": process.env.OPPER_PROJECT_UUID } : {}),
         "X-Opper-Trace-Id": tid,
         "X-Opper-Parent-Span-Id": tid,
       },

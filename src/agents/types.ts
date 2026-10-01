@@ -11,6 +11,7 @@ export interface OpperRouting {
   apiBaseUrl: string;
   baseUrl: string;
   apiKey: string;
+  projectUuid?: string | undefined;
   model: string;
   /** Model explicitly selected with `opper launch --model`, if any. */
   modelOverride?: string;
@@ -20,6 +21,7 @@ export interface OpperRouting {
 export interface ConfigureOptions {
   /** API key for adapters that bake the key into their config. */
   apiKey?: string;
+  projectUuid?: string | undefined;
   keyName?: string;
   baseUrl?: string;
   model?: string;

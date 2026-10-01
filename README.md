@@ -47,8 +47,35 @@ Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each ho
 | `opper config list` | List configured slots. |
 | `opper config get <name>` | Print the raw API key (for scripting). |
 | `opper config remove <name>` | Delete a stored slot. |
+| `opper config project <name> [uuid]` | Set a default resource project for a slot; omit the UUID to clear it. |
 
 Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--key` (or `default`).
+An environment key uses `OPPER_BASE_URL` or the production API root; it does not
+borrow a stored slot's host, expiry, organization, or resource project.
+
+Organization personal agent credentials have no project binding. Inference,
+models, and usage work at organization scope without a target. Pass the global
+`--project-uuid <uuid>` flag to target a project explicitly. Functions, indexes,
+named calls, and SDK `ask` require an explicit project or a resource default.
+Traces without a target use the organization's projectless trace group; a
+configured resource default also applies to trace commands. Resource defaults
+never apply implicitly to inference or agent launches.
+
+```bash
+opper --project-uuid <uuid> functions list
+opper config project work <uuid>
+opper --key work functions list
+opper --key work launch opencode                  # organization inference
+opper --key work --project-uuid <uuid> launch opencode
+```
+
+Renewal replaces server credential metadata. The resource default is retained
+only when the renewed credential has the same verified organization and API host.
+`launch --project` still selects local agent configuration; `keys create --project`
+still chooses the project for a manually created application key.
+Claude Desktop and the VS Code Copilot setup cannot send the project header and
+reject explicit targets. Codex Desktop supports targets, but requires a stored
+slot so Finder launches can refresh it; unset `OPPER_API_KEY` before setup.
 
 The browser flow also stores the server-issued credential ID, organization ID,
 and expiry when available. `opper whoami` shows that expiry. An expired slot
@@ -236,6 +263,8 @@ opper ask --model claude-opus-5 "compare the v2 and v3 APIs"
 ```
 
 The answer streams in, then prints a token / request count. Requires Opper skills to be installed first (`opper skills install`).
+It uses a named SDK function. With an organization personal key, select a
+resource project using `--project-uuid` or `opper config project`.
 
 ## Skills
 
@@ -289,7 +318,11 @@ each OpenCode startup, and injects the Opper provider and allowed models in
 memory. It does not copy the key into `opencode.json` or rewrite other provider
 settings. Setup binds the selected CLI slot to plain OpenCode; reinstall with
 another `--key` to switch it, or set `OPPER_KEY_SLOT` for one OpenCode process.
-Ambient `OPPER_API_KEY` and `OPPER_BASE_URL` do not override that slot. If the stored key is expired or the
+`OPPER_API_KEY` overrides the slot with an independent credential; its host is
+`OPPER_BASE_URL` or the production API root. An explicit target supplied during
+bridge setup is persisted without a secret. For one plain OpenCode process,
+`OPPER_PROJECT_UUID` supplies an explicit target. An environment key uses only
+that environment target, and never borrows the bridge's stored target. If the stored key is expired or the
 catalog cannot be fetched, Opper is unavailable in that OpenCode process;
 other providers stay available. Renew the selected slot (for example,
 `opper --key work login --renew`) and restart
@@ -596,6 +629,7 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 | Flag | Description |
 |------|-------------|
 | `--key <slot>` | API key slot to use (default: `default`). |
+| `--project-uuid <uuid>` | Explicit project target sent as `X-Opper-Project`. |
 | `--debug` | Verbose diagnostic output. |
 | `--no-telemetry` | Disable anonymous telemetry. |
 | `--no-color` | Disable ANSI colors. |

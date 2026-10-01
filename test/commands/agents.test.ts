@@ -159,7 +159,7 @@ describe("agentsConfigureCommand", () => {
     vi.unstubAllEnvs();
   });
 
-  it("forwards the explicitly selected stored key, host and model", async () => {
+  it("forwards an independent environment credential without borrowing the selected slot host", async () => {
     await setSlot("default", { apiKey: "fixture-default", baseUrl: "https://default.example" });
     await setSlot("prod", { apiKey: "fixture-prod", baseUrl: "https://prod.example/tenant" });
     vi.stubEnv("OPPER_API_KEY", "fixture-unrelated-shell-key");
@@ -167,7 +167,7 @@ describe("agentsConfigureCommand", () => {
     await agentsConfigureCommand("codex-desktop", "prod", "claude-sonnet-5");
     expect(getAdapterMock).toHaveBeenCalledWith("codex-desktop");
     expect(configure).toHaveBeenCalledExactlyOnceWith({
-      keyName: "prod", apiKey: "fixture-prod", baseUrl: "https://prod.example/tenant", model: "claude-sonnet-5",
+      keyName: "prod", apiKey: "fixture-unrelated-shell-key", baseUrl: "https://api.opper.ai", model: "claude-sonnet-5",
     });
     expect(unconfigure).not.toHaveBeenCalled();
   });

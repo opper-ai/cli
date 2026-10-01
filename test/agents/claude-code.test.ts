@@ -136,4 +136,15 @@ describe("claude-code adapter", () => {
     const code = await claudeCode.spawn!([], ROUTING);
     expect(code).toBe(2);
   });
+
+  it("replaces a stale project header while preserving unrelated headers", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "X-Opper-Project: stale\nX-Team: team");
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await claudeCode.spawn!([], { ...ROUTING, projectUuid });
+    expect(spawnSyncMock.mock.calls[0]![2].env.ANTHROPIC_CUSTOM_HEADERS).toBe(`X-Team: team\nX-Opper-Project: ${projectUuid}`);
+    spawnSyncMock.mockClear();
+    await claudeCode.spawn!([], ROUTING);
+    expect(spawnSyncMock.mock.calls[0]![2].env.ANTHROPIC_CUSTOM_HEADERS).toBe("X-Team: team");
+  });
 });

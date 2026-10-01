@@ -45,6 +45,8 @@ export interface ConfigureOpenCodeOptions {
    * handled before calling the config writer.
    */
   models?: Record<string, unknown>;
+  projectUuid?: string;
+  baseUrl?: string;
   /** Add only the account-management MCP, preserving inference settings. */
   mcp?: boolean;
   /** Optional MCP development/staging endpoint; requires explicit mcp=true. */
@@ -82,8 +84,10 @@ export async function configureOpenCode(
   const path = opencodeConfigPath(opts.location);
   const template = readFileSync(assetPath("opencode.json"), "utf8");
   const templateConfig = JSON.parse(template) as {
-    provider: { opper: { models?: Record<string, unknown>; whitelist?: string[] } };
+    provider: { opper: { options: Record<string, unknown>; models?: Record<string, unknown>; whitelist?: string[] } };
   };
+  if (opts.projectUuid) templateConfig.provider.opper.options.headers = { "X-Opper-Project": opts.projectUuid };
+  if (opts.baseUrl) templateConfig.provider.opper.options.baseURL = `${opts.baseUrl.replace(/\/+$/, "")}/v3/compat`;
   if (opts.models) {
     templateConfig.provider.opper.models = opts.models;
     // OpenCode merges with models.dev and other config layers. An explicit
@@ -94,7 +98,7 @@ export async function configureOpenCode(
   // formatting, so a models override has to be re-serialised — otherwise it
   // applies only when a config already exists, which is the opposite of the
   // case that matters most.
-  const serialised = opts.models
+  const serialised = opts.models || opts.projectUuid || opts.baseUrl
     ? `${JSON.stringify(templateConfig, null, 2)}\n`
     : template;
 

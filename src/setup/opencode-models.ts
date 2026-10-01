@@ -192,14 +192,14 @@ function routeEntry(e: CompatModel): OpenCodeModel {
  * before config is written, and an empty allowed catalog remains empty.
  */
 export function resolveOpenCodeModels(context: ApiContext): Promise<Record<string, OpenCodeModel>>;
-export function resolveOpenCodeModels(key?: string): Promise<Record<string, OpenCodeModel> | undefined>;
-export async function resolveOpenCodeModels(contextOrKey: ApiContext | string = "default"): Promise<
+export function resolveOpenCodeModels(key?: string, projectUuid?: string): Promise<Record<string, OpenCodeModel> | undefined>;
+export async function resolveOpenCodeModels(contextOrKey: ApiContext | string = "default", projectUuid?: string): Promise<
   Record<string, OpenCodeModel> | undefined
 > {
   let context: ApiContext;
   try {
     context = typeof contextOrKey === "string"
-      ? await resolveApiContext(contextOrKey)
+      ? await resolveApiContext(contextOrKey, { projectUuid })
       : contextOrKey;
   } catch (error) {
     if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;

@@ -7,6 +7,7 @@ import { join } from "node:path";
 const FALLBACK_CONTEXT = 128_000;
 const FALLBACK_OUTPUT = 8_192;
 const DEFAULT_SLOT = "default";
+const DEFAULT_PROJECT_UUID = undefined;
 
 function expired(value) {
   if (!value) return false;
@@ -73,6 +74,14 @@ function modelsFromCatalog(entries) {
 }
 
 async function credential() {
+  const projectUuid = process.env.OPPER_PROJECT_UUID || (!process.env.OPPER_API_KEY ? DEFAULT_PROJECT_UUID : undefined);
+  if (projectUuid && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectUuid)) {
+    console.warn("Invalid Opper project UUID. Reconfigure the login bridge or set OPPER_PROJECT_UUID to a project UUID.");
+    return;
+  }
+  if (process.env.OPPER_API_KEY) {
+    return { apiKey: process.env.OPPER_API_KEY, baseUrl: process.env.OPPER_BASE_URL, projectUuid };
+  }
   let slot;
   try {
     const root = process.env.OPPER_EDITOR_HOME || homedir();
@@ -88,7 +97,7 @@ async function credential() {
     console.warn("Opper credential expired. Renew the selected CLI slot with `opper --key <slot> login --renew` and restart OpenCode.");
     return;
   }
-  return { apiKey: slot.apiKey, baseUrl: slot.baseUrl };
+  return { apiKey: slot.apiKey, baseUrl: process.env.OPPER_BASE_URL || slot.baseUrl, projectUuid };
 }
 
 function removeOpper(config) {
@@ -112,7 +121,7 @@ export const OpperLoginPlugin = async () => ({
     let models;
     try {
       const response = await fetch(`${host}/v3/compat/models`, {
-        headers: { Authorization: `Bearer ${current.apiKey}` },
+        headers: { Authorization: `Bearer ${current.apiKey}`, ...(current.projectUuid ? { "X-Opper-Project": current.projectUuid } : {}) },
         signal: AbortSignal.timeout(5_000),
       });
       if (!response.ok) throw new Error("catalog unavailable");
@@ -131,7 +140,8 @@ export const OpperLoginPlugin = async () => ({
     config.provider.opper = {
       npm: "@ai-sdk/openai-compatible",
       name: "Opper",
-      options: { baseURL: `${host}/v3/compat`, apiKey: current.apiKey },
+      options: { baseURL: `${host}/v3/compat`, apiKey: current.apiKey,
+        ...(current.projectUuid ? { headers: { "X-Opper-Project": current.projectUuid } } : {}) },
       models,
       whitelist: Object.keys(models),
     };

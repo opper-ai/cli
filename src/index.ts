@@ -39,6 +39,7 @@ program
   .description("The official Opper CLI")
   .version(pkg.version, "-v, --version")
   .option("--key <slot>", "API key slot to use", "default")
+  .option("--project-uuid <uuid>", "explicit Opper project target (does not bind the API key)")
   .option("--debug", "enable debug output", false)
   .option("--no-telemetry", "disable anonymous telemetry")
   .option("--no-color", "disable ANSI colors")
@@ -47,7 +48,7 @@ program
       program.outputHelp();
       return;
     }
-    await menuCommand({ key: program.opts().key, version: pkg.version });
+    await menuCommand({ key: program.opts().key, version: pkg.version, projectUuid: program.opts().projectUuid });
   });
 
 program.hook("preAction", () => {
@@ -65,6 +66,7 @@ program
 
 const ctx: CliContext = {
   key: () => program.opts().key as string,
+  projectUuid: () => program.opts().projectUuid as string | undefined,
   version: pkg.version,
 };
 
