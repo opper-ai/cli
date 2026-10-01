@@ -243,9 +243,16 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
       "Remove Authorization headers from Opper provider and model settings, then retry with the desired --key slot.",
     );
   }
-  const conflictingProject = (headers: unknown): boolean => Object.entries(record(headers) ?? {})
-    .some(([name, value]) => name.toLowerCase() === "x-opper-project" && value !== projectUuid);
-  if (conflictingProject(providerHeaders) || Object.keys(models).some((id) => {
+  const conflictingProject = (headers: unknown, providerLevel = false): boolean =>
+    Object.entries(record(headers) ?? {}).some(([name, value]) => {
+      if (name.toLowerCase() !== "x-opper-project") return false;
+      // OpenCode can mask header values in `debug config`. Only our final
+      // inline provider header has a known value; masked model overrides or
+      // differently cased duplicate headers cannot be verified safely.
+      if (providerLevel && projectUuid && name === "X-Opper-Project" && value === "***") return false;
+      return value !== projectUuid;
+    });
+  if (conflictingProject(providerHeaders, true) || Object.keys(models).some((id) => {
     const model = record(configuredModels?.[id]);
     return conflictingProject(model?.headers) || conflictingProject(record(model?.options)?.headers);
   })) {
