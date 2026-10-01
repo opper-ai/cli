@@ -35,3 +35,17 @@ test('endpoint validation refuses remote HTTP, URL credentials and paths',()=>{
  for(const x of ['http://other.example','https://user:secret@example.com','https://api.opper.ai/v3','https://api.opper.ai?key=x'])assert.throws(()=>origin(x));
  assert.equal(origin('http://127.0.0.1:1234'),'http://127.0.0.1:1234');
 });
+test('organization personal binding accepts null/absent project renewal and rejects identity or scope changes',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'org-slot-test-')),path=join(dir,'config.json');
+ const {rm}=await import('node:fs/promises');t.onTestFinished(()=>rm(dir,{recursive:true,force:true}));
+ const personal={...slot,projectId:null,defaultProjectUuid:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'};
+ const target='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+ const bound=bindSlot(personal,path,'default',target);
+ const save=async value=>writeFile(path,JSON.stringify({version:1,keys:{default:value}}));
+ const rotated={...personal,apiKey:'synthetic-org-renewed',projectId:undefined,defaultProjectUuid:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'};
+ await save(rotated);assert.equal(await credential(bound),'synthetic-org-renewed');
+ assert.equal(bound.projectUuid,target);assert.equal(bound.identity.projectId,null);
+ for(const patch of [{orgId:9},{projectId:2},{projectUuid:target},{user:{email:'other@example.invalid'}}]){
+  await save({...rotated,...patch});await assert.rejects(credential(bound),/identity/);
+ }
+});

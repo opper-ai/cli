@@ -11,6 +11,7 @@ let oldBase: string | undefined;
 let oldSlot: string | undefined;
 let oldOpperHome: string | undefined;
 let oldLaunch: string | undefined;
+let oldProject: string | undefined;
 
 const catalog = (ids: string[]) => ({ data: ids.map((id) => ({
   id,
@@ -41,12 +42,14 @@ beforeEach(async () => {
   oldSlot = process.env.OPPER_KEY_SLOT;
   oldOpperHome = process.env.OPPER_HOME;
   oldLaunch = process.env.OPPER_CLI_LAUNCH_OPENCODE;
+  oldProject = process.env.OPPER_PROJECT_UUID;
   process.env.OPPER_EDITOR_HOME = home;
   delete process.env.OPPER_API_KEY;
   delete process.env.OPPER_BASE_URL;
   delete process.env.OPPER_KEY_SLOT;
   delete process.env.OPPER_HOME;
   delete process.env.OPPER_CLI_LAUNCH_OPENCODE;
+  delete process.env.OPPER_PROJECT_UUID;
 });
 
 afterEach(async () => {
@@ -64,6 +67,8 @@ afterEach(async () => {
   else process.env.OPPER_HOME = oldOpperHome;
   if (oldLaunch === undefined) delete process.env.OPPER_CLI_LAUNCH_OPENCODE;
   else process.env.OPPER_CLI_LAUNCH_OPENCODE = oldLaunch;
+  if (oldProject === undefined) delete process.env.OPPER_PROJECT_UUID;
+  else process.env.OPPER_PROJECT_UUID = oldProject;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -82,13 +87,33 @@ describe("OpenCode login plugin", () => {
     expect(await readFile(join(home, ".opper", "config.json"), "utf8")).not.toContain("old-key");
   });
 
-  it("does not let an ambient personal API key override the selected CLI slot", async () => {
-    await slot({ apiKey: "finnova-key", baseUrl: "https://finnova.example" });
+  it("uses an environment credential without borrowing the stored slot's scope or host", async () => {
+    await slot({ apiKey: "finnova-key", baseUrl: "https://finnova.example", expiresAt: "2020-01-01", defaultProjectUuid: "11111111-1111-4111-8111-111111111111" });
     process.env.OPPER_API_KEY = "personal-env-key";
     process.env.OPPER_BASE_URL = "https://personal.example";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) }));
     const config = await run({});
-    expect(config.provider.opper.options).toEqual({ baseURL: "https://finnova.example/v3/compat", apiKey: "finnova-key" });
+    expect(config.provider.opper.options).toEqual({ baseURL: "https://personal.example/v3/compat", apiKey: "personal-env-key" });
+  });
+
+  it("uses an explicit environment target for both discovery and inference settings", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await slot({ apiKey: "org-key", orgId: 42, defaultProjectUuid: "22222222-2222-4222-8222-222222222222" });
+    process.env.OPPER_PROJECT_UUID = projectUuid;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = await run({ provider: { opper: { options: { headers: { "X-Opper-Project": "stale" } } } } });
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ headers: { Authorization: "Bearer org-key", "X-Opper-Project": projectUuid } }));
+    expect(config.provider.opper.options.headers).toEqual({ "X-Opper-Project": projectUuid });
+    delete process.env.OPPER_PROJECT_UUID;
+    expect((await run(config)).provider.opper.options.headers).toBeUndefined();
+  });
+
+  it("fails closed when an explicit target is malformed", async () => {
+    await slot({ apiKey: "org-key", orgId: 42 });
+    process.env.OPPER_PROJECT_UUID = "bad";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect((await run({ provider: { opper: {} } })).provider.opper).toBeUndefined();
   });
 
   it("preserves the session route supplied by opper launch opencode", async () => {

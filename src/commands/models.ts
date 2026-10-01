@@ -5,6 +5,7 @@ import { brand } from "../ui/colors.js";
 
 export interface ModelsListOptions {
   key: string;
+  projectUuid?: string | undefined;
   filter?: string;
 }
 
@@ -21,15 +22,15 @@ interface ModelsResponse {
 /**
  * Fetch the full Opper model catalog. Useful for interactive pickers.
  */
-export async function fetchModels(key: string): Promise<OpperModel[]> {
-  const ctx = await resolveApiContext(key);
+export async function fetchModels(key: string, projectUuid?: string): Promise<OpperModel[]> {
+  const ctx = await resolveApiContext(key, { projectUuid });
   const api = new OpperApi(ctx);
   const resp = await api.get<ModelsResponse>("/v3/models?limit=500");
   return resp.models;
 }
 
 export async function modelsListCommand(opts: ModelsListOptions): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   const resp = await api.get<ModelsResponse>("/v3/models");
   const filter = opts.filter?.toLowerCase();
@@ -54,11 +55,13 @@ export interface ModelsCreateOptions {
   apiKey: string;
   extraJson?: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export interface ModelsGetOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 interface CustomModel {
@@ -73,7 +76,7 @@ interface CustomModel {
 export async function modelsCreateCommand(
   opts: ModelsCreateOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   const body: Record<string, unknown> = {
     name: opts.name,
@@ -97,7 +100,7 @@ export async function modelsCreateCommand(
 export async function modelsGetCommand(
   opts: ModelsGetOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   const m = await api.get<CustomModel>(
     `/v2/models/custom/by-name/${encodeURIComponent(opts.name)}`,
@@ -115,12 +118,13 @@ export async function modelsGetCommand(
 export interface ModelsDeleteOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export async function modelsDeleteCommand(
   opts: ModelsDeleteOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   const m = await api.get<CustomModel>(
     `/v2/models/custom/by-name/${encodeURIComponent(opts.name)}`,

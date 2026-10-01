@@ -100,15 +100,17 @@ async function nodeLauncher(): Promise<string> {
 // This helper is intentionally standalone: it survives npm updates and Finder
 // launches, reads the selected slot on every refresh, and never copies its key.
 const AUTH_HELPER = `import { readFileSync } from "node:fs";
-const [configPath, keyName, expectedHost] = process.argv.slice(2);
+const [configPath, keyName, expectedHost, expectedOrg] = process.argv.slice(2);
 try {
   const slot = JSON.parse(readFileSync(configPath, "utf8")).keys?.[keyName];
   if (!slot || typeof slot.apiKey !== "string" || !slot.apiKey.trim()) throw new Error("missing key");
+  if (slot.expiresAt && (!Number.isFinite(Date.parse(slot.expiresAt)) || Date.parse(slot.expiresAt) <= Date.now())) throw new Error("expired key");
+  if (expectedOrg && String(slot.orgId) !== expectedOrg) throw new Error("key organization changed");
   const host = new URL(slot.baseUrl || "https://api.opper.ai").href.replace(/\\/+$/, "");
   if (host !== expectedHost) throw new Error("key host changed");
   process.stdout.write(slot.apiKey);
 } catch {
-  process.stderr.write("The selected Opper key is unavailable or its API host changed. Reconfigure Codex desktop with opper.\\n");
+  process.stderr.write("The selected Opper key is unavailable, expired, or its organization/API host changed. Renew the key and reconfigure Codex desktop with opper.\\n");
   process.exitCode = 1;
 }
 `;
@@ -134,9 +136,10 @@ async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { await rm(p.lock, { recursive: true }); }
 }
 
-interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; }
+interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; }
 
 async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
+  if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Codex Desktop requires a stored Opper credential so Finder launches can refresh it.", "Store the key in its own CLI slot and unset OPPER_API_KEY before configuring or launching Codex Desktop.");
   const home = codexHome(opts.codexHome);
   requireApp();
   await checkConfigPaths(home);
@@ -146,7 +149,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
   const model = opts.model ?? DEFAULT_MODELS.opus;
-  const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl }, model);
+  const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model);
   await locked(home, async () => {
     await checkConfigPaths(home);
     const p = paths(home);
@@ -154,7 +157,8 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     const previous = await readState(p.state);
     const provider = {
       name: "Opper", base_url: `${baseUrl}/v3/compat`, wire_api: "responses",
-      auth: { command: await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST)], refresh_interval_ms: 300_000 },
+      ...(opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
+      auth: { command: await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
@@ -177,7 +181,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
       throw e;
     }
   });
-  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model };
+  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid };
 }
 
 function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
@@ -186,6 +190,7 @@ function launchCommand(settings: ConfiguredDesktop): string {
   const args = ["env", "-u", "OPPER_API_KEY", `OPPER_HOME=${settings.credentialHome}`, `OPPER_BASE_URL=${settings.baseUrl}`];
   if (process.env.CODEX_ELECTRON_USER_DATA_PATH) args.push(`CODEX_ELECTRON_USER_DATA_PATH=${resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH)}`);
   args.push("opper", "--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home);
+  if (settings.projectUuid) args.push("--project-uuid", settings.projectUuid);
   return args.map(shellQuote).join(" ");
 }
 function reopenHint(settings: ConfiguredDesktop): string {
@@ -235,7 +240,7 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   if (args.length) throw new OpperError("INVALID_ARGUMENT", "codex-desktop does not accept passthrough arguments.");
   const app = requireApp();
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
-  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
+  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
   const executable = run("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", join(app.app, "Contents", "Info.plist")]);
   const binary = join(app.app, "Contents", "MacOS", executable.stdout.trim() || "ChatGPT");

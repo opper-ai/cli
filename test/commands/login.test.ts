@@ -58,6 +58,22 @@ describe("login", () => {
     clackMessages.length = 0;
   });
 
+  it.each([
+    [42, "https://staging.example", true],
+    [43, "https://staging.example", false],
+    [undefined, "https://staging.example", false],
+    [42, "https://another.example", false],
+  ])("preserves only the resource default for verified same-org same-host renewal (%s, %s)", async (orgId, baseUrl, retained) => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "old", orgId: 42, baseUrl: "https://staging.example", projectUuid: "legacy-binding", projectName: "Old binding", defaultProjectUuid: "11111111-1111-4111-8111-111111111111" });
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "new", orgId, baseUrl, source: "device-flow" });
+    await loginCommand({ key: "default", renew: true, baseUrl, legacyPath: "/nonexistent" });
+    const slot = (await readConfig())?.keys.default;
+    expect(slot).not.toHaveProperty("projectUuid");
+    expect(slot).not.toHaveProperty("projectName");
+    expect(slot?.defaultProjectUuid).toBe(retained ? "11111111-1111-4111-8111-111111111111" : undefined);
+  });
+
   it("writes the slot returned by the device flow", async () => {
     vi.mocked(runDeviceFlow).mockResolvedValue({
       apiKey: "op_live_xyz",

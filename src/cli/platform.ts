@@ -26,6 +26,7 @@ import {
 } from "../commands/indexes.js";
 import { usageListCommand } from "../commands/usage.js";
 import { imageGenerateCommand } from "../commands/image.js";
+import { projectsListCommand } from "../commands/projects.js";
 import type { RegisterFn } from "./types.js";
 
 async function readStdinIfPiped(): Promise<string | null> {
@@ -36,6 +37,15 @@ async function readStdinIfPiped(): Promise<string | null> {
 }
 
 const register: RegisterFn = (program, ctx) => {
+  program.command("projects")
+    .description("List Opper projects")
+    .command("list")
+    .description("List live projects in the credential's organization")
+    .argument("[filter]", "optional substring filter on name or UUID")
+    .action(async (filter: string | undefined) => {
+      await projectsListCommand({ key: ctx.key(), ...(filter ? { filter } : {}) });
+    });
+
   // ---- call --------------------------------------------------------------
   program
     .command("call")
@@ -64,6 +74,7 @@ const register: RegisterFn = (program, ctx) => {
         instructions,
         input: resolvedInput,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
         ...(cmdOpts.stream ? { stream: true } : {}),
       });
@@ -79,6 +90,7 @@ const register: RegisterFn = (program, ctx) => {
     .action(async (filter: string | undefined) => {
       await modelsListCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(filter ? { filter } : {}),
       });
     });
@@ -101,6 +113,7 @@ const register: RegisterFn = (program, ctx) => {
         identifier,
         apiKey,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.extra ? { extraJson: cmdOpts.extra } : {}),
       });
     });
@@ -110,7 +123,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Show details of a custom model")
     .argument("<name>", "custom model name")
     .action(async (name: string) => {
-      await modelsGetCommand({ name, key: ctx.key() });
+      await modelsGetCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   models
@@ -118,7 +131,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Delete a custom model by name")
     .argument("<name>", "custom model name")
     .action(async (name: string) => {
-      await modelsDeleteCommand({ name, key: ctx.key() });
+      await modelsDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   // ---- functions ---------------------------------------------------------
@@ -133,6 +146,7 @@ const register: RegisterFn = (program, ctx) => {
     .action(async (filter: string | undefined) => {
       await functionsListCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(filter ? { filter } : {}),
       });
     });
@@ -142,7 +156,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Show details of a function")
     .argument("<name>", "function name")
     .action(async (name: string) => {
-      await functionsGetCommand({ name, key: ctx.key() });
+      await functionsGetCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   functionsCmd
@@ -150,7 +164,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Delete a function")
     .argument("<name>", "function name")
     .action(async (name: string) => {
-      await functionsDeleteCommand({ name, key: ctx.key() });
+      await functionsDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   // ---- traces ------------------------------------------------------------
@@ -167,6 +181,7 @@ const register: RegisterFn = (program, ctx) => {
     .action(async (cmdOpts: { limit?: number; offset?: number; name?: string }) => {
       await tracesListCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
         ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
         ...(cmdOpts.name ? { name: cmdOpts.name } : {}),
@@ -178,7 +193,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Show a trace and its spans")
     .argument("<id>", "trace id")
     .action(async (id: string) => {
-      await tracesGetCommand({ id, key: ctx.key() });
+      await tracesGetCommand({ id, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   traces
@@ -186,7 +201,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Delete a trace")
     .argument("<id>", "trace id")
     .action(async (id: string) => {
-      await tracesDeleteCommand({ id, key: ctx.key() });
+      await tracesDeleteCommand({ id, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   // ---- indexes -----------------------------------------------------------
@@ -202,6 +217,7 @@ const register: RegisterFn = (program, ctx) => {
     .action(async (cmdOpts: { limit?: number; offset?: number }) => {
       await indexesListCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
         ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
       });
@@ -212,7 +228,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Show details of an index")
     .argument("<name>", "index name")
     .action(async (name: string) => {
-      await indexesGetCommand({ name, key: ctx.key() });
+      await indexesGetCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   indexes
@@ -224,6 +240,7 @@ const register: RegisterFn = (program, ctx) => {
       await indexesCreateCommand({
         name,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.embeddingModel ? { embeddingModel: cmdOpts.embeddingModel } : {}),
       });
     });
@@ -233,7 +250,7 @@ const register: RegisterFn = (program, ctx) => {
     .description("Delete an index by name")
     .argument("<name>", "index name")
     .action(async (name: string) => {
-      await indexesDeleteCommand({ name, key: ctx.key() });
+      await indexesDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   indexes
@@ -252,6 +269,7 @@ const register: RegisterFn = (program, ctx) => {
         name,
         query,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.topK !== undefined ? { topK: cmdOpts.topK } : {}),
         ...(cmdOpts.filters ? { filtersJson: cmdOpts.filters } : {}),
       });
@@ -284,6 +302,7 @@ const register: RegisterFn = (program, ctx) => {
         name,
         content: resolvedContent,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.key ? { docKey: cmdOpts.key } : {}),
         ...(cmdOpts.metadata ? { metadataJson: cmdOpts.metadata } : {}),
       });
@@ -314,6 +333,7 @@ const register: RegisterFn = (program, ctx) => {
       const out = cmdOpts.out === "csv" ? "csv" : "text";
       await usageListCommand({
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.fromDate ? { fromDate: cmdOpts.fromDate } : {}),
         ...(cmdOpts.toDate ? { toDate: cmdOpts.toDate } : {}),
         ...(cmdOpts.granularity ? { granularity: cmdOpts.granularity } : {}),
@@ -340,6 +360,7 @@ const register: RegisterFn = (program, ctx) => {
       await imageGenerateCommand({
         prompt,
         key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.output ? { output: cmdOpts.output } : {}),
         ...(cmdOpts.base64 ? { base64: true } : {}),
         ...(cmdOpts.model ? { model: cmdOpts.model } : {}),

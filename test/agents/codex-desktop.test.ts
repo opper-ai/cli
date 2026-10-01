@@ -126,6 +126,34 @@ afterEach(() => {
 });
 
 describe("Codex desktop detection", () => {
+  it("rejects an environment key instead of borrowing a stored credential for Finder launches", async () => {
+    vi.stubEnv("OPPER_API_KEY", "independent-env-key");
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "AUTH_REQUIRED", message: expect.stringContaining("stored Opper credential") });
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+
+  it("targets discovery and persistent requests explicitly and keeps the target in relaunch guidance", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await codexDesktop.configure(options({ projectUuid }));
+      expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT, projectUuid }, MODEL);
+      expect(provider().http_headers).toEqual({ "X-Opper-Project": projectUuid });
+      expect(log.mock.calls.flat().join(" ")).toContain(`'--project-uuid' '${projectUuid}'`);
+    } finally { log.mockRestore(); }
+  });
+
+  it("refreshes a renewed key in the same organization but rejects expiry and organization changes", async () => {
+    await setSlot("prod", { apiKey: KEY, baseUrl: API_ROOT, orgId: 42 });
+    await codexDesktop.configure(options());
+    const helper = configuredHelper();
+    await setSlot("prod", { apiKey: "renewed", baseUrl: API_ROOT, orgId: 42 });
+    expect(helper().stdout).toBe("renewed");
+    await setSlot("prod", { apiKey: "expired", baseUrl: API_ROOT, orgId: 42, expiresAt: "2020-01-01" });
+    expect(helper().status).toBe(1);
+    await setSlot("prod", { apiKey: "other-org", baseUrl: API_ROOT, orgId: 43 });
+    expect(helper().status).toBe(1);
+  });
   it("accepts the combined ChatGPT app with the Codex bundle and supported runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
     expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/ChatGPT.app/Contents/Resources/codex")).toBe(true);

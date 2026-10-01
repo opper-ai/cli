@@ -299,6 +299,7 @@ async function applyOpperProfile(apiKey: string, primaryModel: string): Promise<
 }
 
 async function configure(opts: ConfigureOptions): Promise<void> {
+  if (opts.projectUuid) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
   if (!opts.apiKey) {
     throw new OpperError(
       "AUTH_REQUIRED",
@@ -466,6 +467,7 @@ function openClaude(): void {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  if (routing.projectUuid) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
   if (args.length > 0) {
     throw new OpperError(
       "AGENT_CONFIG_CONFLICT",

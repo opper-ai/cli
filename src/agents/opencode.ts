@@ -18,6 +18,7 @@ import type {
   DetectResult,
   OpperRouting,
   SpawnOptions,
+  ConfigureOptions,
 } from "./types.js";
 
 async function detect(): Promise<DetectResult> {
@@ -47,18 +48,18 @@ async function isConfigured(): Promise<boolean> {
   }
 }
 
-async function configure(): Promise<void> {
+async function configure(opts: ConfigureOptions = {}): Promise<void> {
   // Prefer the live catalogue over the bundled list. `/v3/compat/models` is
   // scoped to the key, so this is also the only way the user's own pools and
   // `dynamic/<name>` routes reach OpenCode's picker. Only setup without a key
   // uses the template; authenticated catalog failures leave config untouched.
-  const models = await resolveOpenCodeModels();
+  const models = opts.apiKey ? await resolveOpenCodeModels({ apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }) : await resolveOpenCodeModels();
 
   // overwrite: true so a re-run pulls in the latest models, costs and
   // defaults. Without it, an existing `provider.opper` block from an older
   // CLI version would be left in place and the new models would never
   // appear in OpenCode's picker.
-  await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
+  await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}), ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}), ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}) });
 }
 
 async function unconfigure(): Promise<void> {
@@ -161,7 +162,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   const opper = providers.opper === undefined ? {} : object(providers.opper);
   const options = opper.options === undefined ? {} : object(opper.options);
   const headers = options.headers === undefined ? undefined : Object.fromEntries(
-    Object.entries(object(options.headers)).filter(([name]) => name.toLowerCase() !== "authorization"),
+    Object.entries(object(options.headers)).filter(([name]) => !["authorization", "x-opper-project"].includes(name.toLowerCase())),
   );
   return JSON.stringify({
     ...config,
@@ -175,7 +176,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
       opper: {
         ...opper,
         npm: "@ai-sdk/openai-compatible",
-        options: { ...options, ...(headers === undefined ? {} : { headers }), baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
+        options: { ...options, headers: { ...headers, ...(routing.projectUuid ? { "X-Opper-Project": routing.projectUuid } : {}) }, baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
         // Keep the full model metadata in the generated config file. A live
         // catalog can exceed Linux's per-environment-variable size limit.
         whitelist: Object.keys(models),
@@ -188,7 +189,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
  * Inspect merged settings before changing Opper's provider configuration.
  * OpenCode may add its own $schema metadata while loading a JSON file.
  */
-function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv): void {
+function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv, projectUuid?: string): void {
   let config: Record<string, unknown>;
   let directory: string | undefined;
   let output: number | undefined;
@@ -242,6 +243,21 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
       "Remove Authorization headers from Opper provider and model settings, then retry with the desired --key slot.",
     );
   }
+  const conflictingProject = (headers: unknown, providerLevel = false): boolean =>
+    Object.entries(record(headers) ?? {}).some(([name, value]) => {
+      if (name.toLowerCase() !== "x-opper-project") return false;
+      // OpenCode can mask header values in `debug config`. Only our final
+      // inline provider header has a known value; masked model overrides or
+      // differently cased duplicate headers cannot be verified safely.
+      if (providerLevel && projectUuid && name === "X-Opper-Project" && value === "***") return false;
+      return value !== projectUuid;
+    });
+  if (conflictingProject(providerHeaders, true) || Object.keys(models).some((id) => {
+    const model = record(configuredModels?.[id]);
+    return conflictingProject(model?.headers) || conflictingProject(record(model?.options)?.headers);
+  })) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's effective Opper configuration contains a project header that overrides the selected target.", "Remove X-Opper-Project headers from Opper provider and model settings, then choose a target with --project-uuid.");
+  }
 }
 
 async function spawn(
@@ -257,6 +273,7 @@ async function spawn(
   const models = await resolveOpenCodeModels({
     apiKey: routing.apiKey,
     baseUrl: routing.apiBaseUrl,
+    ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}),
   });
   // Validate existing inline config before mutating either config file. The
   // runtime override also prevents an old project whitelist or URL from
@@ -267,7 +284,7 @@ async function spawn(
     OPPER_API_KEY: routing.apiKey,
     OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
   };
-  checkEffectiveAuthorization(models, env);
+  checkEffectiveAuthorization(models, env, routing.projectUuid);
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project

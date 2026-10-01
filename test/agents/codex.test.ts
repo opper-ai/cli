@@ -135,6 +135,15 @@ describe("codex adapter", () => {
     expect(process.env.OPPER_API_KEY).toBe("op_test_parent");
   });
 
+  it("passes an explicit project and clears inherited project headers when no target is selected", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await codex.spawn!([], { ...ROUTING, projectUuid });
+    expect(spawnedArgs().join(" ")).toContain(`"X-Opper-Project" = "${projectUuid}"`);
+    spawnSyncMock.mockClear();
+    await codex.spawn!([], ROUTING);
+    expect(spawnedArgs().join(" ")).toContain("http_headers = {}");
+  });
+
   it("disables unsupported cached web search only for this invocation", async () => {
     const before = 'web_search = "cached"\n' + DESKTOP;
     writeConfig(before);

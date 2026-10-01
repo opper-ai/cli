@@ -6,6 +6,7 @@ export interface CallOptions {
   instructions: string;
   input: string;
   key: string;
+  projectUuid?: string | undefined;
   model?: string;
   stream?: boolean;
 }
@@ -16,7 +17,7 @@ interface RunResponse {
 }
 
 export async function callCommand(opts: CallOptions): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
 
   const body: Record<string, unknown> = {

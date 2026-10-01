@@ -2,7 +2,7 @@ import { listAdapters, getAdapter } from "../agents/registry.js";
 import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
-import { getSlot } from "../auth/config.js";
+import { resolveApiContext } from "../api/resolve.js";
 
 interface Row {
   name: string;
@@ -105,16 +105,14 @@ export async function agentsRemoveCommand(name: string, codexHome?: string): Pro
   console.log(`${adapter.displayName} integration removed.`);
 }
 
-export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string): Promise<void> {
+export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string, projectUuid?: string): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) throw new OpperError("AGENT_NOT_FOUND", `Unknown agent "${name}"`, "Run `opper agents list` to see supported agents.");
   if (codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
-  const slot = await getSlot(key);
-  if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${key}"`, "Run `opper login` first.");
-  await adapter.configure({ keyName: key, apiKey: slot.apiKey,
-    baseUrl: process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai",
+  const context = await resolveApiContext(key, { projectUuid });
+  await adapter.configure({ keyName: key, ...context,
     ...(model ? { model } : {}),
     ...(codexHome !== undefined ? { codexHome } : {}),
   });

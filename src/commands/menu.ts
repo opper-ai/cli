@@ -68,7 +68,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     options.push({
       value: "platform",
       label: "Opper",
-      hint: "Functions, models, indexes, traces, usage",
+      hint: "Projects, functions, models, indexes, traces, usage",
     });
     options.push({
       value: "account",
@@ -100,7 +100,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     try {
       if (choice.startsWith("launch:")) {
         const agent = choice.slice("launch:".length);
-        await launchCommand({ agent, key: opts.key });
+        await launchCommand({ agent, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
         continue;
       }
       switch (choice) {
@@ -152,7 +152,7 @@ async function askPrompt(opts: MenuOptions): Promise<void> {
       (v ?? "").trim().length === 0 ? "Question cannot be empty" : undefined,
   });
   if (isCancel(question) || typeof question !== "string") return;
-  await askCommand({ question, key: opts.key });
+  await askCommand({ question, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
 }
 
 /**
@@ -161,6 +161,7 @@ async function askPrompt(opts: MenuOptions): Promise<void> {
  * skills/agents without authenticating.
  */
 async function maybePromptSignIn(opts: MenuOptions): Promise<void> {
+  if (process.env.OPPER_API_KEY) return;
   const slot = await getSlot(opts.key);
   if (slot) return;
 
@@ -171,7 +172,7 @@ async function maybePromptSignIn(opts: MenuOptions): Promise<void> {
   if (isCancel(wantsLogin) || wantsLogin !== true) return;
 
   try {
-    await loginCommand({ key: opts.key });
+    await loginCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
   } catch (err) {
     reportError(err);
   }

@@ -52,6 +52,12 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     ANTHROPIC_BASE_URL: routing.baseUrl,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
     ANTHROPIC_MODEL: routing.model,
+    // Replace a stale target inherited from another invocation. Preserve
+    // unrelated user headers while making this launch's selection authoritative.
+    ANTHROPIC_CUSTOM_HEADERS: [
+      ...(process.env.ANTHROPIC_CUSTOM_HEADERS ?? "").split(/\r?\n/).filter((line) => line.trim() && !/^\s*x-opper-project\s*:/i.test(line)),
+      ...(routing.projectUuid ? [`X-Opper-Project: ${routing.projectUuid}`] : []),
+    ].join("\n"),
     CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: "1",
     // Suppress telemetry/auto-update/error-report calls that Claude Code
     // would otherwise send to api.anthropic.com directly. Users routing

@@ -5,17 +5,20 @@ import { printTable } from "../ui/table.js";
 
 export interface FunctionsListOptions {
   key: string;
+  projectUuid?: string | undefined;
   filter?: string;
 }
 
 export interface FunctionsGetOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 export interface FunctionsDeleteOptions {
   name: string;
   key: string;
+  projectUuid?: string | undefined;
 }
 
 interface FunctionInfo {
@@ -32,7 +35,7 @@ interface ListResponse {
 export async function functionsListCommand(
   opts: FunctionsListOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const resp = await api.get<ListResponse>("/v3/functions");
   const filter = opts.filter?.toLowerCase();
@@ -47,7 +50,7 @@ export async function functionsListCommand(
 export async function functionsGetCommand(
   opts: FunctionsGetOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   const fn = await api.get<FunctionInfo>(
     `/v3/functions/${encodeURIComponent(opts.name)}`,
@@ -67,7 +70,7 @@ export async function functionsGetCommand(
 export async function functionsDeleteCommand(
   opts: FunctionsDeleteOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid, useDefaultProject: true, requireProject: true });
   const api = new OpperApi(ctx);
   await api.del(`/v3/functions/${encodeURIComponent(opts.name)}`);
   console.log(brand.accent(`✓ Deleted function "${opts.name}".`));

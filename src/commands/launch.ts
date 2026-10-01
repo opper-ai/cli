@@ -6,7 +6,7 @@ import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperApi } from "../api/client.js";
-import type { ApiContext } from "../api/resolve.js";
+import { resolveApiContext, validateProjectUuid, type ApiContext } from "../api/resolve.js";
 import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
 import { newSessionId, buildSessionBaseUrl } from "../util/session-url.js";
@@ -16,6 +16,7 @@ const TRACES_URL = "https://platform.opper.ai/traces";
 export interface LaunchOptions {
   agent: string;
   key: string;
+  projectUuid?: string | undefined;
   model?: string;
   install?: boolean;
   passthrough?: string[];
@@ -25,6 +26,7 @@ export interface LaunchOptions {
 }
 
 export async function launchCommand(opts: LaunchOptions): Promise<number> {
+  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   const adapter = getAdapter(opts.agent);
   if (!adapter) {
     throw new OpperError(
@@ -51,8 +53,8 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     );
   }
 
-  let slot = await getSlot(opts.key);
-  if (!slot || isSlotExpired(slot)) {
+  let slot = process.env.OPPER_API_KEY ? null : await getSlot(opts.key);
+  if (!process.env.OPPER_API_KEY && (!slot || isSlotExpired(slot))) {
     await loginCommand({ key: opts.key });
     slot = await getSlot(opts.key);
     if (!slot) {
@@ -63,7 +65,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
       );
     }
   }
-  if (isSlotExpired(slot)) {
+  if (!process.env.OPPER_API_KEY && slot && isSlotExpired(slot)) {
     throw new OpperError(
       "AUTH_EXPIRED",
       `Stored API key for slot "${opts.key}" has expired.`,
@@ -91,9 +93,9 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     await adapter.install();
   }
 
-  const host = process.env.OPPER_BASE_URL ?? slot.baseUrl ?? "https://api.opper.ai";
+  const apiContext = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
+  const host = apiContext.baseUrl;
   // Keep the summary on the same credential and host even if settings change during the session.
-  const apiContext: ApiContext = { apiKey: slot.apiKey, baseUrl: host };
   const sessionId = newSessionId();
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
@@ -102,6 +104,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     apiBaseUrl: apiContext.baseUrl,
     baseUrl,
     apiKey: apiContext.apiKey,
+    ...(apiContext.projectUuid ? { projectUuid: apiContext.projectUuid } : {}),
     model: opts.model ?? DEFAULT_MODELS.opus,
     ...(opts.model ? { modelOverride: opts.model } : {}),
     compatShape: "openai",
@@ -216,7 +219,11 @@ async function printSessionSummary(opts: SummaryOptions): Promise<void> {
       durationMs,
       usageUnavailable,
       models: Array.from(byModel.values()),
-      tracesUrl: TRACES_URL,
+      // Custom API hosts have no implied platform origin. A production link
+      // would point at a different environment, including for local launches.
+      tracesUrl: new URL(opts.apiContext.baseUrl).href.replace(/\/+$/, "") === "https://api.opper.ai"
+        ? TRACES_URL
+        : undefined,
     }),
   );
 }

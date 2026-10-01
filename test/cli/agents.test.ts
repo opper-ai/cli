@@ -9,9 +9,9 @@ vi.mock("../../src/commands/agents.js", () => ({
 vi.mock("../../src/commands/launch.js", () => ({ launchCommand: commands.launch }));
 
 function program(): Command {
-  const cli = new Command().exitOverride().option("--key <slot>", "", "default");
+  const cli = new Command().exitOverride().option("--key <slot>", "", "default").option("--project-uuid <uuid>");
   cli.configureOutput({ writeErr: () => {} });
-  registerAgents(cli, { key: () => cli.opts().key, version: "test" });
+  registerAgents(cli, { key: () => cli.opts().key, projectUuid: () => cli.opts().projectUuid, version: "test" });
   return cli;
 }
 
@@ -25,7 +25,7 @@ describe("agent command options", () => {
 
   it("parses --codex-home for configure together with the selected key and model", async () => {
     await program().parseAsync(["--key", "prod", "agents", "configure", "codex-desktop", "--codex-home", "/tmp/Codex Home", "--model", "claude-sonnet-5"], { from: "user" });
-    expect(commands.configure).toHaveBeenCalledExactlyOnceWith("codex-desktop", "prod", "claude-sonnet-5", "/tmp/Codex Home");
+    expect(commands.configure).toHaveBeenCalledExactlyOnceWith("codex-desktop", "prod", "claude-sonnet-5", "/tmp/Codex Home", undefined);
   });
 
   it("parses --codex-home for removal", async () => {
@@ -52,6 +52,12 @@ describe("agent command options", () => {
     expect(commands.launch).toHaveBeenCalledExactlyOnceWith({
       agent: "codex", key: "default", passthrough: ["--codex-home", "/tmp/native"],
     });
+  });
+
+  it("keeps --project config scope separate from the explicit API project target", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await program().parseAsync(["--project-uuid", projectUuid, "launch", "opencode", "--project", "--", "--native-flag"], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({ agent: "opencode", key: "default", projectUuid, configScope: "project", passthrough: ["--native-flag"] });
   });
 });
 

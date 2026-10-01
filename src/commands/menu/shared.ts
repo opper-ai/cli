@@ -4,6 +4,7 @@ import { OpperError } from "../../errors.js";
 import type { AgentAdapter } from "../../agents/types.js";
 
 export interface MenuOptions {
+  projectUuid?: string | undefined;
   key: string;
   version?: string;
 }

@@ -6,17 +6,20 @@ import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
 import { openBrowser } from "../util/open-browser.js";
+import { validateProjectUuid } from "../api/resolve.js";
 
 export interface LoginOptions {
   key: string;
   baseUrl?: string;
   force?: boolean;
   renew?: boolean;
+  projectUuid?: string | undefined;
   /** Override legacy file path (for tests). */
   legacyPath?: string;
 }
 
 export async function loginCommand(opts: LoginOptions): Promise<void> {
+  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   let existing = await getSlot(opts.key);
   if (!opts.force) {
     const migrated = await maybeMigrateLegacyConfig(
@@ -29,6 +32,12 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     }
     existing = await getSlot(opts.key);
     if (existing && !opts.renew && !isSlotExpired(existing)) {
+      if (opts.projectUuid !== undefined) {
+        const replacement = { ...existing, defaultProjectUuid: opts.projectUuid };
+        if (!await replaceSlotIfUnchanged(opts.key, existing, replacement)) {
+          throw new OpperError("API_ERROR", "The stored credential changed while setting its resource default. Retry.");
+        }
+      }
       const who = existing.user ? ` as ${existing.user.email}` : "";
       log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
       return;
@@ -63,6 +72,14 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
         promptShown = true;
       },
     });
+
+    // Replace all credential metadata. Only a resource preference survives a
+    // renewal to the same verified org and API host; old bindings never do.
+    const sameOrg = typeof existing?.orgId === "number" && existing.orgId > 0 && existing.orgId === slot.orgId;
+    const sameHost = new URL(existing?.baseUrl ?? "https://api.opper.ai").href.replace(/\/+$/, "") ===
+      new URL(slot.baseUrl ?? "https://api.opper.ai").href.replace(/\/+$/, "");
+    const defaultProjectUuid = opts.projectUuid ?? (sameOrg && sameHost ? existing?.defaultProjectUuid : undefined);
+    if (defaultProjectUuid !== undefined) slot.defaultProjectUuid = defaultProjectUuid;
 
     if (renew && existing && slot.apiKey === existing.apiKey) {
       throw new OpperError(

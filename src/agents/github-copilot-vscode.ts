@@ -7,7 +7,8 @@ import {
   installCommunityExtension,
   COMMUNITY_EXTENSION_ID,
 } from "../setup/github-copilot-vscode.js";
-import type { AgentAdapter, DetectResult } from "./types.js";
+import type { AgentAdapter, DetectResult, ConfigureOptions } from "./types.js";
+import { OpperError } from "../errors.js";
 
 /**
  * Routes GitHub Copilot Chat in VS Code through Opper via the
@@ -43,7 +44,8 @@ async function isConfigured(): Promise<boolean> {
   return isGitHubCopilotVSCodeConfigured("stable");
 }
 
-async function configure(): Promise<void> {
+async function configure(opts: ConfigureOptions = {}): Promise<void> {
+  if (opts.projectUuid) throw new OpperError("INVALID_ARGUMENT", "VS Code Copilot setup does not support an explicit project target.", "Use organization inference without --project-uuid, or launch a supported agent with the target.");
   await configureGitHubCopilotVSCode({ channel: "stable" });
 }
 

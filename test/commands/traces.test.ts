@@ -57,6 +57,16 @@ describe("traces commands", () => {
     }
   });
 
+  it("prints traces from the current paginated data envelope", async () => {
+    await setSlot("default", { apiKey: "org-key", orgId: 42, source: "device-flow" });
+    getMock.mockResolvedValue({ data: [{ id: "trace-current", name: "org inference", start_time: "2026-10-01T12:00:00Z" }], meta: { total_count: 1 } });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await tracesListCommand({ key: "default" });
+      expect(log.mock.calls.flat().join(" ")).toContain("trace-current");
+    } finally { log.mockRestore(); }
+  });
+
   it("get prints trace details", async () => {
     await setSlot("default", { apiKey: "k" });
     getMock.mockResolvedValue({
@@ -72,6 +82,17 @@ describe("traces commands", () => {
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("prints current trace detail and its nested spans from the data envelope", async () => {
+    await setSlot("default", { apiKey: "org-key", orgId: 42, source: "device-flow" });
+    getMock.mockResolvedValue({ data: { id: "trace-current", name: "org inference", spans: [{ id: "span-current" }] } });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await tracesGetCommand({ id: "trace-current", key: "default" });
+      expect(log.mock.calls.flat().join(" ")).toContain("trace-current");
+      expect(log.mock.calls.flat().join(" ")).toMatch(/spans:.*1/);
+    } finally { log.mockRestore(); }
   });
 
   it("delete calls DELETE /v3/traces/{id}", async () => {

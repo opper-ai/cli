@@ -4,6 +4,7 @@ import { printTable } from "../ui/table.js";
 
 export interface UsageListOptions {
   key: string;
+  projectUuid?: string | undefined;
   fromDate?: string;
   toDate?: string;
   granularity?: string;
@@ -21,7 +22,7 @@ type UsageRow = {
 export async function usageListCommand(
   opts: UsageListOptions,
 ): Promise<void> {
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   const query: Record<string, string | number | undefined> = {};
   if (opts.fromDate) query.from_date = opts.fromDate;

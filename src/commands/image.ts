@@ -11,6 +11,7 @@ const DEFAULT_IMAGE_MODEL = DEFAULT_MODELS.image;
 export interface ImageGenerateOptions {
   prompt: string;
   key: string;
+  projectUuid?: string | undefined;
   model?: string;
   output?: string;
   base64?: boolean;
@@ -59,7 +60,7 @@ export async function imageGenerateCommand(
     );
   }
 
-  const ctx = await resolveApiContext(opts.key);
+  const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
   // POST /v3/images is the image endpoint. /v3/call is the *function* API:
   // it only reaches image-output chat models, and a dedicated image model

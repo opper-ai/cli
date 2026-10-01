@@ -42,6 +42,14 @@ function makeTempHome(): string {
   return mkdtempSync(join(tmpdir(), "opper-claude-desktop-"));
 }
 
+describe("Claude desktop explicit project targeting", () => {
+  it("rejects unsupported targets before configuring or opening the app", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await expect(claudeDesktop.configure({ apiKey: "synthetic", projectUuid })).rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("project header") });
+    await expect(claudeDesktop.spawn!([], { apiKey: "synthetic", apiBaseUrl: "https://api.opper.ai", baseUrl: "https://api.opper.ai/v3/compat", model: "claude-sonnet-5", compatShape: "openai", projectUuid })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+});
+
 describe("claude-desktop adapter — detect", () => {
   let home: string;
 

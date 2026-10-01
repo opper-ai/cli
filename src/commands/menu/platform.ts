@@ -1,5 +1,6 @@
 import { callCommand } from "../call.js";
 import { modelsListCommand } from "../models.js";
+import { projectsListCommand } from "../projects.js";
 import {
   functionsListCommand,
   functionsGetCommand,
@@ -30,6 +31,7 @@ import {
 export async function platformMenu(opts: MenuOptions): Promise<void> {
   while (true) {
     const choice = await pickMenuChoice("Opper", [
+      { value: "projects", label: "Projects", hint: "Project names and UUIDs" },
       { value: "functions", label: "Functions", hint: "Saved functions in your project" },
       { value: "models", label: "Models", hint: "Available models" },
       { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
@@ -42,11 +44,14 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
 
     try {
       switch (choice) {
+        case "projects":
+          await projectsListCommand({ key: opts.key });
+          break;
         case "functions":
           await functionsMenu(opts);
           break;
         case "models":
-          await modelsListCommand({ key: opts.key });
+          await modelsListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "indexes":
           await indexesMenu(opts);
@@ -55,7 +60,7 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
           await tracesMenu(opts);
           break;
         case "usage":
-          await usageListCommand({ key: opts.key });
+          await usageListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "call":
           await callWizard(opts);
@@ -80,19 +85,19 @@ async function functionsMenu(opts: MenuOptions): Promise<void> {
     try {
       switch (choice) {
         case "list":
-          await functionsListCommand({ key: opts.key });
+          await functionsListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "get": {
           const name = await ask("Function name", { required: true });
           if (!name) continue;
-          await functionsGetCommand({ name, key: opts.key });
+          await functionsGetCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "delete": {
           const name = await ask("Function name", { required: true });
           if (!name) continue;
           if (!(await askConfirm(`Delete function "${name}"?`))) continue;
-          await functionsDeleteCommand({ name, key: opts.key });
+          await functionsDeleteCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
       }
@@ -115,19 +120,19 @@ async function tracesMenu(opts: MenuOptions): Promise<void> {
     try {
       switch (choice) {
         case "list":
-          await tracesListCommand({ key: opts.key });
+          await tracesListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "get": {
           const id = await ask("Trace id", { required: true });
           if (!id) continue;
-          await tracesGetCommand({ id, key: opts.key });
+          await tracesGetCommand({ id, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "delete": {
           const id = await ask("Trace id", { required: true });
           if (!id) continue;
           if (!(await askConfirm(`Delete trace "${id}"?`))) continue;
-          await tracesDeleteCommand({ id, key: opts.key });
+          await tracesDeleteCommand({ id, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
       }
@@ -152,25 +157,25 @@ async function indexesMenu(opts: MenuOptions): Promise<void> {
     try {
       switch (choice) {
         case "list":
-          await indexesListCommand({ key: opts.key });
+          await indexesListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         case "get": {
           const name = await ask("Index name", { required: true });
           if (!name) continue;
-          await indexesGetCommand({ name, key: opts.key });
+          await indexesGetCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "create": {
           const name = await ask("New index name", { required: true });
           if (!name) continue;
-          await indexesCreateCommand({ name, key: opts.key });
+          await indexesCreateCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "delete": {
           const name = await ask("Index name", { required: true });
           if (!name) continue;
           if (!(await askConfirm(`Delete index "${name}"?`))) continue;
-          await indexesDeleteCommand({ name, key: opts.key });
+          await indexesDeleteCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
         case "query": {
@@ -178,7 +183,7 @@ async function indexesMenu(opts: MenuOptions): Promise<void> {
           if (!name) continue;
           const query = await ask("Query", { required: true });
           if (!query) continue;
-          await indexesQueryCommand({ name, query, key: opts.key });
+          await indexesQueryCommand({ name, query, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
       }
@@ -202,6 +207,7 @@ async function callWizard(opts: MenuOptions): Promise<void> {
     instructions,
     input,
     key: opts.key,
+    ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
     ...(model ? { model } : {}),
   });
 }

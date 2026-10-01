@@ -16,6 +16,7 @@ export interface CliContext {
    *  global options after subcommand parse, so we can't capture it
    *  eagerly). */
   key(): string;
+  projectUuid?(): string | undefined;
   version: string;
 }
 

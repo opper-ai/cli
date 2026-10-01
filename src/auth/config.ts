@@ -11,10 +11,12 @@ export interface AuthSlot {
   credentialId?: string;
   /** Organization that issued this personal credential. */
   orgId?: number;
-  /** Project used for inference and budget attribution. */
+  /** Server-issued project binding on legacy or project credentials. */
   projectId?: number;
   projectUuid?: string;
   projectName?: string;
+  /** Resource command default; never implicitly scopes organization inference. */
+  defaultProjectUuid?: string;
   /** Absolute server-issued expiry. Omitted for credentials without a lifetime. */
   expiresAt?: string;
   baseUrl?: string;

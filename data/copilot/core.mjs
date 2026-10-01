@@ -23,11 +23,12 @@ export function checkExpiry(slot) {
 }
 // Keep legacy-key comparison private to the live binding; never serialize it.
 const boundKeys=new WeakMap();
-export function bindSlot(slot, configPath, name) {
+export function bindSlot(slot, configPath, name, projectUuid) {
   checkExpiry(slot);
-  const identity = slot.orgId != null && slot.projectId != null && slot.user?.email
-    ? { orgId:slot.orgId, projectId:slot.projectId, email:slot.user.email } : undefined;
-  const binding={configPath,name,origin:origin(slot.baseUrl),identity};
+  const identity = slot.orgId != null && slot.user?.email
+    ? { orgId:slot.orgId, projectId:slot.projectId ?? null, projectUuid:slot.projectUuid ?? null, email:slot.user.email } : undefined;
+  // Request attribution is separate from the credential's project binding.
+  const binding={configPath,name,origin:origin(slot.baseUrl),identity,...(projectUuid ? {projectUuid} : {})};
   if(!identity)boundKeys.set(binding,slot.apiKey);
   return binding;
 }
@@ -41,9 +42,22 @@ export async function credential(binding) {
 export function assertBoundSlot(binding,slot) {
   if (origin(slot.baseUrl) !== binding.origin) throw Error('Opper endpoint changed. Restart this launcher.');
   const expected = binding.identity;
-  if (expected ? slot.orgId !== expected.orgId || slot.projectId !== expected.projectId || slot.user?.email !== expected.email : slot.apiKey !== boundKeys.get(binding)) {
+  if (expected ? slot.orgId !== expected.orgId || (slot.projectId ?? null) !== (expected.projectId ?? null) || (slot.projectUuid ?? null) !== (expected.projectUuid ?? null) || slot.user?.email !== expected.email : slot.apiKey !== boundKeys.get(binding)) {
     throw Error('Opper login identity changed or cannot be verified. Restart this launcher.');
   }
+}
+// Only fresh, explicit browser renewal may drop a legacy project binding.
+// Ordinary stored-slot checks remain strict; commit this identity after CAS.
+export function renewedIdentity(binding,slot) {
+  const expected=binding.identity;
+  if(expected && (expected.projectId != null || expected.projectUuid != null) &&
+      slot.projectId == null && slot.projectUuid == null) {
+    const identity={...expected,projectId:null,projectUuid:null};
+    assertBoundSlot({...binding,identity},slot);
+    return identity;
+  }
+  assertBoundSlot(binding,slot);
+  return expected;
 }
 export const MODEL_KINDS=['models','pools','routes'];
 export function parseKinds(value) {
@@ -62,8 +76,11 @@ export function allowedModels(data,kinds=MODEL_KINDS) {
     return [{id:m.id,kind,input:m.context_length-meta.max_output_tokens,output:meta.max_output_tokens}];
   }).sort((a,b)=>MODEL_KINDS.indexOf(b.kind)-MODEL_KINDS.indexOf(a.kind));
 }
-export async function getJson(host, path, key) {
-  const response = await fetch(host + path, {headers:{Authorization:`Bearer ${key}`}, signal:AbortSignal.timeout(20000),redirect:'error'});
+export function apiHeaders(key, projectUuid) {
+  return {Authorization:`Bearer ${key}`,...(projectUuid ? {'X-Opper-Project':projectUuid} : {})};
+}
+export async function getJson(host, path, key, projectUuid) {
+  const response = await fetch(host + path, {headers:apiHeaders(key,projectUuid), signal:AbortSignal.timeout(20000),redirect:'error'});
   if (!response.ok) throw Object.assign(Error(response.status === 401 ? 'Opper rejected this login. Run opper login --force, then launch again.' : `Opper request failed (HTTP ${response.status}).`),{status:response.status});
   return response.json();
 }

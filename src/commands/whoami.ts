@@ -30,6 +30,8 @@ export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
   if (slot.projectName) console.log(`${brand.bold("project:")} ${slot.projectName}${slot.projectUuid ? ` (${slot.projectUuid})` : ""}`);
   else if (slot.projectUuid) console.log(`${brand.bold("project:")} ${slot.projectUuid}`);
   else if (slot.projectId !== undefined) console.log(`${brand.bold("project:")} ${slot.projectId}`);
+  if (slot.orgId !== undefined && !slot.projectId && !slot.projectUuid) console.log(`${brand.bold("scope:")}   organization personal credential`);
+  if (slot.defaultProjectUuid) console.log(`${brand.bold("resource project:")} ${slot.defaultProjectUuid}`);
   if (slot.expiresAt) {
     console.log(`${brand.bold("expires:")} ${slot.expiresAt}${isSlotExpired(slot) ? " (expired)" : ""}`);
   }

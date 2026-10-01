@@ -43,6 +43,18 @@ describe("formatSessionSummary", () => {
     expect(out).not.toMatch(/^\s*Cost\s/m);
   });
 
+  it.each([
+    { models: [], usageUnavailable: false },
+    { models: [], usageUnavailable: true },
+    { models: [{ model: "local", cost: 0.01, count: 1, tokens: 100 }], usageUnavailable: false },
+  ])("omits the trace row when no platform destination is known ($usageUnavailable)", (usage) => {
+    const out = formatSessionSummary({ durationMs: 2_000, ...usage });
+    expect(out).toContain("Session summary");
+    expect(out).toContain("Duration  2s");
+    expect(out).not.toMatch(/^\s*Traces\s/m);
+    expect(out).not.toContain("undefined");
+  });
+
   it("renders a single-model session with totals", () => {
     const out = formatSessionSummary({
       durationMs: 150_000,

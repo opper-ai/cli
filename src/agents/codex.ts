@@ -97,7 +97,8 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // Keep the provider distinct from desktop and legacy `opper` configuration.
   // These flags affect only this invocation, so concurrent CLI/app launches
   // never overwrite each other's endpoint, selected model, or credentials.
-  const provider = `{ name = "Opper", base_url = ${JSON.stringify(routing.baseUrl)}, env_key = "OPPER_API_KEY", wire_api = "responses", requires_openai_auth = false }`;
+  const projectHeader = `, http_headers = ${routing.projectUuid ? `{ "X-Opper-Project" = ${JSON.stringify(routing.projectUuid)} }` : "{}"}`;
+  const provider = `{ name = "Opper", base_url = ${JSON.stringify(routing.baseUrl)}, env_key = "OPPER_API_KEY", wire_api = "responses", requires_openai_auth = false${projectHeader} }`;
   const overrides = [
     "-c", `model_provider=${JSON.stringify(PROVIDER)}`,
     "-c", `model_providers.${PROVIDER}=${provider}`,
