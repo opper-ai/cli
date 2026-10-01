@@ -67,6 +67,7 @@ opper agents list                # NAME / DISPLAY / KIND / STATE / CONFIG / COMM
 opper launch claude              # Anthropic Messages shape → /v3/session/<id>/v1/messages
 opper launch claude-desktop      # rewire Claude Desktop (GUI) → /v3/compat (persistent GUI profile)
 opper --key prod launch codex-desktop --model claude-sonnet-5
+opper launch copilot             # native picker, /opper-login, /opper-usage
 opper launch opencode            # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
 opper launch codex               # OpenAI Responses shape → /v3/session/<id>/responses
 opper launch hermes              # OpenAI Chat Completions shape → /v3/session/<id>/chat/completions
@@ -83,6 +84,7 @@ opper launch claude --resume
 |-------|------|--------------------|
 | Claude Code | `claude` | `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` env vars |
 | Claude Desktop | `claude-desktop` | writes a third-party-inference (`deploymentMode: "3p"`) profile into `~/Library/Application Support/Claude-3p/` (macOS) / `%LOCALAPPDATA%\Claude-3p\` (Windows); quits and reopens the GUI app to apply |
+| GitHub Copilot CLI | `copilot` | temporary provider registry and local bridge; no global configuration |
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
 | Codex CLI | `codex` | per-invocation Responses provider and model overrides; preserves shared configuration and supports current native profile files |
 | Codex / ChatGPT desktop | `codex-desktop` | configures local Codex tasks on macOS with a persistent Responses provider, selected-key credential helper, and live Opper model catalog |
@@ -638,3 +640,39 @@ workflow that pushes a commit there is rejected before it reaches npm.
 ## Source
 
 [github.com/opper-ai/cli](https://github.com/opper-ai/cli)
+
+## GitHub Copilot CLI
+
+Requires Node.js 22+ and npm on macOS/Linux. Copilot 1.0.88 is run through npx;
+no global Copilot installation is required. The standard CLI sign-in, selected
+`--key` slot, expiry checks and credential lock are shared with other agents.
+
+```sh
+opper launch copilot
+opper --key work launch copilot --kinds pools,routes
+opper launch copilot --list --kinds all
+# After a version containing this integration is published:
+npx @opperai/cli@latest launch copilot
+```
+
+Inside Copilot, `/model` selects from the credential's current allowed catalog.
+`/opper-usage` displays account, project, key expiry, personal/role allowance and
+shared project usage. Organization billing requires explicit server permission.
+`/opper-login` opens browser renewal and continues the same conversation after
+validation of the same user, organization, project and endpoint. It does not
+replay failed requests. The terminal warns within 24 hours of known expiry. Commands use Copilot's experimental extension support; `--no-extension`
+disables them. The native Copilot footer is preserved by default;
+`--budget-footer` optionally adds an Opper allowance line. Use `/opper-usage`
+for allowance details and Copilot’s `/context` for context usage.
+
+The last model and type filter are remembered. A fresh isolated Copilot profile
+is created per launch; existing Copilot settings are untouched. Restart/resume
+of prior conversations is not supported yet. GitHub-connected features are not
+part of this BYOK integration. Private run tokens and provider references are
+removed on normal exit. API keys are never written to the provider registry.
+
+One-time setup for plain `copilot` is **not implemented**. OpenCode already has
+`opper editors opencode --login-bridge`; Copilot needs separate validation of
+provider initialization versus extension/hook startup before offering equivalent
+automatic credential and model refresh. No shell aliases or background services
+are installed by `opper launch copilot`.

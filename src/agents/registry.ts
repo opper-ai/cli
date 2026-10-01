@@ -9,8 +9,11 @@ import { pi } from "./pi.js";
 import { openclaw } from "./openclaw.js";
 import { githubCopilotVSCode } from "./github-copilot-vscode.js";
 
+import { copilot } from "./copilot.js";
+
 const ADAPTERS: ReadonlyArray<AgentAdapter> = [
   opencode,
+  copilot,
   claudeCode,
   claudeDesktop,
   codex,
