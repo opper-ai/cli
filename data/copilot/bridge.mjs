@@ -4,7 +4,7 @@ import {readSlot} from './core.mjs';
 import {randomBytes} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import {credential} from './core.mjs';
+import {credential,apiHeaders} from './core.mjs';
 import {budgetSnapshot} from './budget.mjs';
 
 // Copilot 1.0.88's registry supports static credentials, not apiKeyCommand.
@@ -35,7 +35,7 @@ export async function startBridge(binding, models, traceId, inferenceBase) {
         if(!budgetCache||budgetCache.key!==key||Date.now()-budgetCache.time>60000||req.url.endsWith('refresh=1')) {
           if(!budgetPending||budgetPending.key!==key) {
             const promise=(async()=>{
-              const upstream=await fetch(binding.origin+'/v3/me',{headers:{Authorization:`Bearer ${key}`},redirect:'error',signal:AbortSignal.timeout(15000)});
+              const upstream=await fetch(binding.origin+'/v3/me',{headers:apiHeaders(key,binding.projectUuid),redirect:'error',signal:AbortSignal.timeout(15000)});
               if(!upstream.ok)throw Error('budget unavailable');
               const value=budgetSnapshot(await upstream.json());
               // Do not return one identity's financial data after a slot change.
@@ -70,7 +70,7 @@ export async function startBridge(binding, models, traceId, inferenceBase) {
       let key;
       try{key=await credential(binding);}catch(error){credentialError=error.message;return fail(401,credentialError);}
       const upstream=await fetch(inferenceBase?inferenceBase+'/chat/completions':binding.origin+'/v3/compat/chat/completions',{
-        method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json','X-Opper-Trace-Id':traceId},
+        method:'POST',headers:{...apiHeaders(key,binding.projectUuid),'Content-Type':'application/json','X-Opper-Trace-Id':traceId},
         body:JSON.stringify(body),redirect:'error',signal:abort.signal,
       });
       if(upstream.status===401){credentialError='Opper rejected this login. Run /opper-login, then retry your message.';await upstream.body?.cancel();return fail(401,credentialError);}

@@ -81,6 +81,9 @@ still chooses the project for a manually created application key.
 Claude Desktop and the VS Code Copilot setup cannot send the project header and
 reject explicit targets. Codex Desktop supports targets, but requires a stored
 slot so Finder launches can refresh it; unset `OPPER_API_KEY` before setup.
+Copilot uses a saved key slot for in-session renewal; unset `OPPER_API_KEY`
+and launch with `--key <slot>`. An explicit `--project-uuid` remains the
+request target through renewal.
 
 The browser flow also stores the server-issued credential ID, organization ID,
 and expiry when available. `opper whoami` shows that expiry. An expired slot

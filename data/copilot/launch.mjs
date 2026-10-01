@@ -41,14 +41,14 @@ export async function launchCopilot(args,routing,runtime) {
   const slot=await runtime.getSlot(name);
   if(!slot)throw Error('Opper sign-in was removed. Run opper login.');
   if(origin(routing.apiBaseUrl)!==origin(slot.baseUrl))throw Error('The selected slot and OPPER_BASE_URL differ. Sign in to that endpoint in a separate slot.');
-  const binding=bindSlot(slot,configPath,name);
+  const binding=bindSlot(slot,configPath,name,routing.projectUuid);
   const key=await credential(binding);
   const preferenceKey=createHash('sha256').update(JSON.stringify([binding.origin,name,binding.identity??'manual'])).digest('hex');
   const prefs=join(opperHome,'copilot-preferences');await mkdir(prefs,{recursive:true,mode:0o700});
   const preferenceFile=join(prefs,preferenceKey+'.json');
   let preference={};try{preference=JSON.parse(await readFile(preferenceFile,'utf8'));}catch{}
   kinds ??= Array.isArray(preference.kinds)&&preference.kinds.length&&preference.kinds.every(k=>MODEL_KINDS.includes(k))?preference.kinds:MODEL_KINDS;
-  const catalog=allowedModels((await getJson(binding.origin,'/v3/compat/models',key)).data,kinds);
+  const catalog=allowedModels((await getJson(binding.origin,'/v3/compat/models',key,binding.projectUuid)).data,kinds);
   if(!catalog.length) throw Error('No allowed tool-capable models with valid context limits for these types. Try --kinds all.');
   if(list) {for(const m of catalog)console.log(m.id);return 0;}
   if(!modelId&&catalog.some(m=>m.id===preference.model))modelId=preference.model;
@@ -56,7 +56,7 @@ export async function launchCopilot(args,routing,runtime) {
   const model=catalog.find(m=>m.id===modelId);
   if(!model)throw Error('The selected model is not in this key’s allowed tool-capable catalog.');
   // Account verification uses the same slot and origin as inference.
-  const me=await getJson(binding.origin,'/v3/me',await credential(binding));
+  const me=await getJson(binding.origin,'/v3/me',await credential(binding),binding.projectUuid);
   if(me.blocked)throw Error('Opper spending is blocked. Check your budget or contact your administrator.');
   console.error(`Opper: ${me.organization?.name ?? 'signed in'} · ${me.project?.name ?? 'project not reported'} · ${model.id}`);
   const runs=join(opperHome,'copilot-runs');await mkdir(runs,{recursive:true,mode:0o700});

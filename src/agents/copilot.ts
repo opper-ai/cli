@@ -20,6 +20,10 @@ export const copilot: AgentAdapter = {
   async configure() { throw new OpperError("INVALID_ARGUMENT", "Use `opper launch copilot`. One-time setup for plain copilot is not available yet."); },
   async unconfigure() { /* Launch configuration is temporary and removed on exit. */ },
   async spawn(args, routing) {
+    if (process.env.OPPER_API_KEY) {
+      throw new OpperError("INVALID_ARGUMENT", "Copilot requires a saved credential for in-session renewal.",
+        "Unset OPPER_API_KEY and use `opper login --key <slot>`, then launch with the same --key slot.");
+    }
     const { launchCopilot } = await import(pathToFileURL(assetPath("copilot/launch.mjs")).href);
     return withLoginRecovery(() => launchCopilot(args, routing, {
       home: opperHome(), configPath: configPath(), getSlot,
