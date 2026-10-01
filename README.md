@@ -651,7 +651,6 @@ no global Copilot installation is required. The standard CLI sign-in, selected
 opper launch copilot
 opper --key work launch copilot --kinds pools,routes
 opper launch copilot --list --kinds all
-# After a version containing this integration is published:
 npx @opperai/cli@latest launch copilot
 ```
 
@@ -661,9 +660,11 @@ shared project usage. Organization billing requires explicit server permission.
 `/opper-login` opens browser renewal and continues the same conversation after
 validation of the same user, organization, project and endpoint. It does not
 replay failed requests. The terminal warns within 24 hours of known expiry. Commands use Copilot's experimental extension support; `--no-extension`
-disables them. The native Copilot footer is preserved by default;
-`--budget-footer` optionally adds an Opper allowance line. Use `/opper-usage`
-for allowance details and Copilot’s `/context` for context usage.
+disables them. Opper allowance is available in the native footer through its
+**Custom** item by default. Use `/footer` to toggle Custom and context window
+visibility independently. `--no-budget` disables the custom allowance command;
+`--budget-footer` remains supported for compatibility. Use `/opper-usage` for
+allowance details and Copilot’s `/context` for context usage.
 
 The last model and type filter are remembered. A fresh isolated Copilot profile
 is created per launch; existing Copilot settings are untouched. Restart/resume
