@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 export function origin(value = 'https://api.opper.ai') {
   const url = new URL(value);
@@ -22,7 +22,10 @@ export function checkExpiry(slot) {
   const expiry = Date.parse(slot.expiresAt);
   if (!Number.isFinite(expiry) || expiry <= Date.now()) throw Error('Opper sign-in expired. Run /opper-login, then retry your message.');
 }
-const hash = key => createHash('sha256').update(key).digest('hex');
+// Process-local credential comparison, not password storage or a persistent verifier.
+const fingerprintKey=randomBytes(32);
+export const credentialFingerprint=key=>createHmac('sha256',fingerprintKey).update(key).digest('hex');
+const hash=credentialFingerprint;
 export function bindSlot(slot, configPath, name) {
   checkExpiry(slot);
   const identity = slot.orgId != null && slot.projectId != null && slot.user?.email

@@ -4,9 +4,8 @@ import {readSlot} from './core.mjs';
 import {randomBytes} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
-import {credential} from './core.mjs';
+import {credential,credentialFingerprint} from './core.mjs';
 import {budgetSnapshot} from './budget.mjs';
-import {createHash} from 'node:crypto';
 
 // Copilot 1.0.88's registry supports static credentials, not apiKeyCommand.
 // Give it a run-local token; the actual Opper key stays in the existing slot.
@@ -33,7 +32,7 @@ export async function startBridge(binding, models, traceId, inferenceBase) {
     if(req.method==='GET'&&['/opper/budget','/opper/budget?refresh=1'].includes(req.url)) {
       try {
         const key=await credential(binding);
-        const hash=createHash('sha256').update(key).digest('hex');
+        const hash=credentialFingerprint(key);
         if(!budgetCache||budgetCache.hash!==hash||Date.now()-budgetCache.time>60000||req.url.endsWith('refresh=1')) {
           if(!budgetPending||budgetPending.hash!==hash) {
             const promise=(async()=>{

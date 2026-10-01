@@ -43,7 +43,7 @@ export async function launchCopilot(args,routing,runtime) {
   if(origin(routing.apiBaseUrl)!==origin(slot.baseUrl))throw Error('The selected slot and OPPER_BASE_URL differ. Sign in to that endpoint in a separate slot.');
   const binding=bindSlot(slot,configPath,name);
   const key=await credential(binding);
-  const preferenceKey=createHash('sha256').update(JSON.stringify([binding.origin,name,binding.identity??binding.keyHash])).digest('hex');
+  const preferenceKey=createHash('sha256').update(JSON.stringify([binding.origin,name,binding.identity??'manual'])).digest('hex');
   const prefs=join(opperHome,'copilot-preferences');await mkdir(prefs,{recursive:true,mode:0o700});
   const preferenceFile=join(prefs,preferenceKey+'.json');
   let preference={};try{preference=JSON.parse(await readFile(preferenceFile,'utf8'));}catch{}
