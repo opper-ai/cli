@@ -8,7 +8,16 @@ import {join} from 'node:path';
 import {launchCopilot} from '../../data/copilot/launch.mjs';
 import {copilot} from '../../src/agents/copilot.js';
 
+// Discovery exercises the supported Copilot runtime independently of the
+// broader CLI's Node 20+ test runner; no Copilot child is started by --list.
+function nodeRuntime(t,version) {
+ const original=Object.getOwnPropertyDescriptor(process.versions,'node');
+ Object.defineProperty(process.versions,'node',{...original,value:version});
+ t.onTestFinished(()=>Object.defineProperty(process.versions,'node',original));
+}
+
 test('Copilot discovery sends only the explicit request target, independently of saved resource defaults',async t=>{
+ nodeRuntime(t,'22.0.0');
  const seen=[];
  const server=http.createServer((req,res)=>{
   seen.push({path:req.url,auth:req.headers.authorization,project:req.headers['x-opper-project']});
@@ -28,6 +37,13 @@ test('Copilot discovery sends only the explicit request target, independently of
   {path:'/v3/compat/models',auth:'Bearer synthetic-org',project:target},
   {path:'/v3/compat/models',auth:'Bearer synthetic-org',project:undefined},
  ]);
+});
+
+test('Copilot rejects Node 20 before reading credentials or starting a child',async t=>{
+ nodeRuntime(t,'20.20.0');
+ const getSlot=vi.fn();
+ await assert.rejects(launchCopilot(['--list'],{}, {getSlot}),/requires Node.js 22 or newer/);
+ assert.equal(getSlot.mock.calls.length,0);
 });
 
 test('Copilot refuses environment credentials instead of using a different saved slot for renewal',async()=>{
