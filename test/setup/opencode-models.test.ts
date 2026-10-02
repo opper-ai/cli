@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   toOpenCodeModels,
   displayName,
+  pickerDisplayName,
   type CompatModel,
   fetchOpenCodeModels,
   resolveOpenCodeModels,
@@ -159,4 +160,10 @@ describe("authenticated catalog discovery", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ models: [] }))));
     await expect(fetchOpenCodeModels(new OpperApi(context))).rejects.toThrow(/catalog/i);
   });
+});
+
+it("distinguishes deployments with identical names and separates pools and routes", () => {
+ const ids=["provider-a/maker/GLM-5.3","provider-b/maker/GLM-5.3","glm-5.3","dynamic/glm-5.3"];
+ expect(new Set(ids.map(pickerDisplayName)).size).toBe(ids.length);
+ expect(pickerDisplayName(ids[0]!)).toContain(ids[0]);
 });

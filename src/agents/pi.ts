@@ -6,9 +6,10 @@ import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
-import { OPPER_COMPAT_URL } from "../config/endpoints.js";
-import { DEFAULT_MODELS, pickerModelsForLaunch } from "../config/models.js";
+import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
+import { fetchPiModels, type PiModel } from "../setup/pi-models.js";
 import { assetPath } from "../util/assets.js";
 import type {
   AgentAdapter,
@@ -63,6 +64,7 @@ async function setOpperProvider(
   launchModel: string,
   baseUrl: string,
   projectUuid?: string,
+  catalog: PiModel[] = [],
 ): Promise<void> {
   const cfg = await readConfig();
   cfg.providers = cfg.providers ?? {};
@@ -71,14 +73,11 @@ async function setOpperProvider(
   cfg.providers[PROVIDER_KEY] = {
     api: "openai-completions",
     apiKey,
+    authHeader: true,
     baseUrl,
     ...(projectUuid ? { headers: { "X-Opper-Project": projectUuid } } : {}),
-    models: pickerModelsForLaunch(launchModel).map((m) => ({
-      id: m.id,
-      contextWindow: m.contextWindow,
-      input: ["text"],
-      reasoning: m.reasoning,
-      ...(m.id === launchModel ? { _launch: true } : {}),
+    models: [...catalog].sort((a, b) => Number(b.id === launchModel) - Number(a.id === launchModel)).map((m) => ({
+      ...m, ...(m.id === launchModel ? { _launch: true } : {}),
     })),
   };
   await writeConfig(cfg);
@@ -118,7 +117,8 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid);
+  const catalog = await fetchPiModels({apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, projectUuid: opts.projectUuid});
+  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid, catalog);
 }
 
 async function unconfigure(): Promise<void> {
@@ -174,14 +174,19 @@ async function installExtension(): Promise<() => Promise<void>> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
+  const catalog = await fetchPiModels({apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl, projectUuid: routing.projectUuid});
+  const model = catalog.some(m => m.id === routing.model) ? routing.model : catalog[0]!.id;
+  if (routing.modelOverride && !catalog.some(m => m.id === routing.modelOverride)) {
+    throw new OpperError("API_ERROR", "The selected model is not in this credential's allowed Pi catalog.");
+  }
   // Snapshot just `providers.opper` so direct `pi` invocations after the launch
   // don't inherit this session's URL, and the user's other providers / top-level
   // keys survive intact. The extension is snapshot/restored separately.
   return withJsonKeys(piConfigPath(), [["providers", PROVIDER_KEY]], async () => {
-    // Write the api key as the `$OPPER_API_KEY` env reference, not the literal —
+    // Write the api key as the `OPPER_API_KEY` env reference, not the literal —
     // pi resolves it from the env we export below, and the extension re-registers
     // from the same env, so the real key never lands in the user's config on disk.
-    await setOpperProvider("$OPPER_API_KEY", routing.model, routing.baseUrl, routing.projectUuid);
+    await setOpperProvider("OPPER_API_KEY", model, routing.baseUrl, routing.projectUuid, catalog);
     const restoreExtension = await installExtension();
     try {
       // pi's CLI requires *both* --provider and --model to resolve a non-default
@@ -191,7 +196,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
       );
       const piArgs = userPicked
         ? ["--provider", PROVIDER_KEY, ...args]
-        : ["--provider", PROVIDER_KEY, "--model", routing.model, ...args];
+        : ["--provider", PROVIDER_KEY, "--model", model, ...args];
 
       // OPPER_API_KEY / OPPER_BASE_URL feed the extension's per-session provider
       // re-registration (a partial { headers } registration drops apiKey/baseUrl,

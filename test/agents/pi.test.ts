@@ -14,6 +14,7 @@ const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
 
 const ROUTING = {
+  apiBaseUrl: "https://api.opper.ai",
   baseUrl: SESSION_URL,
   apiKey: "op_live_run",
   model: "claude-opus-4-7",
@@ -40,6 +41,7 @@ describe("pi adapter", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json({data: ["claude-opus-4-7", "dynamic/coding", "provider/new-model"].map(id => ({id, context_length:128000, opper:{capabilities:["tools"],max_output_tokens:4096}}))}))));
     whichMock.mockReset();
     runMock.mockReset();
     whichMock.mockResolvedValue("/usr/bin/pi");
@@ -53,6 +55,7 @@ describe("pi adapter", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     rmSync(sandbox, { recursive: true, force: true });
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
@@ -93,8 +96,10 @@ describe("pi adapter", () => {
     const code = await pi.spawn!([], ROUTING);
     expect(code).toBe(0);
     expect(mid?.models.providers?.opper?.baseUrl).toBe(SESSION_URL);
+    expect((mid?.models.providers?.opper as any)?.authHeader).toBe(true);
+    expect((mid?.models.providers?.opper as any)?.models.map((m: any) => m.id)).toEqual(["claude-opus-4-7", "dynamic/coding", "provider/new-model"]);
     // The real key is never written to disk — only the env reference is.
-    expect(mid?.models.providers?.opper?.apiKey).toBe("$OPPER_API_KEY");
+    expect(mid?.models.providers?.opper?.apiKey).toBe("OPPER_API_KEY");
     expect(JSON.stringify(mid?.models)).not.toContain("op_live_run");
     expect(mid?.extExists).toBe(true);
     expect(mid?.ext).toContain("session_start");
@@ -157,6 +162,15 @@ describe("pi adapter", () => {
     await pi.spawn!(["--model", "claude-haiku-4-5"], ROUTING);
     const call = runMock.mock.calls.find((c) => c[0] === "pi" && c[1]?.[0] !== "--version");
     expect(call![1]).toEqual(["--provider", "opper", "--model", "claude-haiku-4-5"]);
+  });
+
+  it("keeps existing config and does not launch when the allowed catalog is empty", async () => {
+    await pi.configure({apiKey: "synthetic"});
+    const before = readFileSync(modelsPath(sandbox), "utf8");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({data: []})));
+    await expect(pi.spawn!([], ROUTING)).rejects.toThrow(/No allowed/);
+    expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
+    expect(runMock).not.toHaveBeenCalled();
   });
 
   it("spawn propagates non-zero exit codes", async () => {

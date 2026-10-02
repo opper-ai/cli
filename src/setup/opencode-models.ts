@@ -93,6 +93,12 @@ export function displayName(id: string): string {
   return prettify(tail);
 }
 
+/** Keep deployment IDs visible without changing labels for other adapters. */
+export function pickerDisplayName(id: string): string {
+  if (id.startsWith("dynamic/")) return displayName(id);
+  return id.includes("/") ? `${displayName(id)} · ${id}` : `${displayName(id)} (pool)`;
+}
+
 function prettify(s: string): string {
   return s
     .split(/[-_]/)
@@ -135,7 +141,7 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
     if (caps.includes("pdf")) inputModalities.push("pdf");
 
     out[e.id] = {
-      name: displayName(e.id),
+      name: pickerDisplayName(e.id),
       // Agent mode is unusable without tool calling, and OpenCode trusts this
       // flag rather than probing — a wrong `true` fails mid-session.
       tool_call: caps.includes("tools"),
@@ -170,7 +176,7 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
  */
 function routeEntry(e: CompatModel): OpenCodeModel {
   return {
-    name: displayName(e.id),
+    name: pickerDisplayName(e.id),
     tool_call: true,
     reasoning: false,
     attachment: false,
