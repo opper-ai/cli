@@ -21,7 +21,7 @@ function label(id) {
   const text = name.split(/[-_]/).map((word) =>
     /^[0-9]/.test(word) || word.length <= 2 ? word : word[0].toUpperCase() + word.slice(1),
   ).join(" ");
-  return route ? `${text} (route)` : text;
+  return route ? `${text} (route)` : id.includes("/") ? `${text} · ${id}` : `${text} (pool)`;
 }
 
 function price(value) {

@@ -719,3 +719,15 @@ One-time setup for plain `copilot` is **not implemented**. OpenCode already has
 provider initialization versus extension/hook startup before offering equivalent
 automatic credential and model refresh. No shell aliases or background services
 are installed by `opper launch copilot`.
+
+### Pi and OpenCode model discovery
+
+Pi fetches the credential-scoped catalog at setup and launch, including pools and
+dynamic routes with tool support and valid context limits. An explicit
+`--project-uuid` is used for both discovery and inference. Empty or failed catalog
+lookups stop setup without installing a static fallback list. Other Pi providers
+remain available.
+
+OpenCode deployment labels include the full model ID to distinguish providers.
+Pools and dynamic routes are marked separately. Existing one-time OpenCode login
+bridges need setup rerun to receive the updated labels.
