@@ -186,10 +186,78 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
 }
 
 /**
+ * OpenCode 2 runs agents on a shared background server whose environment was
+ * fixed when it started, so OPENCODE_CONFIG_CONTENT and {env:OPPER_API_KEY}
+ * from this launch would be ignored. Its private (`--standalone`) server is
+ * spawned with our environment instead. 1.x has no server split.
+ */
+export function openCodeMajorVersion(env: NodeJS.ProcessEnv): number | undefined {
+  const result = spawnSync("opencode", ["--version"], {
+    env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 30_000,
+  });
+  // 1.x prints "1.18.29"; 2.x prints "opencode v2.0.20".
+  const match = result.status === 0 ? /(\d+)\.\d+\.\d+/.exec(result.stdout ?? "") : null;
+  return match ? Number(match[1]) : undefined;
+}
+
+const V2_SUBCOMMANDS = new Set([
+  "upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin",
+  "models", "stats", "mini", "run", "session", "service", "reload", "pair", "serve",
+]);
+// Subcommands that talk to a model-serving server and accept `--standalone`
+// after the subcommand name. The flag is rejected before a subcommand.
+const V2_STANDALONE_SUBCOMMANDS = new Set(["api", "mini", "models", "run", "stats"]);
+
+/** Route an OpenCode 2 invocation to a private server that sees this launch's env. */
+export function withStandaloneServer(args: string[]): string[] {
+  if (args.some((arg) => arg === "--standalone" || arg === "--server" || arg.startsWith("--server="))) return args;
+  const [command] = args;
+  if (command === undefined || command.startsWith("-") || !V2_SUBCOMMANDS.has(command)) {
+    return ["--standalone", ...args];
+  }
+  return V2_STANDALONE_SUBCOMMANDS.has(command) ? [command, "--standalone", ...args.slice(1)] : args;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** OpenCode's own merge: nested objects combine, anything else is replaced. */
+function mergeDeep(base: Record<string, unknown>, next: Record<string, unknown>): Record<string, unknown> {
+  const merged = { ...base };
+  for (const [key, value] of Object.entries(next)) {
+    if (value === undefined) continue;
+    const previous = merged[key];
+    merged[key] = isRecord(previous) && isRecord(value) ? mergeDeep(previous, value) : value;
+  }
+  return merged;
+}
+
+/**
+ * Effective configuration from inspection output. OpenCode 1.x prints one
+ * merged object; 2.x lists sources from lowest to highest priority, where
+ * each loaded document carries its (already migrated) settings in `info`.
+ */
+export function effectiveOpenCodeConfig(text: string): Record<string, unknown> {
+  const errors: ParseError[] = [];
+  const value: unknown = parse(text, errors, { allowTrailingComma: true });
+  if (errors.length || !Array.isArray(value)) return parseJsoncObject(text);
+  return value.reduce<Record<string, unknown>>((config, source) => {
+    if (!isRecord(source)) throw new SyntaxError("Expected configuration sources");
+    if (source.info === undefined) return config;
+    if (!isRecord(source.info)) throw new SyntaxError("Expected a configuration object");
+    return mergeDeep(config, source.info);
+  }, {});
+}
+
+/**
  * Inspect merged settings before changing Opper's provider configuration.
  * OpenCode may add its own $schema metadata while loading a JSON file.
  */
-function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv, projectUuid?: string): void {
+function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv, projectUuid?: string, majorVersion?: number): void {
   let config: Record<string, unknown>;
   let directory: string | undefined;
   let output: number | undefined;
@@ -199,7 +267,12 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
     directory = mkdtempSync(join(tmpdir(), "opper-opencode-inspect-"));
     const path = join(directory, "config.json");
     output = openSync(path, "wx", 0o600);
-    const result = spawnSync("opencode", ["debug", "config"], {
+    // 2.x `debug config` asks the shared background server, which never sees
+    // this launch's OPENCODE_CONFIG_CONTENT. Ask a private one instead.
+    const inspect = majorVersion !== undefined && majorVersion >= 2
+      ? ["api", "--standalone", "config.get", "--param", `directory=${process.cwd()}`]
+      : ["debug", "config"];
+    const result = spawnSync("opencode", inspect, {
       env,
       encoding: "utf8",
       stdio: ["ignore", output, "ignore"],
@@ -208,7 +281,7 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
     if (result.error || result.status !== 0) {
       throw new Error("Configuration inspection failed");
     }
-    config = parseJsoncObject(readFileSync(path, "utf8"));
+    config = effectiveOpenCodeConfig(readFileSync(path, "utf8"));
   } catch {
     // Debug output can contain credentials. Never include it (or subprocess
     // errors) in the user-facing failure.
@@ -225,18 +298,18 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
     }
   }
   const record = (value: unknown): Record<string, unknown> | undefined =>
-    value !== null && typeof value === "object" && !Array.isArray(value)
-      ? value as Record<string, unknown> : undefined;
+    isRecord(value) ? value : undefined;
+  // 1.x keeps request headers in `options.headers` (plus model `headers`).
+  // 2.x migrates that to `headers`, and also sends `settings.headers`.
+  const headerSets = (entry: Record<string, unknown> | undefined): unknown[] =>
+    [entry?.headers, record(entry?.options)?.headers, record(entry?.settings)?.headers];
+  const providers = [record(config.provider)?.opper, record(config.providers)?.opper].map(record);
+  const providerHeaders = providers.flatMap(headerSets);
+  const modelHeaders = providers.flatMap((opper) =>
+    Object.keys(models).flatMap((id) => headerSets(record(record(opper?.models)?.[id]))));
   const hasAuthorization = (headers: unknown): boolean =>
     Object.keys(record(headers) ?? {}).some((name) => name.toLowerCase() === "authorization");
-  const opper = record(record(config.provider)?.opper);
-  const providerHeaders = record(opper?.options)?.headers;
-  const configuredModels = record(opper?.models);
-  const modelHasAuthorization = Object.keys(models).some((id) => {
-    const model = record(configuredModels?.[id]);
-    return hasAuthorization(model?.headers) || hasAuthorization(record(model?.options)?.headers);
-  });
-  if (hasAuthorization(providerHeaders) || modelHasAuthorization) {
+  if (providerHeaders.some(hasAuthorization) || modelHeaders.some(hasAuthorization)) {
     throw new OpperError(
       "AGENT_CONFIG_CONFLICT",
       "OpenCode's effective Opper configuration contains an Authorization header that can override the selected API key.",
@@ -246,16 +319,13 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
   const conflictingProject = (headers: unknown, providerLevel = false): boolean =>
     Object.entries(record(headers) ?? {}).some(([name, value]) => {
       if (name.toLowerCase() !== "x-opper-project") return false;
-      // OpenCode can mask header values in `debug config`. Only our final
+      // OpenCode 1.x can mask header values in `debug config`. Only our final
       // inline provider header has a known value; masked model overrides or
       // differently cased duplicate headers cannot be verified safely.
       if (providerLevel && projectUuid && name === "X-Opper-Project" && value === "***") return false;
       return value !== projectUuid;
     });
-  if (conflictingProject(providerHeaders, true) || Object.keys(models).some((id) => {
-    const model = record(configuredModels?.[id]);
-    return conflictingProject(model?.headers) || conflictingProject(record(model?.options)?.headers);
-  })) {
+  if (providerHeaders.some((headers) => conflictingProject(headers, true)) || modelHeaders.some((headers) => conflictingProject(headers))) {
     throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's effective Opper configuration contains a project header that overrides the selected target.", "Remove X-Opper-Project headers from Opper provider and model settings, then choose a target with --project-uuid.");
   }
 }
@@ -284,7 +354,9 @@ async function spawn(
     OPPER_API_KEY: routing.apiKey,
     OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
   };
-  checkEffectiveAuthorization(models, env, routing.projectUuid);
+  const majorVersion = openCodeMajorVersion(env);
+  checkEffectiveAuthorization(models, env, routing.projectUuid, majorVersion);
+  const launchArgs = majorVersion !== undefined && majorVersion >= 2 ? withStandaloneServer(args) : args;
 
   if (scope === "project") {
     // `--project` is opt-in to a persistent, usually-checked-in project
@@ -301,7 +373,7 @@ async function spawn(
     await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
     await setSessionBaseUrl(routing.baseUrl, "local");
     try {
-      const result = spawnSync("opencode", args, { stdio: "inherit", env });
+      const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
       return result.status ?? -1;
     } finally {
       await setSessionBaseUrl(restoreUrl, "local");
@@ -323,7 +395,7 @@ async function spawn(
       await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
 
       await setSessionBaseUrl(routing.baseUrl, "global");
-      const result = spawnSync("opencode", args, { stdio: "inherit", env });
+      const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
       return result.status ?? -1;
     },
   );

@@ -82,6 +82,7 @@ describe("OpenCode launch model discovery", () => {
         return { status: 0, stdout: "/test/bin/opencode\n", stderr: "" };
       }
       if (command !== "opencode") throw new Error(`Unexpected subprocess: ${command}`);
+      if (args[0] === "--version") return { status: 0, stdout: "1.18.29\n", stderr: "" };
       if (args[0] === "debug" && args[1] === "config") {
         const result = preflightResult ?? { status: 0, stdout: opts.env?.OPENCODE_CONFIG_CONTENT ?? "{}", stderr: "" };
         if (typeof opts.stdio?.[1] === "number") writeFileSync(opts.stdio[1], result.stdout);

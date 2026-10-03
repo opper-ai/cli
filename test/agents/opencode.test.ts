@@ -31,12 +31,15 @@ vi.mock("../../src/setup/opencode-models.js", () => ({
 
 const spawnSyncMock = vi.fn();
 const debugConfigMock = vi.fn();
+const versionMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>(
     "node:child_process",
   );
   return { ...actual, spawnSync: (...args: any[]) =>
-    args[0] === "opencode" && args[1]?.[0] === "debug" && args[1]?.[1] === "config"
+    args[0] === "opencode" && args[1]?.[0] === "--version"
+      ? versionMock(...args)
+      : args[0] === "opencode" && (args[1]?.[0] === "api" || (args[1]?.[0] === "debug" && args[1]?.[1] === "config"))
       ? (() => {
           const result = debugConfigMock(...args);
           if (typeof args[2]?.stdio?.[1] === "number") writeFileSync(args[2].stdio[1], result.stdout ?? "");
@@ -44,7 +47,7 @@ vi.mock("node:child_process", async () => {
         })() : spawnSyncMock(...args) };
 });
 
-const { opencode } = await import("../../src/agents/opencode.js");
+const { opencode, effectiveOpenCodeConfig, withStandaloneServer } = await import("../../src/agents/opencode.js");
 
 const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
@@ -145,6 +148,107 @@ describe("opencode adapter", () => {
     expect(configureOpenCodeMock).not.toHaveBeenCalled();
   });
 
+  describe("OpenCode 2.x", () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    // `opencode api config.get` lists sources from lowest to highest priority;
+    // loaded documents carry migrated settings in `info`.
+    const sources = (...infos: Record<string, unknown>[]) => JSON.stringify([
+      ...infos.map((info, index) => ({ type: "document", path: `/config/${index}.json`, info })),
+      { type: "directory", path: "/config" },
+    ]);
+    const injected = (headers: Record<string, string> = { "X-Opper-Project": projectUuid }) =>
+      ({ providers: { opper: { headers, settings: { baseURL: SESSION_URL } } } });
+
+    beforeEach(() => {
+      versionMock.mockReturnValue({ status: 0, stdout: "opencode v2.0.20\n" });
+    });
+
+    it("inspects a private server and launches OpenCode on one", async () => {
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources(injected()) });
+      spawnSyncMock.mockReturnValue({ status: 0 });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).resolves.toBe(0);
+      expect(debugConfigMock.mock.calls[0]![1]).toEqual(["api", "--standalone", "config.get", "--param", `directory=${process.cwd()}`]);
+      expect(debugConfigMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT).toBeDefined();
+      expect(spawnSyncMock.mock.calls[0]![1]).toEqual(["--standalone"]);
+      expect(spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT).toBeDefined();
+    });
+
+    it("accepts sources without any loaded document", async () => {
+      debugConfigMock.mockReturnValue({ status: 0, stdout: JSON.stringify([{ type: "directory", path: "/config" }]) });
+      spawnSyncMock.mockReturnValue({ status: 0 });
+      await expect(opencode.spawn!(["run", "hi"], ROUTING)).resolves.toBe(0);
+      expect(spawnSyncMock.mock.calls[0]![1]).toEqual(["run", "--standalone", "hi"]);
+    });
+
+    it("lets a later source replace an earlier project header", async () => {
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources(injected({ "X-Opper-Project": "stale" }), injected()) });
+      spawnSyncMock.mockReturnValue({ status: 0 });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).resolves.toBe(0);
+    });
+
+    it.each([
+      { label: "provider", info: { providers: { opper: { headers: { authorization: "Bearer other" } } } } },
+      { label: "provider settings", info: { providers: { opper: { settings: { headers: { Authorization: "Bearer other" } } } } } },
+      { label: "model", info: { providers: { opper: { models: { "model/one": { headers: { Authorization: "Bearer other" } } } } } } },
+      { label: "model settings", info: { providers: { opper: { models: { "model/one": { settings: { headers: { AUTHORIZATION: "Bearer other" } } } } } } } },
+    ])("rejects an inherited $label Authorization header", async ({ info }) => {
+      resolveOpenCodeModelsMock.mockResolvedValueOnce({ "model/one": {} });
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources(info, injected()) });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("Authorization header") });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(configureOpenCodeMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { label: "differently cased provider", info: { providers: { opper: { headers: { "x-opper-project": "stale" } } } } },
+      { label: "provider settings", info: { providers: { opper: { settings: { headers: { "X-Opper-Project": "stale" } } } } } },
+      { label: "model settings", info: { providers: { opper: { models: { "model/one": { settings: { headers: { "X-Opper-Project": "stale" } } } } } } } },
+    ])("rejects an inherited $label project header", async ({ info }) => {
+      resolveOpenCodeModelsMock.mockResolvedValueOnce({ "model/one": {} });
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources(info, injected()) });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("project header") });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects malformed sources without echoing them", async () => {
+      debugConfigMock.mockReturnValue({ status: 0, stdout: JSON.stringify([{ type: "document", info: "op_live_secret" }]) });
+      const error = await opencode.spawn!([], ROUTING).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("Could not inspect") });
+      expect(JSON.stringify(error)).not.toContain("op_live_secret");
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("parses both 1.x merged output and 2.x source lists", () => {
+    expect(effectiveOpenCodeConfig('{ "provider": { "opper": {} }, }')).toEqual({ provider: { opper: {} } });
+    expect(effectiveOpenCodeConfig(JSON.stringify([
+      { type: "document", path: "/a", info: { providers: { opper: { headers: { A: "1", B: "1" } } }, theme: "x" } },
+      { type: "directory", path: "/b" },
+      { type: "document", info: { providers: { opper: { headers: { B: "2" } } }, theme: "y" } },
+    ]))).toEqual({ providers: { opper: { headers: { A: "1", B: "2" } } }, theme: "y" });
+    expect(() => effectiveOpenCodeConfig("[1]")).toThrow();
+    expect(() => effectiveOpenCodeConfig('{"a": 1, "a": 2}')).toThrow();
+  });
+
+  it.each([
+    { args: [], expected: ["--standalone"] },
+    { args: ["--continue"], expected: ["--standalone", "--continue"] },
+    { args: ["./repo"], expected: ["--standalone", "./repo"] },
+    { args: ["run", "fix it"], expected: ["run", "--standalone", "fix it"] },
+    { args: ["auth", "list"], expected: ["auth", "list"] },
+    { args: ["--server", "http://127.0.0.1:4096"], expected: ["--server", "http://127.0.0.1:4096"] },
+    { args: ["run", "--standalone", "x"], expected: ["run", "--standalone", "x"] },
+  ])("places --standalone for OpenCode 2 args $args", ({ args, expected }) => {
+    expect(withStandaloneServer(args)).toEqual(expected);
+  });
+
+  it("keeps OpenCode 1.x launches on `debug config` and unchanged args", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await expect(opencode.spawn!(["run", "hi"], ROUTING)).resolves.toBe(0);
+    expect(debugConfigMock.mock.calls[0]![1]).toEqual(["debug", "config"]);
+    expect(spawnSyncMock.mock.calls[0]![1]).toEqual(["run", "hi"]);
+  });
+
   let sandbox: string;
   let prevHome: string | undefined;
   let prevEditorHome: string | undefined;
@@ -155,6 +259,7 @@ describe("opencode adapter", () => {
     configureOpenCodeMock.mockReset();
     spawnSyncMock.mockReset();
     debugConfigMock.mockReset().mockReturnValue({ status: 0, stdout: "{}", stderr: "" });
+    versionMock.mockReset().mockReturnValue({ status: 0, stdout: "1.18.29\n" });
     sandbox = mkdtempSync(join(tmpdir(), "opper-opencode-"));
     prevHome = process.env.HOME;
     prevEditorHome = process.env.OPPER_EDITOR_HOME;
