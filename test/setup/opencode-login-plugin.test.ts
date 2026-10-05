@@ -73,6 +73,21 @@ afterEach(async () => {
 });
 
 describe("OpenCode login plugin", () => {
+  it("removes unsupported client-inferred request defaults without changing valid choices", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [{ ...catalog(["openai/gpt-5.4"]).data[0], opper: { capabilities: ["reasoning"] } },
+      { ...catalog(["pool"]).data[0], opper: { reasoning: { supported: ["high"] } } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const plugin = await OpperLoginPlugin();
+    await plugin.config({});
+    for (const [id, effort, expected] of [["openai/gpt-5.4", "medium", undefined], ["pool", "medium", undefined], ["pool", "high", "high"]]) {
+      const output = { options: { reasoningEffort: effort, textVerbosity: "low" } };
+      await plugin["chat.params"]({ model: { providerID: "opper", id } }, output);
+      expect(output.options.reasoningEffort).toBe(expected);
+      expect(output.options.textVerbosity).toBe("low");
+    }
+  });
+
   it("matches the CLI effort mapper and preserves custom variants on catalog refresh", async () => {
     await slot({ apiKey: "synthetic-key" });
     const data = [
@@ -91,7 +106,7 @@ describe("OpenCode login plugin", () => {
     } } } });
     expect(config.provider.opper.models["gpt-6.1-sol"].variants.careful).toEqual({ reasoningEffort: "high", temperature: 0 });
     expect(config.provider.opper.models["gpt-6.1-sol"].variants.high).toEqual({ reasoningEffort: "high", textVerbosity: "low" });
-    expect(config.provider.opper.models["mixed-pool"].variants.max).toEqual({ disabled: true });
+    expect(config.provider.opper.models["mixed-pool"].variants.max).toMatchObject({ disabled: true });
     expect(config.provider.opper.models.revoked).toBeUndefined();
   });
 

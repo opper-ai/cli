@@ -36,7 +36,7 @@ describe("configureOpenCode", () => {
     const config = JSON.parse(readFileSync(result.path, "utf8"));
     expect(config.provider.opper.models.allowed.variants).toEqual({
       careful: { reasoningEffort: "high", temperature: 0 },
-      high: { reasoningEffort: "high", textVerbosity: "low" }, max: { disabled: true },
+      high: { reasoningEffort: "high", textVerbosity: "low" }, max: { disabled: true, opperManagedDisabled: true, reasoningEffort: "max" },
     });
     expect(config.provider.opper.models.revoked).toBeUndefined();
   });

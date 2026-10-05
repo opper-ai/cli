@@ -25,7 +25,8 @@ vi.mock("../../src/setup/opencode.js", () => ({
 // spawn() and configure() resolve the live catalogue; stub it so this suite
 // stays offline, and so a test can vary what the gateway "returns".
 const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue({});
-vi.mock("../../src/setup/opencode-models.js", () => ({
+vi.mock("../../src/setup/opencode-models.js", async () => ({
+  ...await vi.importActual<typeof import("../../src/setup/opencode-models.js")>("../../src/setup/opencode-models.js"),
   resolveOpenCodeModels: resolveOpenCodeModelsMock,
 }));
 
@@ -89,6 +90,46 @@ function seedOpencodeConfig(sandbox: string): void {
 }
 
 describe("opencode adapter", () => {
+  it("keeps a large catalog off the inline environment override", async () => {
+    const models = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`model/${i}`, {
+      name: "x".repeat(1000), variants: { high: { reasoningEffort: "high" } },
+    }]));
+    resolveOpenCodeModelsMock.mockResolvedValueOnce(models);
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], ROUTING);
+    const raw = spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT;
+    expect(Buffer.byteLength(raw)).toBeLessThan(128_000);
+    expect(JSON.parse(raw).provider.opper.models).toBeUndefined();
+  });
+
+  it("removes the launch effort-policy file after the installed bridge exits", async () => {
+    const directory = join(sandbox, ".config", "opencode", "plugins");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "opper-login.js"), "// Managed by @opperai/cli.");
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
+    let policyPath: string;
+    spawnSyncMock.mockImplementationOnce((_command, _args, opts) => {
+      policyPath = opts.env.OPPER_CLI_EFFORT_POLICY;
+      expect(JSON.parse(readFileSync(policyPath!, "utf8")).allowed.variants.high.reasoningEffort).toBe("high");
+      expect(readFileSync(policyPath!, "utf8")).not.toContain(ROUTING.apiKey);
+      return { status: 0 };
+    });
+    await opencode.spawn!([], ROUTING);
+    expect(existsSync(policyPath!)).toBe(false);
+  });
+
+  it.each([{ variants: { custom: { reasoningEffort: "max" } } }, { options: { reasoningEffort: "max", disabled: true } }])("rejects unsupported inherited efforts after refreshing stale managed settings: %j", async (inherited) => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: {
+      high: { reasoningEffort: "high" }, max: { disabled: true },
+    }, options: { reasoningEffort: "high" } } });
+    debugConfigMock.mockReturnValueOnce({ status: 0, stdout: "{}" }).mockReturnValueOnce({ status: 0,
+      stdout: JSON.stringify({ provider: { opper: { models: { allowed: inherited } } } }),
+    });
+    await expect(opencode.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("reasoning effort") });
+    expect(configureOpenCodeMock).toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
   it("uses an explicit target for discovery and runtime config", async () => {
     const projectUuid = "11111111-1111-4111-8111-111111111111";
     vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { options: { headers: { "X-Opper-Project": "stale", "X-Team": "team" } } } } }));

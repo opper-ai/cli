@@ -7,9 +7,10 @@ import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
 import { deleteJsoncProperty, parseJsoncObject } from "../util/jsonc.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
+import { openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
-import { resolveOpenCodeModels, type OpenCodeModel } from "../setup/opencode-models.js";
+import { resolveOpenCodeModels, preserveOpenCodeVariants, type OpenCodeModel } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
 import { OpperError } from "../errors.js";
@@ -164,6 +165,14 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   const headers = options.headers === undefined ? undefined : Object.fromEntries(
     Object.entries(object(options.headers)).filter(([name]) => !["authorization", "x-opper-project"].includes(name.toLowerCase())),
   );
+  // Refresh only models already present inline. Catalog metadata remains in
+  // the generated file, keeping this override below OS environment limits.
+  const inlineModels = opper.models === undefined ? undefined : object(opper.models);
+  const refreshed = inlineModels ? preserveOpenCodeVariants(models, inlineModels) : {};
+  const inline = inlineModels ? Object.fromEntries(Object.keys(inlineModels).filter((id) => id in models).map((id) => {
+    const policy = object(refreshed[id]);
+    return [id, { ...object(inlineModels[id]), variants: policy.variants, options: policy.options ?? {} }];
+  })) : undefined;
   return JSON.stringify({
     ...config,
     ...(routing.modelOverride ? {
@@ -176,6 +185,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
       opper: {
         ...opper,
         npm: "@ai-sdk/openai-compatible",
+        ...(inline ? { models: inline } : {}),
         options: { ...options, headers: { ...headers, ...(routing.projectUuid ? { "X-Opper-Project": routing.projectUuid } : {}) }, baseURL: routing.baseUrl, apiKey: "{env:OPPER_API_KEY}" },
         // Keep the full model metadata in the generated config file. A live
         // catalog can exceed Linux's per-environment-variable size limit.
@@ -257,7 +267,7 @@ export function effectiveOpenCodeConfig(text: string): Record<string, unknown> {
  * Inspect merged settings before changing Opper's provider configuration.
  * OpenCode may add its own $schema metadata while loading a JSON file.
  */
-function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv, projectUuid?: string, majorVersion?: number): void {
+function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env: NodeJS.ProcessEnv, projectUuid?: string, majorVersion?: number): Record<string, unknown> {
   let config: Record<string, unknown>;
   let directory: string | undefined;
   let output: number | undefined;
@@ -328,6 +338,26 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
   if (providerHeaders.some((headers) => conflictingProject(headers, true)) || modelHeaders.some((headers) => conflictingProject(headers))) {
     throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's effective Opper configuration contains a project header that overrides the selected target.", "Remove X-Opper-Project headers from Opper provider and model settings, then choose a target with --project-uuid.");
   }
+  return config;
+}
+
+function checkEffectiveEfforts(models: Record<string, OpenCodeModel>, config: Record<string, unknown>): void {
+  const provider = isRecord(config.provider) && isRecord(config.provider.opper) ? config.provider.opper : undefined;
+  const inherited = isRecord(provider?.models) ? provider.models : {};
+  for (const [id, model] of Object.entries(models)) {
+    if (!model.variants || !isRecord(inherited[id])) continue;
+    const supported = new Set(Object.values(model.variants).flatMap((variant) =>
+      !variant.disabled && typeof variant.reasoningEffort === "string" ? [variant.reasoningEffort] : []));
+    const entry = inherited[id];
+    const settings = [entry.options, ...Object.values(isRecord(entry.variants) ? entry.variants : {})
+      .filter((variant) => !isRecord(variant) || variant.disabled !== true)];
+    if (settings.some((setting) => isRecord(setting) &&
+      ((setting.reasoningEffort !== undefined && !supported.has(String(setting.reasoningEffort))) ||
+        setting.thinking !== undefined))) {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's inherited model settings contain an unsupported reasoning effort.",
+        "Refresh the project's Opper configuration or remove unsupported effort settings, then retry.");
+    }
+  }
 }
 
 async function spawn(
@@ -354,51 +384,66 @@ async function spawn(
     OPPER_API_KEY: routing.apiKey,
     OPENCODE_CONFIG_CONTENT: runtimeConfig(models, routing),
   };
-  const majorVersion = openCodeMajorVersion(env);
-  checkEffectiveAuthorization(models, env, routing.projectUuid, majorVersion);
-  const launchArgs = majorVersion !== undefined && majorVersion >= 2 ? withStandaloneServer(args) : args;
-
-  if (scope === "project") {
-    // `--project` is opt-in to a persistent, usually-checked-in project
-    // config. Reverting the whole opper provider on exit would defeat
-    // the point — instead we apply the session URL only for the spawn
-    // and reset baseURL afterwards. The opper provider block stays in
-    // place across launches.
-    //
-    // Capture restoreUrl *before* configureOpenCode runs, since
-    // `overwrite: true` replaces provider.opper with template values
-    // (compat URL) — capturing after would discard a hand-edited
-    // self-hosted baseURL.
-    const restoreUrl = restoreTarget(readBaseUrl("local"));
-    await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
-    await setSessionBaseUrl(routing.baseUrl, "local");
-    try {
-      const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
-      return result.status ?? -1;
-    } finally {
-      await setSessionBaseUrl(restoreUrl, "local");
+  delete env.OPPER_CLI_EFFORT_POLICY;
+  let effortDirectory: string | undefined;
+  // An installed login bridge can also sanitize client-inferred request
+  // defaults during launch. Policy stays on disk rather than in a large env.
+  try {
+    if (existsSync(openCodeLoginBridgePath())) {
+      effortDirectory = mkdtempSync(join(tmpdir(), "opper-opencode-effort-policy-"));
+      env.OPPER_CLI_EFFORT_POLICY = join(effortDirectory, "models.json");
+      await writeFile(env.OPPER_CLI_EFFORT_POLICY, JSON.stringify(models), { mode: 0o600 });
     }
+    const majorVersion = openCodeMajorVersion(env);
+    checkEffectiveAuthorization(models, env, routing.projectUuid, majorVersion);
+    const launchArgs = majorVersion !== undefined && majorVersion >= 2 ? withStandaloneServer(args) : args;
+
+    if (scope === "project") {
+      // `--project` is opt-in to a persistent, usually-checked-in project
+      // config. Reverting the whole opper provider on exit would defeat
+      // the point — instead we apply the session URL only for the spawn
+      // and reset baseURL afterwards. The opper provider block stays in
+      // place across launches.
+      //
+      // Capture restoreUrl *before* configureOpenCode runs, since
+      // `overwrite: true` replaces provider.opper with template values
+      // (compat URL) — capturing after would discard a hand-edited
+      // self-hosted baseURL.
+      const restoreUrl = restoreTarget(readBaseUrl("local"));
+      await configureOpenCode({ location: "local", overwrite: true, ...(models ? { models } : {}) });
+      await setSessionBaseUrl(routing.baseUrl, "local");
+      try {
+        checkEffectiveEfforts(models, checkEffectiveAuthorization(models, env, routing.projectUuid, majorVersion));
+        const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
+        return result.status ?? -1;
+      } finally {
+        await setSessionBaseUrl(restoreUrl, "local");
+      }
+    }
+
+    // User-scope: snapshot the Opper-owned keys. The template writes
+    // `provider.opper`, a top-level `model: "opper/..."`, AND a top-level
+    // `$schema` — all three need narrow restore. Without `$schema`, a
+    // fresh first launch leaves a `{"$schema": "..."}` file behind even
+    // though it's meant to be ephemeral. Without `model`, an orphaned
+    // `model: "opper/..."` points at a removed provider. OpenCode mutates
+    // sibling keys (theme, MCP servers, …) during a session — those are
+    // outside our keyPaths and survive the restore.
+    return await withJsonKeys(
+      opencodeConfigPath("global"),
+      [["provider", "opper"], ["model"], ["$schema"]],
+      async () => {
+        await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
+
+        await setSessionBaseUrl(routing.baseUrl, "global");
+        checkEffectiveEfforts(models, checkEffectiveAuthorization(models, env, routing.projectUuid, majorVersion));
+        const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
+        return result.status ?? -1;
+      },
+    );
+  } finally {
+    if (effortDirectory) rmSync(effortDirectory, { recursive: true, force: true });
   }
-
-  // User-scope: snapshot the Opper-owned keys. The template writes
-  // `provider.opper`, a top-level `model: "opper/..."`, AND a top-level
-  // `$schema` — all three need narrow restore. Without `$schema`, a
-  // fresh first launch leaves a `{"$schema": "..."}` file behind even
-  // though it's meant to be ephemeral. Without `model`, an orphaned
-  // `model: "opper/..."` points at a removed provider. OpenCode mutates
-  // sibling keys (theme, MCP servers, …) during a session — those are
-  // outside our keyPaths and survive the restore.
-  return withJsonKeys(
-    opencodeConfigPath("global"),
-    [["provider", "opper"], ["model"], ["$schema"]],
-    async () => {
-      await configureOpenCode({ location: "global", overwrite: true, ...(models ? { models } : {}) });
-
-      await setSessionBaseUrl(routing.baseUrl, "global");
-      const result = spawnSync("opencode", launchArgs, { stdio: "inherit", env });
-      return result.status ?? -1;
-    },
-  );
 }
 
 export const opencode: AgentAdapter = {

@@ -46,7 +46,7 @@ export interface OpenCodeModel {
   name: string;
   tool_call: boolean;
   reasoning: boolean;
-  options?: { reasoningEffort: string };
+  options?: Record<string, unknown>;
   variants?: Record<string, Record<string, unknown>>;
   attachment: boolean;
   cost: {
@@ -62,12 +62,13 @@ export interface OpenCodeModel {
 // Keep in sync with the standalone login plugin; parity is tested. The
 // gateway reports a pool's safe intersection, so never infer levels by ID.
 const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const MANAGED_VARIANTS = [...REASONING_EFFORTS, "thinking"];
 
 function reasoningOptions(entry: CompatModel): Pick<OpenCodeModel, "options" | "variants"> {
   const metadata = entry.opper?.kind === "dynamic_route" ? undefined : entry.opper?.reasoning;
-  const supported = metadata?.supported ?? [];
-  const variants = Object.fromEntries(REASONING_EFFORTS.map((effort) => [effort,
-    supported.includes(effort) ? { reasoningEffort: effort } : { disabled: true },
+  const supported = Array.isArray(metadata?.supported) ? metadata.supported : [];
+  const variants = Object.fromEntries(MANAGED_VARIANTS.map((effort) => [effort,
+    effort !== "thinking" && supported.includes(effort) ? { reasoningEffort: effort } : { disabled: true, opperManagedDisabled: true },
   ]));
   // OpenCode merges its guessed variants with ours. Explicitly disable every
   // unsupported canonical level, even when a model can emit reasoning.
@@ -86,19 +87,41 @@ export function preserveOpenCodeVariants(models: Record<string, unknown>, previo
   const oldModels = record(previous);
   return Object.fromEntries(Object.entries(models).map(([id, value]) => {
     const model = record(value);
-    const old = record(record(oldModels?.[id])?.variants);
-    if (!model || !old) return [id, value];
+    const oldModel = record(oldModels?.[id]);
+    if (!model || !oldModel) return [id, value];
     const generated = record(model.variants) ?? {};
+    const old = record(oldModel.variants) ?? {};
+    const supported = Object.values(generated).flatMap((variant) => {
+      const v = record(variant);
+      return typeof v?.reasoningEffort === "string" && !v.disabled ? [v.reasoningEffort] : [];
+    });
     const variants = { ...old, ...generated };
-    for (const [name, variant] of Object.entries(generated)) {
-      const fresh = record(variant);
+    for (const name of Object.keys(variants)) {
+      const fresh = record(generated[name]);
       const saved = record(old[name]);
-      if (!fresh || !saved || fresh.disabled) continue;
-      // A stale managed disabled marker must not hide a newly supported level.
-      const { disabled: _disabled, ...settings } = saved;
-      variants[name] = { ...settings, ...fresh };
+      if (!saved) continue;
+      const { opperManagedDisabled, ...settings } = saved;
+      if (opperManagedDisabled === true) delete settings.disabled;
+      const invalid = fresh ? Boolean(fresh.disabled) : (settings.reasoningEffort !== undefined &&
+        !supported.includes(settings.reasoningEffort as string));
+      if (invalid) {
+        variants[name] = { ...settings, ...fresh, disabled: true,
+          ...(saved.disabled === true && opperManagedDisabled !== true ? {} : { opperManagedDisabled: true }) };
+        if (saved.disabled === true && opperManagedDisabled !== true) delete (variants[name] as Record<string, unknown>).opperManagedDisabled;
+      } else {
+        variants[name] = { ...settings, ...fresh };
+      }
     }
-    return [id, { ...model, variants }];
+    const savedOptions = record(oldModel.options) ?? {};
+    const options = { ...savedOptions, ...record(model.options) };
+    if (typeof savedOptions.reasoningEffort === "string" && supported.includes(savedOptions.reasoningEffort)) {
+      options.reasoningEffort = savedOptions.reasoningEffort;
+    }
+    if (savedOptions.reasoningEffort !== undefined && !supported.includes(savedOptions.reasoningEffort as string)) {
+      delete options.reasoningEffort;
+      Object.assign(options, record(model.options));
+    }
+    return [id, { ...model, ...(Object.keys(options).length ? { options } : {}), variants }];
   }));
 }
 
