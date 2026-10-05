@@ -23,6 +23,20 @@ import type {
 // theirs and is loaded normally; we never run pi against an isolated home.
 const PROVIDER_KEY = "opper";
 
+function apiKeyEnvReference(version?: string): string {
+  // The legacy @mariozechner release resolves a bare name via process.env.
+  // Current Pi requires explicit interpolation and treats bare names literally.
+  const match = version?.match(/^(\d+)\.(\d+)\.(\d+)/);
+  const legacy = match && Number(match[1]) === 0 && Number(match[2]) <= 76;
+  return legacy ? "OPPER_API_KEY" : "${OPPER_API_KEY}";
+}
+
+function legacyMaxLevel(version?: string): boolean {
+  const match = version?.match(/^(\d+)\.(\d+)\.(\d+)/);
+  return Boolean(match && Number(match[1]) === 0 &&
+    (Number(match[2]) < 80 || (Number(match[2]) === 80 && Number(match[3]) < 6)));
+}
+
 function piAgentDir(): string {
   return join(homedir(), ".pi", "agent");
 }
@@ -89,7 +103,7 @@ async function detect(): Promise<DetectResult> {
 
   const versionResult = run("pi", ["--version"]);
   const versionMatch = versionResult.code === 0
-    ? versionResult.stdout.match(/v?(\d+\.\d+\.\d+(?:[-+][\w.]+)?)/)
+    ? `${versionResult.stdout}\n${versionResult.stderr ?? ""}`.match(/v?(\d+\.\d+\.\d+(?:[-+][\w.]+)?)/)
     : null;
   const parsed = versionMatch ? versionMatch[1] : undefined;
 
@@ -117,8 +131,10 @@ async function configure(opts: ConfigureOptions): Promise<void> {
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  const catalog = await fetchPiModels({apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, projectUuid: opts.projectUuid});
-  await setOpperProvider(opts.apiKey, DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid, catalog);
+  const version = (await detect()).version;
+  const catalog = await fetchPiModels({apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, projectUuid: opts.projectUuid}, {legacyMaxLevel:legacyMaxLevel(version)});
+  await setOpperProvider(apiKeyEnvReference(version), DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid, catalog);
+  process.stdout.write("Plain `pi` requires OPPER_API_KEY in its environment; `opper launch pi` supplies your selected Opper key automatically.\n");
 }
 
 async function unconfigure(): Promise<void> {
@@ -174,7 +190,8 @@ async function installExtension(): Promise<() => Promise<void>> {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  const catalog = await fetchPiModels({apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl, projectUuid: routing.projectUuid});
+  const version = (await detect()).version;
+  const catalog = await fetchPiModels({apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl, projectUuid: routing.projectUuid}, {legacyMaxLevel:legacyMaxLevel(version)});
   const model = catalog.some(m => m.id === routing.model) ? routing.model : catalog[0]!.id;
   if (routing.modelOverride && !catalog.some(m => m.id === routing.modelOverride)) {
     throw new OpperError("API_ERROR", "The selected model is not in this credential's allowed Pi catalog.");
@@ -186,7 +203,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     // Write the api key as the `OPPER_API_KEY` env reference, not the literal —
     // pi resolves it from the env we export below, and the extension re-registers
     // from the same env, so the real key never lands in the user's config on disk.
-    await setOpperProvider("OPPER_API_KEY", model, routing.baseUrl, routing.projectUuid, catalog);
+    await setOpperProvider(apiKeyEnvReference(version), model, routing.baseUrl, routing.projectUuid, catalog);
     const restoreExtension = await installExtension();
     try {
       // pi's CLI requires *both* --provider and --model to resolve a non-default

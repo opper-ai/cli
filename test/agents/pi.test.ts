@@ -76,9 +76,52 @@ describe("pi adapter", () => {
     await pi.configure({ apiKey: "op_live_test" });
     const models = readModels(sandbox);
     expect(models.providers?.opper?.baseUrl).toBe("https://api.opper.ai/v3/compat");
-    expect(models.providers?.opper?.apiKey).toBe("op_live_test");
+    expect(models.providers?.opper?.apiKey).toBe("${OPPER_API_KEY}");
+    expect(JSON.stringify(models)).not.toContain("op_live_test");
     // No static trace headers — those are added per session by the extension.
     expect(models.providers?.opper?.headers).toBeUndefined();
+  });
+
+  it("uses legacy env references for the legacy Pi release installed by the adapter", async () => {
+    runMock.mockImplementation((_cmd: string, args: string[]) => ({code:0,stdout:args[0] === "--version" ? "0.73.1" : ""}));
+    await pi.configure({apiKey:"synthetic-legacy"});
+    expect(readModels(sandbox).providers?.opper?.apiKey).toBe("OPPER_API_KEY");
+    expect(readFileSync(modelsPath(sandbox), "utf8")).not.toContain("synthetic-legacy");
+  });
+
+  it.each([["0.76.0", "OPPER_API_KEY"], ["0.77.0", "${OPPER_API_KEY}"], ["1.0.3", "${OPPER_API_KEY}"]])("resolves environment syntax for Pi %s", async (version, reference) => {
+    runMock.mockImplementation((_cmd: string, args: string[]) => ({code:0,stdout:args[0] === "--version" ? version : ""}));
+    await pi.configure({apiKey:"synthetic"});
+    expect(readModels(sandbox).providers?.opper?.apiKey).toBe(reference);
+  });
+
+  it("uses explicit env interpolation when the Pi version is unknown", async () => {
+    whichMock.mockResolvedValue(undefined);
+    await pi.configure({apiKey:"synthetic"});
+    expect(readModels(sandbox).providers?.opper?.apiKey).toBe("${OPPER_API_KEY}");
+  });
+
+  it("detects legacy Pi versions written to stderr", async () => {
+    runMock.mockImplementation((_cmd: string, args: string[]) => ({code:0,stdout:"",stderr:args[0] === "--version" ? "0.73.1\n" : ""}));
+    expect(await pi.detect()).toMatchObject({version:"0.73.1"});
+    await pi.configure({apiKey:"synthetic"});
+    expect(readModels(sandbox).providers?.opper?.apiKey).toBe("OPPER_API_KEY");
+  });
+
+  it.each([["0.80.5", "max"], ["0.80.6", null]])("maps maximum effort for Pi %s", async (version, xhigh) => {
+    runMock.mockImplementation((_cmd: string, args: string[]) => ({code:0,stdout:args[0] === "--version" ? version : ""}));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({data:[{id:"fixture",context_length:128000,opper:{capabilities:["tools"],max_output_tokens:4096,reasoning:{supported:["max"]}}}]})));
+    await pi.configure({apiKey:"synthetic"});
+    const provider = readModels(sandbox).providers?.opper as any;
+    expect(provider.models[0].thinkingLevelMap.xhigh).toBe(xhigh);
+  });
+
+  it("preserves existing provider when configure catalog authorization fails", async () => {
+    await pi.configure({apiKey:"synthetic"});
+    const before = readFileSync(modelsPath(sandbox), "utf8");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({error:{message:"Denied"}},{status:403})));
+    await expect(pi.configure({apiKey:"synthetic-invalid"})).rejects.toThrow();
+    expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
   });
 
   it("spawn writes the session URL AND ships the extension mid-launch", async () => {
@@ -99,7 +142,7 @@ describe("pi adapter", () => {
     expect((mid?.models.providers?.opper as any)?.authHeader).toBe(true);
     expect((mid?.models.providers?.opper as any)?.models.map((m: any) => m.id)).toEqual(["claude-opus-4-7", "dynamic/coding", "provider/new-model"]);
     // The real key is never written to disk — only the env reference is.
-    expect(mid?.models.providers?.opper?.apiKey).toBe("OPPER_API_KEY");
+    expect(mid?.models.providers?.opper?.apiKey).toBe("${OPPER_API_KEY}");
     expect(JSON.stringify(mid?.models)).not.toContain("op_live_run");
     expect(mid?.extExists).toBe(true);
     expect(mid?.ext).toContain("session_start");
@@ -170,7 +213,7 @@ describe("pi adapter", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({data: []})));
     await expect(pi.spawn!([], ROUTING)).rejects.toThrow(/No allowed/);
     expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
-    expect(runMock).not.toHaveBeenCalled();
+    expect(runMock.mock.calls.every((call) => call[1]?.[0] === "--version")).toBe(true);
   });
 
   it("spawn propagates non-zero exit codes", async () => {

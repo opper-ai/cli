@@ -37,6 +37,7 @@ export interface CompatModel {
     type?: string;
     capabilities?: string[];
     max_output_tokens?: number;
+    reasoning?: { supported: string[]; default?: string };
   };
 }
 
