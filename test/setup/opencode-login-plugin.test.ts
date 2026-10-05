@@ -110,6 +110,28 @@ describe("OpenCode login plugin", () => {
     expect(config.provider.opper.models.revoked).toBeUndefined();
   });
 
+  it("strips saved model and variant credentials/routing while keeping benign headers and options", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [{ ...catalog(["pool"]).data[0], opper: { reasoning: { supported: ["high"] } } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: {
+      AUTHORIZATION: "Bearer stale", "x-opper-project": "stale", "X-Team": "keep",
+    } };
+    const config = await run({ provider: { opper: { models: { pool: {
+      options: { ...stale, textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "high", settings: stale } },
+    } } } } });
+    const { toOpenCodeModels, preserveOpenCodeVariants } = await import("../../src/setup/opencode-models.js");
+    const expected = preserveOpenCodeVariants(toOpenCodeModels(data as any), { pool: {
+      options: { ...stale, textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "high", settings: stale } },
+    } });
+    expect(config.provider.opper.models).toEqual(expected);
+    expect(JSON.stringify(config)).not.toContain("stale");
+    expect(config.provider.opper.models.pool.options).toEqual({ textVerbosity: "low", headers: { "X-Team": "keep" } });
+    expect(config.provider.opper.models.pool.variants.personal.settings).toEqual({ headers: { "X-Team": "keep" } });
+  });
+
   it("reads the selected CLI key and injects Opper only in memory", async () => {
     await slot({ apiKey: "synthetic-key", expiresAt: "2030-01-01T00:00:00Z" });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["anthropic/claude-sonnet-5"]) });

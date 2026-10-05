@@ -213,6 +213,18 @@ describe("catalog effort refresh policy", () => {
   const fresh = () => toOpenCodeModels([model({ id: "allowed", opper: {
     kind: "pool", reasoning: { supported: ["high", "max"], default: "high" },
   } })]);
+  it("drops saved credential and endpoint overrides while preserving compatible options and variant headers", () => {
+    const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: {
+      aUtHoRiZaTiOn: "Bearer stale", "x-OPPER-project": "stale", "X-Team": "keep",
+    } };
+    const mapped = preserveOpenCodeVariants(fresh(), { allowed: {
+      options: { ...stale, reasoningEffort: "max", textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "max", temperature: 0 } },
+    } });
+    expect(mapped.allowed).toMatchObject({ options: { reasoningEffort: "max", textVerbosity: "low", headers: { "X-Team": "keep" } },
+      variants: { personal: { reasoningEffort: "max", temperature: 0, headers: { "X-Team": "keep" } } } });
+    expect(JSON.stringify(mapped)).not.toContain("stale");
+  });
   it("suppresses inferred thinking without inventing a request default", () => {
     const mapped = toOpenCodeModels([model({ id: "fireworks/minimax-m3" }), model({ id: "openai/gpt-5.4" })]);
     expect(mapped["fireworks/minimax-m3"]!.variants!.thinking).toMatchObject({ disabled: true });

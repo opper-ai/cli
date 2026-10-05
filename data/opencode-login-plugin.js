@@ -51,6 +51,19 @@ function record(value) {
     ? value : undefined;
 }
 
+/** Selected provider credentials/routing must take precedence over saved settings. */
+function compatibleOpenCodeSettings(value) {
+  return Object.fromEntries(Object.entries(record(value) ?? {}).flatMap(([name, setting]) => {
+    if (["apikey", "baseurl"].includes(name.toLowerCase())) return [];
+    if (name === "headers") {
+      const headers = Object.fromEntries(Object.entries(record(setting) ?? {}).filter(([header]) =>
+        !["authorization", "x-opper-project"].includes(header.toLowerCase())));
+      return Object.keys(headers).length ? [[name, headers]] : [];
+    }
+    return [[name, ["options", "settings"].includes(name) ? compatibleOpenCodeSettings(setting) : setting]];
+  }));
+}
+
 /** Refresh managed levels without erasing personal variant settings. */
 function preserveOpenCodeVariants(models, previous) {
   const oldModels = record(previous);
@@ -67,8 +80,8 @@ function preserveOpenCodeVariants(models, previous) {
     const variants = { ...old, ...generated };
     for (const name of Object.keys(variants)) {
       const fresh = record(generated[name]);
-      const saved = record(old[name]);
-      if (!saved) continue;
+      if (!record(old[name])) continue;
+      const saved = compatibleOpenCodeSettings(old[name]);
       const { opperManagedDisabled, ...settings } = saved;
       if (opperManagedDisabled === true) delete settings.disabled;
       const invalid = fresh ? Boolean(fresh.disabled) : (settings.reasoningEffort !== undefined &&
@@ -81,7 +94,7 @@ function preserveOpenCodeVariants(models, previous) {
         variants[name] = { ...settings, ...fresh };
       }
     }
-    const savedOptions = record(oldModel.options) ?? {};
+    const savedOptions = compatibleOpenCodeSettings(oldModel.options);
     const options = { ...savedOptions, ...record(model.options) };
     if (typeof savedOptions.reasoningEffort === "string" && supported.includes(savedOptions.reasoningEffort)) {
       options.reasoningEffort = savedOptions.reasoningEffort;

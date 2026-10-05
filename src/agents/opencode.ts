@@ -10,7 +10,7 @@ import { npmInstallGlobal } from "./npm-install.js";
 import { openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
-import { resolveOpenCodeModels, preserveOpenCodeVariants, type OpenCodeModel } from "../setup/opencode-models.js";
+import { resolveOpenCodeModels, preserveOpenCodeVariants, compatibleOpenCodeSettings, type OpenCodeModel } from "../setup/opencode-models.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
 import { withJsonKeys } from "../util/config-snapshot.js";
 import { OpperError } from "../errors.js";
@@ -171,7 +171,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   const refreshed = inlineModels ? preserveOpenCodeVariants(models, inlineModels) : {};
   const inline = inlineModels ? Object.fromEntries(Object.keys(inlineModels).filter((id) => id in models).map((id) => {
     const policy = object(refreshed[id]);
-    return [id, { ...object(inlineModels[id]), variants: policy.variants, options: policy.options ?? {} }];
+    return [id, { ...compatibleOpenCodeSettings(object(inlineModels[id])), variants: policy.variants, options: policy.options ?? {} }];
   })) : undefined;
   return JSON.stringify({
     ...config,
@@ -315,8 +315,13 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
     [entry?.headers, record(entry?.options)?.headers, record(entry?.settings)?.headers];
   const providers = [record(config.provider)?.opper, record(config.providers)?.opper].map(record);
   const providerHeaders = providers.flatMap(headerSets);
-  const modelHeaders = providers.flatMap((opper) =>
-    Object.keys(models).flatMap((id) => headerSets(record(record(opper?.models)?.[id]))));
+  const modelSettings = providers.flatMap((opper) =>
+    Object.keys(models).flatMap((id) => {
+      const entry = record(record(opper?.models)?.[id]);
+      return [entry, ...Object.values(record(entry?.variants) ?? {}).map(record)
+        .filter((variant) => variant?.disabled !== true)];
+    }));
+  const modelHeaders = modelSettings.flatMap(headerSets);
   const hasAuthorization = (headers: unknown): boolean =>
     Object.keys(record(headers) ?? {}).some((name) => name.toLowerCase() === "authorization");
   if (providerHeaders.some(hasAuthorization) || modelHeaders.some(hasAuthorization)) {
@@ -338,24 +343,34 @@ function checkEffectiveAuthorization(models: Record<string, OpenCodeModel>, env:
   if (providerHeaders.some((headers) => conflictingProject(headers, true)) || modelHeaders.some((headers) => conflictingProject(headers))) {
     throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's effective Opper configuration contains a project header that overrides the selected target.", "Remove X-Opper-Project headers from Opper provider and model settings, then choose a target with --project-uuid.");
   }
+  if (modelSettings.some((entry) => [entry, record(entry?.options), record(entry?.settings)].some((setting) =>
+    Object.keys(setting ?? {}).some((name) => ["apikey", "baseurl"].includes(name.toLowerCase()))))) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's effective Opper model settings contain credential or endpoint overrides.",
+      "Remove apiKey and baseURL from Opper model and variant settings, then retry with the selected key and route.");
+  }
   return config;
 }
 
 function checkEffectiveEfforts(models: Record<string, OpenCodeModel>, config: Record<string, unknown>): void {
-  const provider = isRecord(config.provider) && isRecord(config.provider.opper) ? config.provider.opper : undefined;
-  const inherited = isRecord(provider?.models) ? provider.models : {};
-  for (const [id, model] of Object.entries(models)) {
-    if (!model.variants || !isRecord(inherited[id])) continue;
-    const supported = new Set(Object.values(model.variants).flatMap((variant) =>
-      !variant.disabled && typeof variant.reasoningEffort === "string" ? [variant.reasoningEffort] : []));
-    const entry = inherited[id];
-    const settings = [entry.options, ...Object.values(isRecord(entry.variants) ? entry.variants : {})
-      .filter((variant) => !isRecord(variant) || variant.disabled !== true)];
-    if (settings.some((setting) => isRecord(setting) &&
-      ((setting.reasoningEffort !== undefined && !supported.has(String(setting.reasoningEffort))) ||
-        setting.thinking !== undefined))) {
-      throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's inherited model settings contain an unsupported reasoning effort.",
-        "Refresh the project's Opper configuration or remove unsupported effort settings, then retry.");
+  const providers = [config.provider, config.providers].flatMap((group) =>
+    isRecord(group) && isRecord(group.opper) ? [group.opper] : []);
+  const optionSets = (value: unknown): Record<string, unknown>[] => isRecord(value)
+    ? [value, ...(isRecord(value.options) ? [value.options] : []), ...(isRecord(value.settings) ? [value.settings] : [])] : [];
+  for (const provider of providers) {
+    const inherited = isRecord(provider.models) ? provider.models : {};
+    for (const [id, model] of Object.entries(models)) {
+      if (!model.variants || !isRecord(inherited[id])) continue;
+      const supported = new Set(Object.values(model.variants).flatMap((variant) =>
+        !variant.disabled && typeof variant.reasoningEffort === "string" ? [variant.reasoningEffort] : []));
+      const entry = inherited[id];
+      const settings = [...optionSets(entry), ...Object.values(isRecord(entry.variants) ? entry.variants : {})
+        .filter((variant) => !isRecord(variant) || variant.disabled !== true).flatMap(optionSets)];
+      if (settings.some((setting) =>
+        (setting.reasoningEffort !== undefined && !supported.has(String(setting.reasoningEffort))) ||
+          setting.thinking !== undefined)) {
+        throw new OpperError("AGENT_CONFIG_CONFLICT", "OpenCode's inherited model settings contain an unsupported reasoning effort.",
+          "Refresh the project's Opper configuration or remove unsupported effort settings, then retry.");
+      }
     }
   }
 }
