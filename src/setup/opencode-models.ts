@@ -46,6 +46,8 @@ export interface OpenCodeModel {
   name: string;
   tool_call: boolean;
   reasoning: boolean;
+  options?: { reasoningEffort: string };
+  variants?: Record<string, Record<string, unknown>>;
   attachment: boolean;
   cost: {
     input: number;
@@ -55,6 +57,49 @@ export interface OpenCodeModel {
   };
   limit: { context: number; output: number };
   modalities?: { input: string[]; output: string[] };
+}
+
+// Keep in sync with the standalone login plugin; parity is tested. The
+// gateway reports a pool's safe intersection, so never infer levels by ID.
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function reasoningOptions(entry: CompatModel): Pick<OpenCodeModel, "options" | "variants"> {
+  const metadata = entry.opper?.kind === "dynamic_route" ? undefined : entry.opper?.reasoning;
+  const supported = metadata?.supported ?? [];
+  const variants = Object.fromEntries(REASONING_EFFORTS.map((effort) => [effort,
+    supported.includes(effort) ? { reasoningEffort: effort } : { disabled: true },
+  ]));
+  // OpenCode merges its guessed variants with ours. Explicitly disable every
+  // unsupported canonical level, even when a model can emit reasoning.
+  const defaultEffort = metadata?.default;
+  return { variants, ...(defaultEffort && REASONING_EFFORTS.includes(defaultEffort) && supported.includes(defaultEffort)
+    ? { options: { reasoningEffort: defaultEffort } } : {}) };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+/** Refresh managed levels without erasing personal variant settings. */
+export function preserveOpenCodeVariants(models: Record<string, unknown>, previous: unknown): Record<string, unknown> {
+  const oldModels = record(previous);
+  return Object.fromEntries(Object.entries(models).map(([id, value]) => {
+    const model = record(value);
+    const old = record(record(oldModels?.[id])?.variants);
+    if (!model || !old) return [id, value];
+    const generated = record(model.variants) ?? {};
+    const variants = { ...old, ...generated };
+    for (const [name, variant] of Object.entries(generated)) {
+      const fresh = record(variant);
+      const saved = record(old[name]);
+      if (!fresh || !saved || fresh.disabled) continue;
+      // A stale managed disabled marker must not hide a newly supported level.
+      const { disabled: _disabled, ...settings } = saved;
+      variants[name] = { ...settings, ...fresh };
+    }
+    return [id, { ...model, variants }];
+  }));
 }
 
 /**
@@ -147,6 +192,7 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
       // flag rather than probing — a wrong `true` fails mid-session.
       tool_call: caps.includes("tools"),
       reasoning: caps.includes("reasoning") || caps.includes("thinking"),
+      ...reasoningOptions(e),
       attachment: caps.includes("vision") || caps.includes("pdf"),
       cost: {
         input,
@@ -180,6 +226,7 @@ function routeEntry(e: CompatModel): OpenCodeModel {
     name: pickerDisplayName(e.id),
     tool_call: true,
     reasoning: false,
+    ...reasoningOptions(e),
     attachment: false,
     cost: { input: 0, output: 0 },
     // The gateway DOES report bounds for a route whose candidates it can all

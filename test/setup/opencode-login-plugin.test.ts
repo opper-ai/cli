@@ -73,6 +73,28 @@ afterEach(async () => {
 });
 
 describe("OpenCode login plugin", () => {
+  it("matches the CLI effort mapper and preserves custom variants on catalog refresh", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [
+      { ...catalog(["gpt-6.1-sol"]).data[0], opper: { kind: "pool", capabilities: ["reasoning", "tools"], reasoning: { supported: ["low", "medium", "high", "xhigh", "max"], default: "medium" } } },
+      { ...catalog(["mixed-pool"]).data[0], opper: { kind: "pool", reasoning: { supported: ["high"], default: "max" } } },
+      { ...catalog(["missing-metadata"]).data[0], opper: { capabilities: ["reasoning"] } },
+      { id: "dynamic/unknown", opper: { kind: "dynamic_route", reasoning: { supported: ["max"], default: "max" } } },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const { toOpenCodeModels } = await import("../../src/setup/opencode-models.js");
+    expect((await run({})).provider.opper.models).toEqual(toOpenCodeModels(data as any));
+    const config = await run({ provider: { opper: { models: {
+      "gpt-6.1-sol": { variants: { careful: { reasoningEffort: "high", temperature: 0 }, high: { textVerbosity: "low" } } },
+      "mixed-pool": { variants: { max: { reasoningEffort: "max" } } },
+      revoked: { variants: { personal: { temperature: 0 } } },
+    } } } });
+    expect(config.provider.opper.models["gpt-6.1-sol"].variants.careful).toEqual({ reasoningEffort: "high", temperature: 0 });
+    expect(config.provider.opper.models["gpt-6.1-sol"].variants.high).toEqual({ reasoningEffort: "high", textVerbosity: "low" });
+    expect(config.provider.opper.models["mixed-pool"].variants.max).toEqual({ disabled: true });
+    expect(config.provider.opper.models.revoked).toBeUndefined();
+  });
+
   it("reads the selected CLI key and injects Opper only in memory", async () => {
     await slot({ apiKey: "synthetic-key", expiresAt: "2030-01-01T00:00:00Z" });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["anthropic/claude-sonnet-5"]) });

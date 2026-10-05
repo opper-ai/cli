@@ -30,6 +30,47 @@ function price(value) {
   return Number.isFinite(number) ? Math.round(number * 1_000_000 * 1e6) / 1e6 : undefined;
 }
 
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function reasoningOptions(entry) {
+  const metadata = entry.opper?.kind === "dynamic_route" ? undefined : entry.opper?.reasoning;
+  const supported = metadata?.supported ?? [];
+  const variants = Object.fromEntries(REASONING_EFFORTS.map((effort) => [effort,
+    supported.includes(effort) ? { reasoningEffort: effort } : { disabled: true },
+  ]));
+  // OpenCode merges its guessed variants with ours. Explicitly disable every
+  // unsupported canonical level, even when a model can emit reasoning.
+  const defaultEffort = metadata?.default;
+  return { variants, ...(defaultEffort && REASONING_EFFORTS.includes(defaultEffort) && supported.includes(defaultEffort)
+    ? { options: { reasoningEffort: defaultEffort } } : {}) };
+}
+
+function record(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value : undefined;
+}
+
+/** Refresh managed levels without erasing personal variant settings. */
+function preserveOpenCodeVariants(models, previous) {
+  const oldModels = record(previous);
+  return Object.fromEntries(Object.entries(models).map(([id, value]) => {
+    const model = record(value);
+    const old = record(record(oldModels?.[id])?.variants);
+    if (!model || !old) return [id, value];
+    const generated = record(model.variants) ?? {};
+    const variants = { ...old, ...generated };
+    for (const [name, variant] of Object.entries(generated)) {
+      const fresh = record(variant);
+      const saved = record(old[name]);
+      if (!fresh || !saved || fresh.disabled) continue;
+      // A stale managed disabled marker must not hide a newly supported level.
+      const { disabled: _disabled, ...settings } = saved;
+      variants[name] = { ...settings, ...fresh };
+    }
+    return [id, { ...model, variants }];
+  }));
+}
+
 function modelsFromCatalog(entries) {
   const models = Object.create(null);
   for (const entry of entries) {
@@ -41,7 +82,7 @@ function modelsFromCatalog(entries) {
     const output = entry.opper?.max_output_tokens || FALLBACK_OUTPUT;
     if (route) {
       models[entry.id] = {
-        name: label(entry.id), tool_call: true, reasoning: false, attachment: false,
+        name: label(entry.id), tool_call: true, reasoning: false, ...reasoningOptions(entry), attachment: false,
         cost: { input: 0, output: 0 }, limit: { context, output },
         modalities: { input: ["text"], output: ["text"] },
       };
@@ -60,6 +101,7 @@ function modelsFromCatalog(entries) {
       name: label(entry.id),
       tool_call: caps.includes("tools"),
       reasoning: caps.includes("reasoning") || caps.includes("thinking"),
+      ...reasoningOptions(entry),
       attachment: caps.includes("vision") || caps.includes("pdf"),
       cost: {
         input, output: completion,
@@ -142,7 +184,7 @@ export const OpperLoginPlugin = async () => ({
       name: "Opper",
       options: { baseURL: `${host}/v3/compat`, apiKey: current.apiKey,
         ...(current.projectUuid ? { headers: { "X-Opper-Project": current.projectUuid } } : {}) },
-      models,
+      models: preserveOpenCodeVariants(models, config.provider.opper?.models),
       whitelist: Object.keys(models),
     };
     const selected = typeof config.model === "string" && config.model.startsWith("opper/")

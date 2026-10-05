@@ -22,6 +22,44 @@ function model(over: Partial<CompatModel> = {}): CompatModel {
 }
 
 describe("toOpenCodeModels", () => {
+  it("maps the complete advertised effort set and validated default", () => {
+    const m = toOpenCodeModels([model({ id: "gpt-6.1-sol", opper: {
+      kind: "pool", type: "llm", capabilities: ["tools", "reasoning"],
+      reasoning: { supported: ["low", "medium", "high", "xhigh", "max"], default: "medium" },
+    } })])["gpt-6.1-sol"]!;
+    expect(m.options).toEqual({ reasoningEffort: "medium" });
+    expect(m.variants).toEqual({
+      none: { disabled: true }, minimal: { disabled: true },
+      low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" }, xhigh: { reasoningEffort: "xhigh" }, max: { reasoningEffort: "max" },
+    });
+  });
+
+  it.each([undefined, { supported: [] }, { supported: ["invented"], default: "invented" }])(
+    "does not infer selectable effort from capabilities without known metadata: %j", (reasoning) => {
+      const m = toOpenCodeModels([model({ opper: { capabilities: ["reasoning"], reasoning } })])["anthropic/claude-sonnet-5"]!;
+      expect(m.options).toBeUndefined();
+      expect(Object.values(m.variants!)).toEqual(Array(7).fill({ disabled: true }));
+    },
+  );
+
+  it("uses only a pool's advertised intersection and ignores an invalid default", () => {
+    const m = toOpenCodeModels([model({ id: "mixed-pool", opper: {
+      kind: "pool", reasoning: { supported: ["high"], default: "max" },
+    } })])["mixed-pool"]!;
+    expect(m.variants!.high).toEqual({ reasoningEffort: "high" });
+    expect(m.variants!.max).toEqual({ disabled: true });
+    expect(m.options).toBeUndefined();
+  });
+
+  it("does not assign efforts to dynamic routes even if metadata is present", () => {
+    const m = toOpenCodeModels([{ id: "dynamic/unknown", opper: {
+      kind: "dynamic_route", reasoning: { supported: ["max"], default: "max" },
+    } }])["dynamic/unknown"]!;
+    expect(m.options).toBeUndefined();
+    expect(Object.values(m.variants!)).toEqual(Array(7).fill({ disabled: true }));
+  });
+
   it("converts per-token prices to per-million", () => {
     const m = toOpenCodeModels([model()])["anthropic/claude-sonnet-5"]!;
     expect(m.cost.input).toBe(2);

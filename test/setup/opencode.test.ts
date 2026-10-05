@@ -25,6 +25,22 @@ describe("configureOpenCode", () => {
     else process.env.OPPER_EDITOR_HOME = prev;
   });
 
+  it("refreshes catalog efforts while preserving custom variants for allowed models", async () => {
+    await configureOpenCode({ location: "global", models: {
+      allowed: { variants: { careful: { reasoningEffort: "high", temperature: 0 }, high: { reasoningEffort: "high", textVerbosity: "low" }, max: { reasoningEffort: "max" } } },
+      revoked: { variants: { personal: { temperature: 0 } } },
+    } });
+    const result = await configureOpenCode({ location: "global", overwrite: true, models: {
+      allowed: { variants: { high: { reasoningEffort: "high" }, max: { disabled: true } }, options: { reasoningEffort: "high" } },
+    } });
+    const config = JSON.parse(readFileSync(result.path, "utf8"));
+    expect(config.provider.opper.models.allowed.variants).toEqual({
+      careful: { reasoningEffort: "high", temperature: 0 },
+      high: { reasoningEffort: "high", textVerbosity: "low" }, max: { disabled: true },
+    });
+    expect(config.provider.opper.models.revoked).toBeUndefined();
+  });
+
   it("writes the template to the global location and creates the directory", async () => {
     const result = await configureOpenCode({ location: "global" });
     const expected = opencodeConfigPath("global");
