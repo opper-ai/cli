@@ -9,9 +9,9 @@ vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const spawnSyncMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
+vi.mock("../../src/util/spawn.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/util/spawn.js")>(
+    "../../src/util/spawn.js",
   );
   return { ...actual, spawnSync: spawnSyncMock };
 });

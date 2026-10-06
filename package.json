@@ -20,6 +20,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:smoke": "node test/integration/package-smoke.mjs",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
   },
@@ -29,6 +30,7 @@
     "@opperai/agents": "^0.8.0",
     "@opperai/login": "^0.4.1",
     "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6",
     "jsonc-parser": "^3.3.1",
     "kleur": "^4.1.5",
     "proper-lockfile": "^4.1.2",
@@ -38,6 +40,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^20.11.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/ws": "^8.18.1",

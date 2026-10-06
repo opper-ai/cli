@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../util/spawn.js";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";

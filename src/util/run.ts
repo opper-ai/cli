@@ -1,4 +1,5 @@
-import { spawnSync, type SpawnSyncOptions } from "node:child_process";
+import type { SpawnSyncOptions } from "node:child_process";
+import { spawnSync } from "./spawn.js";
 
 export interface RunResult {
   code: number;
@@ -7,7 +8,8 @@ export interface RunResult {
 }
 
 /**
- * Runs a command with a fixed argv, no shell. Returns a structured result so
+ * Runs a command with a fixed argv (Windows shims are escaped by cross-spawn).
+ * Returns a structured result so
  * callers decide what to do with non-zero exits. Use `inherit: true` when you
  * want the child's stdout/stderr to go to the CLI's own streams (for
  * interactive installers).
