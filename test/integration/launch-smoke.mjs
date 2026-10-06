@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { delimiter, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Exercise the installed CLI and real npm-generated agent shims. The child
 // programs and model catalog are fixtures; this makes no inference calls.
@@ -12,6 +13,7 @@ export async function runLaunchSmoke({ sandbox, env, cliPath, npmCliPath }) {
   const prefix = join(sandbox, "agent prefix");
   const cwd = join(sandbox, "project with spaces");
   const record = join(sandbox, "launch.json");
+  const injectionMarker = join(sandbox, "injected.txt");
   const key = "synthetic-windows-launch-key";
   const project = "11111111-1111-4111-8111-111111111111";
   const model = "fixture-model";
@@ -19,6 +21,13 @@ export async function runLaunchSmoke({ sandbox, env, cliPath, npmCliPath }) {
   const bin = windows ? prefix : join(prefix, "bin");
   mkdirSync(fixture, { recursive: true });
   mkdirSync(cwd, { recursive: true });
+  if (windows) {
+    // A checkout must not supply the executable that receives the Opper key,
+    // even when a PATH entry explicitly points at the working directory.
+    for (const name of ["claude", "codex", "opencode", "pi", "npm", "npx"]) {
+      writeFileSync(join(cwd, `${name}.cmd`), '@echo off\r\necho attacker > "%OPPER_INJECTION_SENTINEL%"\r\nexit /b 0\r\n');
+    }
+  }
   const programs = Object.fromEntries(["claude", "codex", "opencode", "pi"].map((name) => [name, `${name}.cjs`]));
   writeFileSync(join(fixture, "package.json"), JSON.stringify({ name: "opper-launch-fixture", version: "1.0.0", bin: programs }));
   for (const [name, script] of Object.entries(programs)) {
@@ -45,9 +54,19 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
       child.stdin.end();
     });
   }
-  const installed = await run(process.execPath, [npmCliPath, "install", "--global", "--prefix", prefix,
-    "--cache", join(sandbox, "npm-cache"), "--ignore-scripts", "--no-audit", "--no-fund", fixture]);
+  // Exercise the same compiled installer used by `launch --install`, with a
+  // local package and task-owned global prefix. This also checks Node's own
+  // Windows npm launcher, whose format differs from ordinary npm bin shims.
+  const installer = pathToFileURL(join(dirname(cliPath), "agents", "npm-install.js")).href;
+  const installEnv = { ...env,
+    NPM_CONFIG_PREFIX: prefix, NPM_CONFIG_CACHE: join(sandbox, "npm-cache"),
+    NPM_CONFIG_IGNORE_SCRIPTS: "true", NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false",
+    OPPER_INJECTION_SENTINEL: injectionMarker,
+  };
+  const installed = await run(process.execPath, ["--input-type=module", "-e",
+    "const {npmInstallGlobal}=await import(process.argv[1]);await npmInstallGlobal(process.argv[2],'https://example.test');", installer, fixture], installEnv);
   assert.equal(installed.code, 0, installed.stderr);
+  assert.ok(!existsSync(injectionMarker), "The installer executed a checkout's npm shim.");
 
   let denied = false;
   const requests = [];
@@ -75,13 +94,15 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
     Object.assign(launchEnv, {
       // Only fixture agents, Node, and OS utilities may be discovered. A
       // developer's installed Claude must not mask the missing-agent case.
-      PATH: [bin, dirname(process.execPath), ...(windows
+      PATH: [...(windows ? [cwd] : []), bin, dirname(process.execPath), ...(windows
         ? [join(env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows", "System32")]
         : ["/usr/bin", "/bin"])].join(delimiter),
       OPPER_API_KEY: key, OPPER_BASE_URL: host, OPPER_LAUNCH_RECORD: record,
       OPPER_ARG_EXPANSION: "must remain literal",
+      OPPER_INJECTION_SENTINEL: injectionMarker,
     });
-    const args = ["--fixture", "a prompt with spaces", 'a "quote"', "a&b|c>file", "%OPPER_ARG_EXPANSION%", "caret^", "åäö", "C:\\path with spaces\\", ""];
+    const args = ["--fixture", "a prompt with spaces", 'a "quote"', "a&b|c>file", "%OPPER_ARG_EXPANSION%", "caret^", "åäö", "C:\\path with spaces\\", "first\nsecond", "first\r\nsecond",
+      `first\r\nnode -e "require('fs').writeFileSync(process.env.OPPER_INJECTION_SENTINEL,'executed')"`, "long prompt ".repeat(1000), ""];
     const opencodeConfig = join(env.OPPER_EDITOR_HOME, ".config", "opencode", "opencode.json");
     const piConfig = join(env.HOME, ".pi", "agent", "models.json");
     const original = JSON.stringify({ theme: "fixture", provider: { unrelated: { value: "preserve" } } });
@@ -100,6 +121,7 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
       assert.ok(existsSync(record), `${agent} never reached the child process.`);
       const observed = JSON.parse(readFileSync(record, "utf8"));
       assert.deepEqual(observed.args.slice(-args.length), args, `${agent} did not preserve user arguments.`);
+      assert.ok(!existsSync(injectionMarker), `${agent} interpreted a prompt as a shell command.`);
       assert.equal(observed.cwd, realpathSync(cwd));
       if (agent === "claude") {
         assert.ok(observed.env.ANTHROPIC_BASE_URL.startsWith(`${host}/v3/session/`));
@@ -148,6 +170,7 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
     assert.equal(missing.code, 3, missing.stderr);
     assert.match(missing.stderr, /not installed/);
     assert.ok(!existsSync(record));
+    assert.ok(!existsSync(injectionMarker), "The missing-agent case executed a checkout's shim.");
   } finally {
     server.closeAllConnections();
     await new Promise(resolve => server.close(resolve));

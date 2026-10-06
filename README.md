@@ -676,9 +676,13 @@ checking version, help, the agent list, and failure exit codes. Home directories
 Opper credentials, npm configuration, and caches are isolated; the temporary
 installation is removed afterward. The launch checks install local fixture
 programs for Claude Code, Codex, OpenCode, and Pi, then exercise the real CLI's
-argument forwarding, routing environment, working directory, exit codes,
-configuration restoration, and denied-catalog/missing-agent errors against a
-local HTTP fixture. They use synthetic credentials and make no inference calls.
+argument forwarding (including multiline and long prompts), routing environment,
+working directory, exit codes, configuration restoration, and denied-catalog/
+missing-agent errors against a local HTTP fixture. The same compiled installer
+used by `--install` installs the local fixture package into an isolated prefix.
+Windows checks also verify that executables in the current checkout cannot
+replace the installed agents. They use synthetic credentials and make no
+inference calls.
 Windows requires PowerShell 7 (`pwsh`) for this test, as provided by GitHub's
 Windows runners.
 

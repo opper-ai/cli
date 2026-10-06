@@ -2,12 +2,6 @@ import { run } from "../util/run.js";
 import { which } from "../util/which.js";
 import { OpperError } from "../errors.js";
 
-// On Windows, npm ships as a `.cmd` shim. Node refuses to execute .cmd
-// files via spawnSync without a shell — even when given the explicit
-// extension — so we have to route through cmd.exe (shell: true) on
-// Windows. POSIX still runs npm directly, no shell.
-const USE_SHELL = process.platform === "win32";
-
 /**
  * Run `npm install -g <pkg>` and surface a useful error if it fails.
  * Used by every adapter whose upstream agent ships as a global npm package.
@@ -26,7 +20,6 @@ export async function npmInstallGlobal(
 
   const result = run("npm", ["install", "-g", packageName], {
     inherit: true,
-    shell: USE_SHELL,
   });
   if (result.code === 0) return;
 

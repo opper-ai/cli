@@ -19,7 +19,11 @@ vi.mock("../../src/util/spawn.js", async () => {
   const actual = await vi.importActual<typeof import("../../src/util/spawn.js")>(
     "../../src/util/spawn.js",
   );
-  return { ...actual, spawnSync: spawnSyncMock };
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+    resolveWindowsCommand: (command: string) => command === "opencode" ? "/test/bin/opencode" : undefined,
+  };
 });
 
 const { launchCommand } = await import("../../src/commands/launch.js");
