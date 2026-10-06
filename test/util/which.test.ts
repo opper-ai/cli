@@ -5,7 +5,7 @@ describe("which", () => {
   it("returns a path for a binary that exists (node)", async () => {
     const path = await which("node");
     expect(path).not.toBeNull();
-    expect(path).toMatch(/node$/);
+    expect(path).toMatch(/[/\\]node(?:\.exe)?$/i);
   });
 
   it("returns null for a nonexistent binary", async () => {

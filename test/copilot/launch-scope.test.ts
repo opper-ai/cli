@@ -15,8 +15,14 @@ function nodeRuntime(t,version) {
  Object.defineProperty(process.versions,'node',{...original,value:version});
  t.onTestFinished(()=>Object.defineProperty(process.versions,'node',original));
 }
+function platformRuntime(t,platform) {
+ const original=Object.getOwnPropertyDescriptor(process,'platform');
+ Object.defineProperty(process,'platform',{...original,value:platform});
+ t.onTestFinished(()=>Object.defineProperty(process,'platform',original));
+}
 
 test('Copilot discovery sends only the explicit request target, independently of saved resource defaults',async t=>{
+ platformRuntime(t,'linux');
  nodeRuntime(t,'22.0.0');
  const seen=[];
  const server=http.createServer((req,res)=>{
@@ -40,9 +46,18 @@ test('Copilot discovery sends only the explicit request target, independently of
 });
 
 test('Copilot rejects Node 20 before reading credentials or starting a child',async t=>{
+ platformRuntime(t,'linux');
  nodeRuntime(t,'20.20.0');
  const getSlot=vi.fn();
  await assert.rejects(launchCopilot(['--list'],{}, {getSlot}),/requires Node.js 22 or newer/);
+ assert.equal(getSlot.mock.calls.length,0);
+});
+
+test('Copilot rejects native Windows before reading credentials or discovering models',async t=>{
+ platformRuntime(t,'win32');
+ nodeRuntime(t,'22.0.0');
+ const getSlot=vi.fn();
+ await assert.rejects(launchCopilot(['--list'],{}, {getSlot}),/currently supports macOS\/Linux/);
  assert.equal(getSlot.mock.calls.length,0);
 });
 

@@ -37,21 +37,20 @@ function readModels(sandbox: string): {
 
 describe("openclaw adapter", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
     spawnSyncMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-openclaw-"));
-    prevHome = process.env.HOME;
-    process.env.HOME = sandbox;
+    // node:os.homedir() reads USERPROFILE on Windows and HOME on POSIX.
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    vi.unstubAllEnvs();
   });
 
   it("metadata is correct", () => {

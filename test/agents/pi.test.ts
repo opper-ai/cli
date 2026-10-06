@@ -38,7 +38,6 @@ function readModels(sandbox: string): {
 
 describe("pi adapter", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json({data: ["claude-opus-4-7", "dynamic/coding", "provider/new-model"].map(id => ({id, context_length:128000, opper:{capabilities:["tools"],max_output_tokens:4096}}))}))));
@@ -50,15 +49,15 @@ describe("pi adapter", () => {
       return { code: 0, stdout: "" };
     });
     sandbox = mkdtempSync(join(tmpdir(), "opper-pi-"));
-    prevHome = process.env.HOME;
-    process.env.HOME = sandbox;
+    // node:os.homedir() reads USERPROFILE on Windows and HOME on POSIX.
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    vi.unstubAllEnvs();
   });
 
   it("metadata is correct", () => {

@@ -15,7 +15,7 @@ describe("cross-platform process execution", () => {
     const result = spawnSync(process.execPath, ["-e", "process.stdout.write(JSON.stringify({args:process.argv.slice(1),cwd:process.cwd(),env:process.env.OPPER_ARG_EXPANSION}));process.exit(17)", ...args], {
       cwd: sandbox, env: { ...process.env, OPPER_ARG_EXPANSION: "must remain literal" }, encoding: "utf8", timeout: 10_000,
     });
-    expect(result.error).toBeUndefined();
+    expect(result.error ?? undefined).toBeUndefined();
     expect(result.status).toBe(17);
     expect(JSON.parse(result.stdout)).toEqual({ args, cwd: realpathSync(sandbox), env: "must remain literal" });
   });
@@ -35,7 +35,7 @@ describe("cross-platform process execution", () => {
       cwd: sandbox, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ""}`, OPPER_ARG_EXPANSION: "must remain literal" },
       encoding: "utf8", timeout: 10_000,
     });
-    expect(result.error).toBeUndefined();
+    expect(result.error ?? undefined).toBeUndefined();
     expect(result.status).toBe(17);
     expect(JSON.parse(result.stdout)).toEqual(args);
   });

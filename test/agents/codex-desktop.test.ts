@@ -160,7 +160,7 @@ describe("Codex desktop detection", () => {
   });
   it("accepts the combined ChatGPT app with the Codex bundle and supported runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
-    expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/ChatGPT.app/Contents/Resources/codex")).toBe(true);
+    expect(mocks.run.mock.calls.some(([command]) => command === join("/Applications/ChatGPT.app", "Contents", "Resources", "codex"))).toBe(true);
   });
 
   it("also finds the separate Codex app", async () => {
@@ -191,12 +191,13 @@ describe("Codex desktop detection", () => {
   it("keeps the first compatible app instead of selecting a later newer copy", async () => {
     mocks.apps.add("/Applications/Codex.app");
     const run = mocks.run.getMockImplementation()!;
-    mocks.run.mockImplementation((command: string, args: string[]) => command === "/Applications/Codex.app/Contents/Resources/codex"
+    const runtime = join("/Applications/Codex.app", "Contents", "Resources", "codex");
+    mocks.run.mockImplementation((command: string, args: string[]) => command === runtime
       ? ok("codex-cli 0.154.0\n")
       : run(command, args));
 
     expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.153.4" });
-    expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/Codex.app/Contents/Resources/codex")).toBe(false);
+    expect(mocks.run.mock.calls.some(([command]) => command === runtime)).toBe(false);
   });
 
   it("retains update guidance when every valid installed app is too old", async () => {
@@ -406,7 +407,7 @@ describe("Codex desktop launching", () => {
     const processArgs = mocks.run.mock.calls.find(([command]) => command === "pgrep")?.[1] as string[];
     expect(processArgs?.[0]).toBe("-f");
     const matched = spawnSync("grep", ["-E", processArgs[1]!], {
-      input: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --some-argument\n",
+      input: `${join("/Applications/ChatGPT.app", "Contents", "MacOS", "ChatGPT")} --some-argument\n`,
       encoding: "utf8", timeout: 5_000,
     });
     expect(matched.status).toBe(0);

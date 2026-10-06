@@ -43,21 +43,23 @@ function stubExtensionInstalled() {
 
 describe("github-copilot-vscode adapter", () => {
   let sandbox: string;
-  let prevEditorHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
     confirmMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-ghcp-"));
-    prevEditorHome = process.env.OPPER_EDITOR_HOME;
-    process.env.OPPER_EDITOR_HOME = sandbox;
+    vi.stubEnv("OPPER_EDITOR_HOME", sandbox);
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
+    // Windows VS Code uses APPDATA before the editor-home override.
+    vi.stubEnv("APPDATA", join(sandbox, "AppData", "Roaming"));
+    vi.stubEnv("LOCALAPPDATA", join(sandbox, "AppData", "Local"));
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevEditorHome === undefined) delete process.env.OPPER_EDITOR_HOME;
-    else process.env.OPPER_EDITOR_HOME = prevEditorHome;
+    vi.unstubAllEnvs();
   });
 
   it("metadata is correct and adapter is configure-only (no spawn)", () => {

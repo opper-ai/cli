@@ -89,8 +89,9 @@ describe("explicit OpenCode MCP setup", () => {
   it("excludes retained private backups from ordinary Git staging in local setup", async () => {
     const project = join(sandbox, "project");
     mkdirSync(project);
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: project, encoding: "utf8",
-      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    const gitOptions = { cwd: project, encoding: "utf8" as const,
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } };
+    const git = (...args: string[]) => execFileSync("git", args, gitOptions);
     git("init", "--quiet");
     writeFileSync(join(project, ".gitignore"), "/opencode.json\n");
     const path = join(project, "opencode.json");
@@ -104,7 +105,11 @@ describe("explicit OpenCode MCP setup", () => {
     git("add", "--all");
     expect(git("ls-files").trim()).toBe(".gitignore");
     expect(git("status", "--porcelain")).not.toContain(".opper-mcp-");
-    expect(git("check-ignore", result.backupPath!).trim()).toBe(result.backupPath);
+    // NUL-separated output preserves paths without Git's quoted-path escaping.
+    const ignored = execFileSync("git", ["check-ignore", "--stdin", "-z"], {
+      ...gitOptions, input: `${result.backupPath}\0`,
+    });
+    expect(ignored).toBe(`${result.backupPath}\0`);
   });
 
   it("leaves the original untouched if the backup ignore rule cannot be written", async () => {
