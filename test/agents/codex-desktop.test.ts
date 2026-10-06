@@ -27,8 +27,12 @@ vi.mock("node:os", async () => ({
 vi.mock("node:fs", async () => ({
   ...await vi.importActual<typeof import("node:fs")>("node:fs"),
   existsSync: (path: string) => {
-    if ([...mocks.apps].some((app) => path === app || path.startsWith(`${app}/`))) return true;
-    if (path.startsWith("/Applications/")) return false;
+    const normalized = path.replaceAll("\\", "/");
+    if ([...mocks.apps].some((app) => {
+      const normalizedApp = app.replaceAll("\\", "/");
+      return normalized === normalizedApp || normalized.startsWith(`${normalizedApp}/`);
+    })) return true;
+    if (normalized.startsWith("/Applications/")) return false;
     return mocks.realExists(path);
   },
 }));
@@ -107,7 +111,7 @@ beforeEach(async () => {
   mocks.run.mockReset();
   mocks.run.mockImplementation((command: string, args: string[]) => {
     if (command.endsWith("plutil")) return ok(args.includes("CFBundleExecutable") ? "ChatGPT" : bundleId);
-    if (command.endsWith("/codex") && args.includes("--version")) return ok(`codex-cli ${runtimeVersion}\n`);
+    if (/[/\\]codex$/.test(command) && args.includes("--version")) return ok(`codex-cli ${runtimeVersion}\n`);
     if (command.endsWith("pgrep")) return appRunning ? ok("98765\n") : { code: 1, stdout: "", stderr: "" };
     return ok();
   });
@@ -156,7 +160,7 @@ describe("Codex desktop detection", () => {
   });
   it("accepts the combined ChatGPT app with the Codex bundle and supported runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
-    expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/ChatGPT.app/Contents/Resources/codex")).toBe(true);
+    expect(mocks.run.mock.calls.some(([command]) => command === join("/Applications/ChatGPT.app", "Contents", "Resources", "codex"))).toBe(true);
   });
 
   it("also finds the separate Codex app", async () => {
@@ -187,12 +191,13 @@ describe("Codex desktop detection", () => {
   it("keeps the first compatible app instead of selecting a later newer copy", async () => {
     mocks.apps.add("/Applications/Codex.app");
     const run = mocks.run.getMockImplementation()!;
-    mocks.run.mockImplementation((command: string, args: string[]) => command === "/Applications/Codex.app/Contents/Resources/codex"
+    const runtime = join("/Applications/Codex.app", "Contents", "Resources", "codex");
+    mocks.run.mockImplementation((command: string, args: string[]) => command === runtime
       ? ok("codex-cli 0.154.0\n")
       : run(command, args));
 
     expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.153.4" });
-    expect(mocks.run.mock.calls.some(([command]) => command === "/Applications/Codex.app/Contents/Resources/codex")).toBe(false);
+    expect(mocks.run.mock.calls.some(([command]) => command === runtime)).toBe(false);
   });
 
   it("retains update guidance when every valid installed app is too old", async () => {
@@ -401,8 +406,13 @@ describe("Codex desktop launching", () => {
     await codexDesktop.spawn!([], routing());
     const processArgs = mocks.run.mock.calls.find(([command]) => command === "pgrep")?.[1] as string[];
     expect(processArgs?.[0]).toBe("-f");
+    expect(processArgs[1]).toMatch(/^\^/);
+    expect(processArgs[1]).toContain("([[:space:]]|$)");
+    // Native Windows has no pgrep; MSYS grep rewrites path-like expressions.
+    // Keep the mocked invocation checks above, and run POSIX grep on POSIX.
+    if (process.platform === "win32") return;
     const matched = spawnSync("grep", ["-E", processArgs[1]!], {
-      input: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT --some-argument\n",
+      input: `${join("/Applications/ChatGPT.app", "Contents", "MacOS", "ChatGPT")} --some-argument\n`,
       encoding: "utf8", timeout: 5_000,
     });
     expect(matched.status).toBe(0);
@@ -490,7 +500,7 @@ describe("explicit Codex home", () => {
     expect(process.env.CODEX_HOME).toBe(codexHome);
   });
 
-  it("prints a shell-safe retry command for an explicit home", async () => {
+  it.skipIf(process.platform === "win32")("prints a POSIX shell-safe retry command for an explicit home", async () => {
     const selected = join(home, "custom home's settings");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {

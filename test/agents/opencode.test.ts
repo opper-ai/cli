@@ -33,9 +33,9 @@ vi.mock("../../src/setup/opencode-models.js", async () => ({
 const spawnSyncMock = vi.fn();
 const debugConfigMock = vi.fn();
 const versionMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
+vi.mock("../../src/util/spawn.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/util/spawn.js")>(
+    "../../src/util/spawn.js",
   );
   return { ...actual, spawnSync: (...args: any[]) =>
     args[0] === "opencode" && args[1]?.[0] === "--version"

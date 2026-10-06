@@ -49,7 +49,7 @@ describe("hermes adapter — detect", () => {
     expect(result.installed).toBe(true);
     expect(result.version).toBe("1.2.3");
     // The user's real home, not an isolated dir.
-    expect(result.configPath).toMatch(/\.hermes\/config\.yaml$/);
+    expect(result.configPath).toMatch(/\.hermes[/\\]config\.yaml$/);
     expect(result.configPath).not.toMatch(/hermes-home/);
   });
 });
@@ -70,8 +70,6 @@ describe("hermes adapter — install", () => {
 
 describe("hermes adapter — spawn (real ~/.hermes, transient)", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
-  let prevOpperHome: string | undefined;
 
   function configPath(): string {
     return join(sandbox, ".hermes", "config.yaml");
@@ -82,19 +80,16 @@ describe("hermes adapter — spawn (real ~/.hermes, transient)", () => {
 
   beforeEach(() => {
     sandbox = mkdtempSync(join(tmpdir(), "opper-hermes-"));
-    prevHome = process.env.HOME;
-    prevOpperHome = process.env.OPPER_HOME;
-    process.env.HOME = sandbox;
-    process.env.OPPER_HOME = join(sandbox, ".opper"); // sandbox the backups dir
+    // node:os.homedir() reads USERPROFILE on Windows and HOME on POSIX.
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
+    vi.stubEnv("OPPER_HOME", join(sandbox, ".opper")); // sandbox the backups dir
     runMock.mockReset();
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
-    if (prevOpperHome === undefined) delete process.env.OPPER_HOME;
-    else process.env.OPPER_HOME = prevOpperHome;
+    vi.unstubAllEnvs();
   });
 
   it("writes the opper model + provider AND ships the plugin into ~/.hermes mid-launch", async () => {
@@ -175,19 +170,18 @@ describe("hermes adapter — spawn (real ~/.hermes, transient)", () => {
 
 describe("hermes adapter — isConfigured / configure / unconfigure", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     sandbox = mkdtempSync(join(tmpdir(), "opper-hermes-"));
-    prevHome = process.env.HOME;
-    process.env.HOME = sandbox;
+    // node:os.homedir() reads USERPROFILE on Windows and HOME on POSIX.
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
     runMock.mockReset();
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    vi.unstubAllEnvs();
   });
 
   it("isConfigured collapses to installed", async () => {

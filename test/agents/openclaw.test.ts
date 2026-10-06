@@ -9,9 +9,9 @@ vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const spawnSyncMock = vi.fn();
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
+vi.mock("../../src/util/spawn.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/util/spawn.js")>(
+    "../../src/util/spawn.js",
   );
   return { ...actual, spawnSync: spawnSyncMock };
 });
@@ -37,21 +37,20 @@ function readModels(sandbox: string): {
 
 describe("openclaw adapter", () => {
   let sandbox: string;
-  let prevHome: string | undefined;
 
   beforeEach(() => {
     whichMock.mockReset();
     runMock.mockReset();
     spawnSyncMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-openclaw-"));
-    prevHome = process.env.HOME;
-    process.env.HOME = sandbox;
+    // node:os.homedir() reads USERPROFILE on Windows and HOME on POSIX.
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
   });
 
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
-    if (prevHome === undefined) delete process.env.HOME;
-    else process.env.HOME = prevHome;
+    vi.unstubAllEnvs();
   });
 
   it("metadata is correct", () => {

@@ -81,15 +81,17 @@ describe("explicit OpenCode MCP setup", () => {
     expect(readFileSync(result.backupPath!, "utf8")).toBe(raw);
     expect(statSync(result.backupPath!).ino).toBe(originalInode);
     expect(statSync(path).ino).not.toBe(originalInode);
-    expect(statSync(path).mode & 0o777).toBe(0o640);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o640);
     expect(load(path).mcp.opper.url).toBe("https://api.opper.ai/mcp");
   });
 
   it("excludes retained private backups from ordinary Git staging in local setup", async () => {
     const project = join(sandbox, "project");
     mkdirSync(project);
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: project, encoding: "utf8",
-      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    const gitOptions = { cwd: project, encoding: "utf8" as const,
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } };
+    const git = (...args: string[]) => execFileSync("git", args, gitOptions);
     git("init", "--quiet");
     writeFileSync(join(project, ".gitignore"), "/opencode.json\n");
     const path = join(project, "opencode.json");
@@ -103,7 +105,11 @@ describe("explicit OpenCode MCP setup", () => {
     git("add", "--all");
     expect(git("ls-files").trim()).toBe(".gitignore");
     expect(git("status", "--porcelain")).not.toContain(".opper-mcp-");
-    expect(git("check-ignore", result.backupPath!).trim()).toBe(result.backupPath);
+    // NUL-separated output preserves paths without Git's quoted-path escaping.
+    const ignored = execFileSync("git", ["check-ignore", "--stdin", "-z"], {
+      ...gitOptions, input: `${result.backupPath}\0`,
+    });
+    expect(ignored).toBe(`${result.backupPath}\0`);
   });
 
   it("leaves the original untouched if the backup ignore rule cannot be written", async () => {
@@ -191,7 +197,8 @@ describe("explicit OpenCode MCP setup", () => {
     expect(config.permission).toEqual({ "*": "ask" });
     expect(config.provider.opper.options.baseURL).toBe("https://private.example/v3/compat");
     expect(config.mcp.work.url).toBe("https://work.example/mcp");
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
   it("merges normal JSON plus JSONC without duplicating a provider from the earlier file", async () => {
@@ -320,7 +327,8 @@ describe("explicit OpenCode MCP setup", () => {
     expect(result).toMatchObject({ path, wrote: true, mcpEnabled: !disabled, mcpOAuthEnabled: true });
     expect(load(path).mcp.demo.oauth).toEqual({ clientId: "existing-client", scope: "account:read projects:read" });
     expect(load(path).mcp.demo.headers).toEqual({ "X-Test": "private-header" });
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readFileSync(jsonc, "utf8")).toBe(overlay);
     expect((await configureOpenCode({ location: "global", mcp: true, mcpScopes: "account:read projects:read" })).wrote).toBe(false);
   });

@@ -15,11 +15,15 @@ import { setSlot } from "../../src/auth/config.js";
 // Keep launch, credential resolution, HTTP requests, and config writes real.
 // Only the OS subprocess boundary and the remote gateway are substituted.
 const spawnSyncMock = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
+vi.mock("../../src/util/spawn.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/util/spawn.js")>(
+    "../../src/util/spawn.js",
   );
-  return { ...actual, spawnSync: spawnSyncMock };
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+    resolveWindowsCommand: (command: string) => command === "opencode" ? "/test/bin/opencode" : undefined,
+  };
 });
 
 const { launchCommand } = await import("../../src/commands/launch.js");
@@ -212,7 +216,8 @@ describe("OpenCode launch model discovery", () => {
             expect(opts.timeout).toBe(30_000);
             descriptor = opts.stdio[1];
             expect(typeof descriptor).toBe("number");
-            expect(fstatSync(descriptor!).mode & 0o777).toBe(0o600);
+            // Windows does not expose POSIX owner/group permission bits.
+            if (process.platform !== "win32") expect(fstatSync(descriptor!).mode & 0o777).toBe(0o600);
           }
           return implementation(command, args, opts);
         });
