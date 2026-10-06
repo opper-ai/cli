@@ -406,6 +406,11 @@ describe("Codex desktop launching", () => {
     await codexDesktop.spawn!([], routing());
     const processArgs = mocks.run.mock.calls.find(([command]) => command === "pgrep")?.[1] as string[];
     expect(processArgs?.[0]).toBe("-f");
+    expect(processArgs[1]).toMatch(/^\^/);
+    expect(processArgs[1]).toContain("([[:space:]]|$)");
+    // Native Windows has no pgrep; MSYS grep rewrites path-like expressions.
+    // Keep the mocked invocation checks above, and run POSIX grep on POSIX.
+    if (process.platform === "win32") return;
     const matched = spawnSync("grep", ["-E", processArgs[1]!], {
       input: `${join("/Applications/ChatGPT.app", "Contents", "MacOS", "ChatGPT")} --some-argument\n`,
       encoding: "utf8", timeout: 5_000,

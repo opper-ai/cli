@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const pkg = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 assert.ok(existsSync(join(repo, "dist/index.js")), "Run npm run build before the package smoke test.");
+const npmCliPath = process.env.npm_execpath;
+assert.ok(npmCliPath && isAbsolute(npmCliPath) && existsSync(npmCliPath),
+  "Run this script with npm run test:smoke so npm's absolute JS entry point is available.");
 
 // Spaces exercise the installed shims without using a developer's global prefix.
 const root = mkdtempSync(join(tmpdir(), "opper package smoke "));
@@ -78,13 +81,14 @@ try {
   mkdirSync(home, { recursive: true });
   writeFileSync(env.NPM_CONFIG_USERCONFIG, "");
   writeFileSync(env.NPM_CONFIG_GLOBALCONFIG, "");
-  const npm = windows ? "npm.cmd" : "npm";
   const installerShell = windows ? "cmd" : "sh";
-  const packed = JSON.parse(run(installerShell, npm,
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", root], { cwd: repo, timeout: 60_000 }));
+  // Bootstrap npm by absolute JS entry point. Resolving npm.cmd by name can
+  // make its %~dp0 relative to the checkout instead of npm's installation.
+  const packed = JSON.parse(run(installerShell, process.execPath,
+    [npmCliPath, "pack", "--json", "--ignore-scripts", "--pack-destination", root], { cwd: repo, timeout: 60_000 }));
   assert.equal(packed.length, 1, "npm pack should produce one package.");
   const tarball = join(root, packed[0].filename);
-  run(installerShell, npm, ["install", "--global", "--prefix", prefix, "--cache", join(root, "npm-cache"),
+  run(installerShell, process.execPath, [npmCliPath, "install", "--global", "--prefix", prefix, "--cache", join(root, "npm-cache"),
     "--ignore-scripts", "--no-audit", "--no-fund", tarball], { timeout: 180_000 });
 
   for (const shell of shells) {
@@ -102,12 +106,11 @@ try {
     console.log(`Packed package smoke passed (${shell}).`);
   }
 
-  assert.ok(process.env.npm_execpath, "Run this script with npm run test:smoke so the npm CLI path is available.");
   const { runLaunchSmoke } = await import("./launch-smoke.mjs");
   const cliPath = windows
     ? join(prefix, "node_modules", "@opperai", "cli", "dist", "index.js")
     : join(prefix, "lib", "node_modules", "@opperai", "cli", "dist", "index.js");
-  await runLaunchSmoke({ sandbox: root, env, cliPath, npmCliPath: process.env.npm_execpath });
+  await runLaunchSmoke({ sandbox: root, env, cliPath, npmCliPath });
 } finally {
   rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
