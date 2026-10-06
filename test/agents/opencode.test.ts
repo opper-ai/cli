@@ -25,7 +25,8 @@ vi.mock("../../src/setup/opencode.js", () => ({
 // spawn() and configure() resolve the live catalogue; stub it so this suite
 // stays offline, and so a test can vary what the gateway "returns".
 const resolveOpenCodeModelsMock = vi.fn().mockResolvedValue({});
-vi.mock("../../src/setup/opencode-models.js", () => ({
+vi.mock("../../src/setup/opencode-models.js", async () => ({
+  ...await vi.importActual<typeof import("../../src/setup/opencode-models.js")>("../../src/setup/opencode-models.js"),
   resolveOpenCodeModels: resolveOpenCodeModelsMock,
 }));
 
@@ -89,6 +90,59 @@ function seedOpencodeConfig(sandbox: string): void {
 }
 
 describe("opencode adapter", () => {
+  it("strips inline model/variant auth and routing overrides before launching", async () => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
+    const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: { Authorization: "Bearer stale", "X-Opper-Project": "stale", "X-Team": "keep" } };
+    vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { models: { allowed: {
+      ...stale, settings: stale, options: { ...stale, textVerbosity: "low" }, variants: { personal: { ...stale, reasoningEffort: "high" } },
+    } } } } }));
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], ROUTING);
+    const raw = spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT;
+    expect(raw).not.toContain("stale");
+    expect(JSON.parse(raw).provider.opper.models.allowed).toMatchObject({ headers: { "X-Team": "keep" }, settings: { headers: { "X-Team": "keep" } },
+      options: { textVerbosity: "low", headers: { "X-Team": "keep" } }, variants: { personal: { reasoningEffort: "high", headers: { "X-Team": "keep" } } } });
+  });
+  it("keeps a large catalog off the inline environment override", async () => {
+    const models = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`model/${i}`, {
+      name: "x".repeat(1000), variants: { high: { reasoningEffort: "high" } },
+    }]));
+    resolveOpenCodeModelsMock.mockResolvedValueOnce(models);
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], ROUTING);
+    const raw = spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT;
+    expect(Buffer.byteLength(raw)).toBeLessThan(128_000);
+    expect(JSON.parse(raw).provider.opper.models).toBeUndefined();
+  });
+
+  it("removes the launch effort-policy file after the installed bridge exits", async () => {
+    const directory = join(sandbox, ".config", "opencode", "plugins");
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "opper-login.js"), "// Managed by @opperai/cli.");
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
+    let policyPath: string;
+    spawnSyncMock.mockImplementationOnce((_command, _args, opts) => {
+      policyPath = opts.env.OPPER_CLI_EFFORT_POLICY;
+      expect(JSON.parse(readFileSync(policyPath!, "utf8")).allowed.variants.high.reasoningEffort).toBe("high");
+      expect(readFileSync(policyPath!, "utf8")).not.toContain(ROUTING.apiKey);
+      return { status: 0 };
+    });
+    await opencode.spawn!([], ROUTING);
+    expect(existsSync(policyPath!)).toBe(false);
+  });
+
+  it.each([{ variants: { custom: { reasoningEffort: "max" } } }, { options: { reasoningEffort: "max", disabled: true } }])("rejects unsupported inherited efforts after refreshing stale managed settings: %j", async (inherited) => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: {
+      high: { reasoningEffort: "high" }, max: { disabled: true },
+    }, options: { reasoningEffort: "high" } } });
+    debugConfigMock.mockReturnValueOnce({ status: 0, stdout: "{}" }).mockReturnValueOnce({ status: 0,
+      stdout: JSON.stringify({ provider: { opper: { models: { allowed: inherited } } } }),
+    });
+    await expect(opencode.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("reasoning effort") });
+    expect(configureOpenCodeMock).toHaveBeenCalled();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
   it("uses an explicit target for discovery and runtime config", async () => {
     const projectUuid = "11111111-1111-4111-8111-111111111111";
     vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { options: { headers: { "X-Opper-Project": "stale", "X-Team": "team" } } } } }));
@@ -105,6 +159,18 @@ describe("opencode adapter", () => {
     debugConfigMock.mockReturnValue({ status: 0, stdout: JSON.stringify({ provider: { opper: { models: { "model/one": { headers: { "x-opper-project": "stale" } } } } } }) });
     await expect(opencode.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("project header") });
     expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+  it.each([
+    { options: { apiKey: "stale" } },
+    { options: { baseURL: "https://stale.example" } },
+    { variants: { personal: { apiKey: "stale" } } },
+    { variants: { personal: { headers: { Authorization: "Bearer stale" } } } },
+  ])("rejects external model credential/route overrides before launch: %j", async (entry) => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({ "model/one": {} });
+    debugConfigMock.mockReturnValue({ status: 0, stdout: JSON.stringify({ provider: { opper: { models: { "model/one": entry } } } }) });
+    await expect(opencode.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(configureOpenCodeMock).not.toHaveBeenCalled();
   });
   it("accepts the injected provider target when modern OpenCode masks its debug value", async () => {
     const projectUuid = "11111111-1111-4111-8111-111111111111";
@@ -161,6 +227,44 @@ describe("opencode adapter", () => {
 
     beforeEach(() => {
       versionMock.mockReturnValue({ status: 0, stdout: "opencode v2.0.20\n" });
+    });
+
+    it.each([
+      { settings: { apiKey: "stale" } },
+      { settings: { baseURL: "https://stale.example" } },
+      { variants: { personal: { settings: { apiKey: "stale" } } } },
+      { variants: { personal: { settings: { headers: { Authorization: "Bearer stale" } } } } },
+    ])("rejects migrated external model credential/route overrides before launch: %j", async (entry) => {
+      resolveOpenCodeModelsMock.mockResolvedValueOnce({ "model/one": {} });
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources({ providers: { opper: { models: { "model/one": entry } } } }, injected()) });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(configureOpenCodeMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { settings: { reasoningEffort: "max" } },
+      { settings: { thinking: { budgetTokens: 1024 } } },
+      { variants: { custom: { reasoningEffort: "max" } } },
+      { variants: { custom: { settings: { reasoningEffort: "max" } } } },
+      { options: { reasoningEffort: "max", disabled: true } },
+    ])("rejects unsupported migrated inherited effort: %j", async (entry) => {
+      resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
+      debugConfigMock.mockReturnValueOnce({ status: 0, stdout: sources(injected()) }).mockReturnValueOnce({ status: 0,
+        stdout: sources({ providers: { opper: { models: { allowed: entry } } } }, injected()),
+      });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT", message: expect.stringContaining("reasoning effort") });
+      expect(configureOpenCodeMock).toHaveBeenCalled();
+      expect(spawnSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts supported migrated effort and ignores explicitly disabled custom variants", async () => {
+      resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
+      debugConfigMock.mockReturnValue({ status: 0, stdout: sources({ providers: { opper: { models: { allowed: {
+        settings: { reasoningEffort: "high" }, variants: { custom: { disabled: true, settings: { reasoningEffort: "max" } } },
+      } } } } }, injected()) });
+      spawnSyncMock.mockReturnValue({ status: 0 });
+      await expect(opencode.spawn!([], { ...ROUTING, projectUuid })).resolves.toBe(0);
     });
 
     it("inspects a private server and launches OpenCode on one", async () => {
@@ -268,6 +372,7 @@ describe("opencode adapter", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(sandbox, { recursive: true, force: true });
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;

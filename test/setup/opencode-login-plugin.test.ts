@@ -73,6 +73,65 @@ afterEach(async () => {
 });
 
 describe("OpenCode login plugin", () => {
+  it("removes unsupported client-inferred request defaults without changing valid choices", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [{ ...catalog(["openai/gpt-5.4"]).data[0], opper: { capabilities: ["reasoning"] } },
+      { ...catalog(["pool"]).data[0], opper: { reasoning: { supported: ["high"] } } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const plugin = await OpperLoginPlugin();
+    await plugin.config({});
+    for (const [id, effort, expected] of [["openai/gpt-5.4", "medium", undefined], ["pool", "medium", undefined], ["pool", "high", "high"]]) {
+      const output = { options: { reasoningEffort: effort, textVerbosity: "low" } };
+      await plugin["chat.params"]({ model: { providerID: "opper", id } }, output);
+      expect(output.options.reasoningEffort).toBe(expected);
+      expect(output.options.textVerbosity).toBe("low");
+    }
+  });
+
+  it("matches the CLI effort mapper and preserves custom variants on catalog refresh", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [
+      { ...catalog(["gpt-6.1-sol"]).data[0], opper: { kind: "pool", capabilities: ["reasoning", "tools"], reasoning: { supported: ["low", "medium", "high", "xhigh", "max"], default: "medium" } } },
+      { ...catalog(["mixed-pool"]).data[0], opper: { kind: "pool", reasoning: { supported: ["high"], default: "max" } } },
+      { ...catalog(["missing-metadata"]).data[0], opper: { capabilities: ["reasoning"] } },
+      { id: "dynamic/unknown", opper: { kind: "dynamic_route", reasoning: { supported: ["max"], default: "max" } } },
+    ];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const { toOpenCodeModels } = await import("../../src/setup/opencode-models.js");
+    expect((await run({})).provider.opper.models).toEqual(toOpenCodeModels(data as any));
+    const config = await run({ provider: { opper: { models: {
+      "gpt-6.1-sol": { variants: { careful: { reasoningEffort: "high", temperature: 0 }, high: { textVerbosity: "low" } } },
+      "mixed-pool": { variants: { max: { reasoningEffort: "max" } } },
+      revoked: { variants: { personal: { temperature: 0 } } },
+    } } } });
+    expect(config.provider.opper.models["gpt-6.1-sol"].variants.careful).toEqual({ reasoningEffort: "high", temperature: 0 });
+    expect(config.provider.opper.models["gpt-6.1-sol"].variants.high).toEqual({ reasoningEffort: "high", textVerbosity: "low" });
+    expect(config.provider.opper.models["mixed-pool"].variants.max).toMatchObject({ disabled: true });
+    expect(config.provider.opper.models.revoked).toBeUndefined();
+  });
+
+  it("strips saved model and variant credentials/routing while keeping benign headers and options", async () => {
+    await slot({ apiKey: "synthetic-key" });
+    const data = [{ ...catalog(["pool"]).data[0], opper: { reasoning: { supported: ["high"] } } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data }) }));
+    const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: {
+      AUTHORIZATION: "Bearer stale", "x-opper-project": "stale", "X-Team": "keep",
+    } };
+    const config = await run({ provider: { opper: { models: { pool: {
+      options: { ...stale, textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "high", settings: stale } },
+    } } } } });
+    const { toOpenCodeModels, preserveOpenCodeVariants } = await import("../../src/setup/opencode-models.js");
+    const expected = preserveOpenCodeVariants(toOpenCodeModels(data as any), { pool: {
+      options: { ...stale, textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "high", settings: stale } },
+    } });
+    expect(config.provider.opper.models).toEqual(expected);
+    expect(JSON.stringify(config)).not.toContain("stale");
+    expect(config.provider.opper.models.pool.options).toEqual({ textVerbosity: "low", headers: { "X-Team": "keep" } });
+    expect(config.provider.opper.models.pool.variants.personal.settings).toEqual({ headers: { "X-Team": "keep" } });
+  });
+
   it("reads the selected CLI key and injects Opper only in memory", async () => {
     await slot({ apiKey: "synthetic-key", expiresAt: "2030-01-01T00:00:00Z" });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["anthropic/claude-sonnet-5"]) });

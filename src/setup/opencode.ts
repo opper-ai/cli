@@ -6,6 +6,7 @@ import { parseJsoncObject } from "../util/jsonc.js";
 import { OpperError } from "../errors.js";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
+import { preserveOpenCodeVariants } from "./opencode-models.js";
 import { configureOpenCodeMcp } from "./opencode-mcp.js";
 
 export interface ProjectConfigState {
@@ -128,6 +129,11 @@ export async function configureOpenCode(
 
       if (providers.opper !== undefined && !opts.overwrite) {
         return { path, wrote: false, reason: "exists" };
+      }
+
+      if (opts.models) {
+        const previous = providers.opper as { models?: unknown } | undefined;
+        templateConfig.provider.opper.models = preserveOpenCodeVariants(opts.models, previous?.models);
       }
 
       const providerPath = existing.provider && typeof existing.provider === "object" && !Array.isArray(existing.provider)

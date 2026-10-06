@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   toOpenCodeModels,
+  preserveOpenCodeVariants,
   displayName,
   pickerDisplayName,
   type CompatModel,
@@ -22,6 +23,45 @@ function model(over: Partial<CompatModel> = {}): CompatModel {
 }
 
 describe("toOpenCodeModels", () => {
+  it("maps the complete advertised effort set and validated default", () => {
+    const m = toOpenCodeModels([model({ id: "gpt-6.1-sol", opper: {
+      kind: "pool", type: "llm", capabilities: ["tools", "reasoning"],
+      reasoning: { supported: ["low", "medium", "high", "xhigh", "max"], default: "medium" },
+    } })])["gpt-6.1-sol"]!;
+    expect(m.options).toEqual({ reasoningEffort: "medium" });
+    expect(m.variants).toEqual({
+      none: { disabled: true, opperManagedDisabled: true }, minimal: { disabled: true, opperManagedDisabled: true },
+      thinking: { disabled: true, opperManagedDisabled: true },
+      low: { reasoningEffort: "low" }, medium: { reasoningEffort: "medium" },
+      high: { reasoningEffort: "high" }, xhigh: { reasoningEffort: "xhigh" }, max: { reasoningEffort: "max" },
+    });
+  });
+
+  it.each([undefined, { supported: [] }, { supported: ["invented"], default: "invented" }])(
+    "does not infer selectable effort from capabilities without known metadata: %j", (reasoning) => {
+      const m = toOpenCodeModels([model({ opper: { capabilities: ["reasoning"], reasoning } })])["anthropic/claude-sonnet-5"]!;
+      expect(m.options).toBeUndefined();
+      expect(Object.values(m.variants!)).toEqual(Array(8).fill({ disabled: true, opperManagedDisabled: true }));
+    },
+  );
+
+  it("uses only a pool's advertised intersection and ignores an invalid default", () => {
+    const m = toOpenCodeModels([model({ id: "mixed-pool", opper: {
+      kind: "pool", reasoning: { supported: ["high"], default: "max" },
+    } })])["mixed-pool"]!;
+    expect(m.variants!.high).toEqual({ reasoningEffort: "high" });
+    expect(m.variants!.max).toMatchObject({ disabled: true });
+    expect(m.options).toBeUndefined();
+  });
+
+  it("does not assign efforts to dynamic routes even if metadata is present", () => {
+    const m = toOpenCodeModels([{ id: "dynamic/unknown", opper: {
+      kind: "dynamic_route", reasoning: { supported: ["max"], default: "max" },
+    } }])["dynamic/unknown"]!;
+    expect(m.options).toBeUndefined();
+    expect(Object.values(m.variants!)).toEqual(Array(8).fill({ disabled: true, opperManagedDisabled: true }));
+  });
+
   it("converts per-token prices to per-million", () => {
     const m = toOpenCodeModels([model()])["anthropic/claude-sonnet-5"]!;
     expect(m.cost.input).toBe(2);
@@ -166,4 +206,43 @@ it("distinguishes deployments with identical names and separates pools and route
  const ids=["provider-a/maker/GLM-5.3","provider-b/maker/GLM-5.3","glm-5.3","dynamic/glm-5.3"];
  expect(new Set(ids.map(pickerDisplayName)).size).toBe(ids.length);
  expect(pickerDisplayName(ids[0]!)).toContain(ids[0]);
+});
+
+
+describe("catalog effort refresh policy", () => {
+  const fresh = () => toOpenCodeModels([model({ id: "allowed", opper: {
+    kind: "pool", reasoning: { supported: ["high", "max"], default: "high" },
+  } })]);
+  it("drops saved credential and endpoint overrides while preserving compatible options and variant headers", () => {
+    const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: {
+      aUtHoRiZaTiOn: "Bearer stale", "x-OPPER-project": "stale", "X-Team": "keep",
+    } };
+    const mapped = preserveOpenCodeVariants(fresh(), { allowed: {
+      options: { ...stale, reasoningEffort: "max", textVerbosity: "low" },
+      variants: { personal: { ...stale, reasoningEffort: "max", temperature: 0 } },
+    } });
+    expect(mapped.allowed).toMatchObject({ options: { reasoningEffort: "max", textVerbosity: "low", headers: { "X-Team": "keep" } },
+      variants: { personal: { reasoningEffort: "max", temperature: 0, headers: { "X-Team": "keep" } } } });
+    expect(JSON.stringify(mapped)).not.toContain("stale");
+  });
+  it("suppresses inferred thinking without inventing a request default", () => {
+    const mapped = toOpenCodeModels([model({ id: "fireworks/minimax-m3" }), model({ id: "openai/gpt-5.4" })]);
+    expect(mapped["fireworks/minimax-m3"]!.variants!.thinking).toMatchObject({ disabled: true });
+    expect(mapped["openai/gpt-5.4"]!.options).toBeUndefined();
+  });
+  it("preserves explicit user-disabled levels, compatible options and custom settings", () => {
+    const mapped = preserveOpenCodeVariants(fresh(), { allowed: {
+      options: { reasoningEffort: "max", textVerbosity: "low" },
+      variants: { high: { disabled: true }, personal: { reasoningEffort: "max", temperature: 0 } },
+    } });
+    expect(mapped.allowed).toMatchObject({ options: { reasoningEffort: "max", textVerbosity: "low" },
+      variants: { high: { disabled: true }, personal: { reasoningEffort: "max", temperature: 0 } } });
+  });
+  it("disables a custom effort after support is revoked and restores only managed disables", () => {
+    const previous = { allowed: { variants: { personal: { reasoningEffort: "low", temperature: 0 } } } };
+    const disabled = preserveOpenCodeVariants(fresh(), previous);
+    expect((disabled.allowed as any).variants.personal).toMatchObject({ disabled: true, reasoningEffort: "low", temperature: 0 });
+    const restored = preserveOpenCodeVariants(toOpenCodeModels([model({ id: "allowed", opper: { reasoning: { supported: ["low"] } } })]), disabled);
+    expect((restored.allowed as any).variants.personal).toEqual({ reasoningEffort: "low", temperature: 0 });
+  });
 });

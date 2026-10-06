@@ -30,6 +30,83 @@ function price(value) {
   return Number.isFinite(number) ? Math.round(number * 1_000_000 * 1e6) / 1e6 : undefined;
 }
 
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+const MANAGED_VARIANTS = [...REASONING_EFFORTS, "thinking"];
+
+function reasoningOptions(entry) {
+  const metadata = entry.opper?.kind === "dynamic_route" ? undefined : entry.opper?.reasoning;
+  const supported = Array.isArray(metadata?.supported) ? metadata.supported : [];
+  const variants = Object.fromEntries(MANAGED_VARIANTS.map((effort) => [effort,
+    effort !== "thinking" && supported.includes(effort) ? { reasoningEffort: effort } : { disabled: true, opperManagedDisabled: true },
+  ]));
+  // OpenCode merges its guessed variants with ours. Explicitly disable every
+  // unsupported canonical level, even when a model can emit reasoning.
+  const defaultEffort = metadata?.default;
+  return { variants, ...(defaultEffort && REASONING_EFFORTS.includes(defaultEffort) && supported.includes(defaultEffort)
+    ? { options: { reasoningEffort: defaultEffort } } : {}) };
+}
+
+function record(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value : undefined;
+}
+
+/** Selected provider credentials/routing must take precedence over saved settings. */
+function compatibleOpenCodeSettings(value) {
+  return Object.fromEntries(Object.entries(record(value) ?? {}).flatMap(([name, setting]) => {
+    if (["apikey", "baseurl"].includes(name.toLowerCase())) return [];
+    if (name === "headers") {
+      const headers = Object.fromEntries(Object.entries(record(setting) ?? {}).filter(([header]) =>
+        !["authorization", "x-opper-project"].includes(header.toLowerCase())));
+      return Object.keys(headers).length ? [[name, headers]] : [];
+    }
+    return [[name, ["options", "settings"].includes(name) ? compatibleOpenCodeSettings(setting) : setting]];
+  }));
+}
+
+/** Refresh managed levels without erasing personal variant settings. */
+function preserveOpenCodeVariants(models, previous) {
+  const oldModels = record(previous);
+  return Object.fromEntries(Object.entries(models).map(([id, value]) => {
+    const model = record(value);
+    const oldModel = record(oldModels?.[id]);
+    if (!model || !oldModel) return [id, value];
+    const generated = record(model.variants) ?? {};
+    const old = record(oldModel.variants) ?? {};
+    const supported = Object.values(generated).flatMap((variant) => {
+      const v = record(variant);
+      return typeof v?.reasoningEffort === "string" && !v.disabled ? [v.reasoningEffort] : [];
+    });
+    const variants = { ...old, ...generated };
+    for (const name of Object.keys(variants)) {
+      const fresh = record(generated[name]);
+      if (!record(old[name])) continue;
+      const saved = compatibleOpenCodeSettings(old[name]);
+      const { opperManagedDisabled, ...settings } = saved;
+      if (opperManagedDisabled === true) delete settings.disabled;
+      const invalid = fresh ? Boolean(fresh.disabled) : (settings.reasoningEffort !== undefined &&
+        !supported.includes(settings.reasoningEffort));
+      if (invalid) {
+        variants[name] = { ...settings, ...fresh, disabled: true,
+          ...(saved.disabled === true && opperManagedDisabled !== true ? {} : { opperManagedDisabled: true }) };
+        if (saved.disabled === true && opperManagedDisabled !== true) delete (variants[name]).opperManagedDisabled;
+      } else {
+        variants[name] = { ...settings, ...fresh };
+      }
+    }
+    const savedOptions = compatibleOpenCodeSettings(oldModel.options);
+    const options = { ...savedOptions, ...record(model.options) };
+    if (typeof savedOptions.reasoningEffort === "string" && supported.includes(savedOptions.reasoningEffort)) {
+      options.reasoningEffort = savedOptions.reasoningEffort;
+    }
+    if (savedOptions.reasoningEffort !== undefined && !supported.includes(savedOptions.reasoningEffort)) {
+      delete options.reasoningEffort;
+      Object.assign(options, record(model.options));
+    }
+    return [id, { ...model, ...(Object.keys(options).length ? { options } : {}), variants }];
+  }));
+}
+
 function modelsFromCatalog(entries) {
   const models = Object.create(null);
   for (const entry of entries) {
@@ -41,7 +118,7 @@ function modelsFromCatalog(entries) {
     const output = entry.opper?.max_output_tokens || FALLBACK_OUTPUT;
     if (route) {
       models[entry.id] = {
-        name: label(entry.id), tool_call: true, reasoning: false, attachment: false,
+        name: label(entry.id), tool_call: true, reasoning: false, ...reasoningOptions(entry), attachment: false,
         cost: { input: 0, output: 0 }, limit: { context, output },
         modalities: { input: ["text"], output: ["text"] },
       };
@@ -60,6 +137,7 @@ function modelsFromCatalog(entries) {
       name: label(entry.id),
       tool_call: caps.includes("tools"),
       reasoning: caps.includes("reasoning") || caps.includes("thinking"),
+      ...reasoningOptions(entry),
       attachment: caps.includes("vision") || caps.includes("pdf"),
       cost: {
         input, output: completion,
@@ -106,50 +184,69 @@ function removeOpper(config) {
   if (typeof config.small_model === "string" && config.small_model.startsWith("opper/")) delete config.small_model;
 }
 
-export const OpperLoginPlugin = async () => ({
-  config: async (config) => {
-    // `opper launch opencode` provides a session URL and its selected key in
-    // OPENCODE_CONFIG_CONTENT. Its runtime route must take precedence over the
-    // persistent plain-OpenCode bridge.
-    if (process.env.OPPER_CLI_LAUNCH_OPENCODE === "1") return;
-    const current = await credential();
-    if (!current) {
-      removeOpper(config);
-      return;
-    }
-    const host = (current.baseUrl || "https://api.opper.ai").replace(/\/$/, "");
-    let models;
-    try {
-      const response = await fetch(`${host}/v3/compat/models`, {
-        headers: { Authorization: `Bearer ${current.apiKey}`, ...(current.projectUuid ? { "X-Opper-Project": current.projectUuid } : {}) },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (!response.ok) throw new Error("catalog unavailable");
-      const body = await response.json();
-      if (!Array.isArray(body?.data)) throw new Error("invalid catalog");
-      models = modelsFromCatalog(body.data);
-      if (Object.keys(models).length === 0) throw new Error("empty catalog");
-    } catch {
-      // Keep unrelated OpenCode providers usable. The gateway still enforces
-      // access, but stale model lists should not appear to be current policy.
-      removeOpper(config);
-      console.warn("Opper model catalog unavailable. Check the connection or renew the key, then restart OpenCode.");
-      return;
-    }
-    config.provider ??= {};
-    config.provider.opper = {
-      npm: "@ai-sdk/openai-compatible",
-      name: "Opper",
-      options: { baseURL: `${host}/v3/compat`, apiKey: current.apiKey,
-        ...(current.projectUuid ? { headers: { "X-Opper-Project": current.projectUuid } } : {}) },
-      models,
-      whitelist: Object.keys(models),
-    };
-    const selected = typeof config.model === "string" && config.model.startsWith("opper/")
-      ? config.model.slice("opper/".length) : undefined;
-    if (selected && !(selected in models)) delete config.model;
-    const small = typeof config.small_model === "string" && config.small_model.startsWith("opper/")
-      ? config.small_model.slice("opper/".length) : undefined;
-    if (small && !(small in models)) delete config.small_model;
-  },
-});
+export const OpperLoginPlugin = async () => {
+  let policy;
+  return {
+    config: async (config) => {
+      // `opper launch opencode` provides a session URL and its selected key in
+      // OPENCODE_CONFIG_CONTENT. Its runtime route must take precedence over the
+      // persistent plain-OpenCode bridge.
+      if (process.env.OPPER_CLI_LAUNCH_OPENCODE === "1") {
+        // Launch owns routing/authentication; use its exact discovered policy.
+        if (process.env.OPPER_CLI_EFFORT_POLICY) {
+          policy = JSON.parse(await readFile(process.env.OPPER_CLI_EFFORT_POLICY, "utf8"));
+        }
+        return;
+      }
+      const current = await credential();
+      if (!current) {
+        removeOpper(config);
+        return;
+      }
+      const host = (current.baseUrl || "https://api.opper.ai").replace(/\/$/, "");
+      let models;
+      try {
+        const response = await fetch(`${host}/v3/compat/models`, {
+          headers: { Authorization: `Bearer ${current.apiKey}`, ...(current.projectUuid ? { "X-Opper-Project": current.projectUuid } : {}) },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error("catalog unavailable");
+        const body = await response.json();
+        if (!Array.isArray(body?.data)) throw new Error("invalid catalog");
+        models = modelsFromCatalog(body.data);
+        if (Object.keys(models).length === 0) throw new Error("empty catalog");
+      } catch {
+        // Keep unrelated OpenCode providers usable. The gateway still enforces
+        // access, but stale model lists should not appear to be current policy.
+        removeOpper(config);
+        console.warn("Opper model catalog unavailable. Check the connection or renew the key, then restart OpenCode.");
+        return;
+      }
+      policy = models;
+      config.provider ??= {};
+      config.provider.opper = {
+        npm: "@ai-sdk/openai-compatible",
+        name: "Opper",
+        options: { baseURL: `${host}/v3/compat`, apiKey: current.apiKey,
+          ...(current.projectUuid ? { headers: { "X-Opper-Project": current.projectUuid } } : {}) },
+        models: preserveOpenCodeVariants(models, config.provider.opper?.models),
+        whitelist: Object.keys(models),
+      };
+      const selected = typeof config.model === "string" && config.model.startsWith("opper/")
+        ? config.model.slice("opper/".length) : undefined;
+      if (selected && !(selected in models)) delete config.model;
+      const small = typeof config.small_model === "string" && config.small_model.startsWith("opper/")
+        ? config.small_model.slice("opper/".length) : undefined;
+      if (small && !(small in models)) delete config.small_model;
+    },
+    "chat.params": async ({ model }, output) => {
+      if (model.providerID !== "opper" || !policy) return;
+      const effort = output.options.reasoningEffort;
+      const supported = Object.values(policy[model.id]?.variants ?? {}).some((variant) =>
+        !variant.disabled && variant.reasoningEffort === effort);
+      // OpenCode guesses medium from GPT IDs after config merging. Deleting the
+      // unsupported option here lets the gateway/model choose its own default.
+      if (effort !== undefined && !supported) delete output.options.reasoningEffort;
+    },
+  };
+};
