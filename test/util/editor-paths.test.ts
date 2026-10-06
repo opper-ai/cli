@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { opencodeConfigPath } from "../../src/util/editor-paths.js";
 
 describe("editor paths", () => {
@@ -32,16 +32,16 @@ describe("editor paths", () => {
   });
 
   it("OPPER_EDITOR_HOME overrides the global home", () => {
-    process.env.OPPER_EDITOR_HOME = "/tmp/fake";
+    process.env.OPPER_EDITOR_HOME = join(tmpdir(), "fake");
     expect(opencodeConfigPath("global")).toBe(
-      "/tmp/fake/.config/opencode/opencode.json",
+      join(process.env.OPPER_EDITOR_HOME, ".config", "opencode", "opencode.json"),
     );
   });
 
   it("honors XDG_CONFIG_HOME for the real OpenCode global config", () => {
-    process.env.XDG_CONFIG_HOME = "/tmp/custom-xdg";
-    expect(opencodeConfigPath("global")).toBe("/tmp/custom-xdg/opencode/opencode.json");
-    process.env.OPPER_EDITOR_HOME = "/tmp/test-editor-home";
-    expect(opencodeConfigPath("global")).toBe("/tmp/test-editor-home/.config/opencode/opencode.json");
+    process.env.XDG_CONFIG_HOME = join(tmpdir(), "custom-xdg");
+    expect(opencodeConfigPath("global")).toBe(join(process.env.XDG_CONFIG_HOME, "opencode", "opencode.json"));
+    process.env.OPPER_EDITOR_HOME = join(tmpdir(), "test-editor-home");
+    expect(opencodeConfigPath("global")).toBe(join(process.env.OPPER_EDITOR_HOME, ".config", "opencode", "opencode.json"));
   });
 });

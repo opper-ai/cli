@@ -52,7 +52,8 @@ describe("private runtime key creation", () => {
     fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
     await keysCreateCommand(opts());
     expect(await readFile(opts().output, "utf8")).toBe(`OPPER_API_KEY=${secret}\n`);
-    expect((await stat(opts().output)).mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect((await stat(opts().output)).mode & 0o777).toBe(0o600);
     expect(await readdir(directory)).toEqual([".env.local"]);
     const output = log.mock.calls.map((args) => args.join(" ")).join("\n");
     expect(output).not.toMatch(/ABCDEFGHIJKLMNOPQRST|private-delegated-token/);

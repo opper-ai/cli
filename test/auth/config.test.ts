@@ -56,7 +56,8 @@ describe("writeConfig", () => {
     const path = join(home.get(), "config.json");
     expect(existsSync(path)).toBe(true);
     const mode = statSync(path).mode & 0o777;
-    expect(mode).toBe(0o600);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect(mode).toBe(0o600);
   });
 
   it("creates OPPER_HOME if missing", async () => {

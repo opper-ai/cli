@@ -5,7 +5,7 @@ vi.mock("../../src/util/run.js", () => ({ run: runMock }));
 
 const { detectLegacyOpperCli } = await import("../../src/util/legacy-cli.js");
 
-describe("detectLegacyOpperCli", () => {
+describe.skipIf(process.platform === "win32")("detectLegacyOpperCli on POSIX", () => {
   beforeEach(() => {
     runMock.mockReset();
   });
@@ -52,5 +52,13 @@ describe("detectLegacyOpperCli", () => {
     });
     const result = detectLegacyOpperCli();
     expect(result?.shadowsUs).toBe(false);
+  });
+});
+
+describe.skipIf(process.platform !== "win32")("detectLegacyOpperCli on Windows", () => {
+  it("does not run Homebrew detection", () => {
+    runMock.mockReset();
+    expect(detectLegacyOpperCli()).toBeNull();
+    expect(runMock).not.toHaveBeenCalled();
   });
 });

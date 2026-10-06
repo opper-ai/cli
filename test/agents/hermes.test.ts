@@ -49,7 +49,7 @@ describe("hermes adapter — detect", () => {
     expect(result.installed).toBe(true);
     expect(result.version).toBe("1.2.3");
     // The user's real home, not an isolated dir.
-    expect(result.configPath).toMatch(/\.hermes\/config\.yaml$/);
+    expect(result.configPath).toMatch(/\.hermes[/\\]config\.yaml$/);
     expect(result.configPath).not.toMatch(/hermes-home/);
   });
 });

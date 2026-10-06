@@ -177,7 +177,7 @@ describe("withJsonKeys", () => {
     });
   });
 
-  it("preserves the original file mode", async () => {
+  it.skipIf(process.platform === "win32")("preserves the original POSIX file mode", async () => {
     const path = join(sandbox, "secret.json");
     writeFileSync(
       path,

@@ -152,7 +152,8 @@ describe("native SDK OAuth for private key setup", () => {
     const paths = await readdir(join(directory, "mcp-clients"));
     expect(paths).toHaveLength(1);
     const path = join(directory, "mcp-clients", paths[0]!);
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX owner/group permission bits.
+    if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
     const stored = await readFile(path, "utf8");
     expect(stored).toContain("public-cli-client");
     expect(stored).not.toMatch(/PRIVATE-|code_verifier|state|code_challenge/);

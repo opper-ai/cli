@@ -282,7 +282,7 @@ describe("claude-desktop adapter — configure", () => {
     expect(opperEntries).toHaveLength(1);
   });
 
-  it("writes the gateway profile JSON with owner-only permissions (0o600)", async () => {
+  it.skipIf(process.platform === "win32")("writes the gateway profile JSON with owner-only permissions (0o600)", async () => {
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     const profilePath = join(
       home,

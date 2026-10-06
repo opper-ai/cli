@@ -655,7 +655,37 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 ## Requirements
 
 - Node.js ≥20.12 (for `util.styleText`, used by interactive prompts).
-- macOS, Linux, or WSL. Native Windows shells aren't tested; OAuth approval URLs must be opened manually there.
+- macOS, Linux, or WSL. Native Windows has automated package and launch checks
+  (see Testing); interactive Windows login remains unverified, and OAuth approval
+  URLs must be opened manually there.
+
+## Testing
+
+```sh
+npm ci
+npm run typecheck
+npm test
+npm run build
+npm run test:smoke
+```
+
+The package smoke test packs the built CLI and installs the tarball into a
+temporary npm prefix whose path contains spaces. It runs the generated `opper`
+command through PowerShell and CMD on Windows, or `/bin/sh` on macOS/Linux,
+checking version, help, the agent list, and failure exit codes. Home directories,
+Opper credentials, npm configuration, and caches are isolated; the temporary
+installation is removed afterward. The launch checks install local fixture
+programs for Claude Code, Codex, OpenCode, and Pi, then exercise the real CLI's
+argument forwarding, routing environment, working directory, exit codes,
+configuration restoration, and denied-catalog/missing-agent errors against a
+local HTTP fixture. They use synthetic credentials and make no inference calls.
+Windows requires PowerShell 7 (`pwsh`) for this test, as provided by GitHub's
+Windows runners.
+
+PR CI runs the automated suite and package smoke test on Linux and Windows.
+These checks cover package installation and process launching; interactive
+Windows browser login, actual agent inference, and Ctrl-C behavior still need
+separate Windows verification.
 
 ## Releasing
 

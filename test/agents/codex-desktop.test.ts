@@ -27,8 +27,12 @@ vi.mock("node:os", async () => ({
 vi.mock("node:fs", async () => ({
   ...await vi.importActual<typeof import("node:fs")>("node:fs"),
   existsSync: (path: string) => {
-    if ([...mocks.apps].some((app) => path === app || path.startsWith(`${app}/`))) return true;
-    if (path.startsWith("/Applications/")) return false;
+    const normalized = path.replaceAll("\\", "/");
+    if ([...mocks.apps].some((app) => {
+      const normalizedApp = app.replaceAll("\\", "/");
+      return normalized === normalizedApp || normalized.startsWith(`${normalizedApp}/`);
+    })) return true;
+    if (normalized.startsWith("/Applications/")) return false;
     return mocks.realExists(path);
   },
 }));
@@ -107,7 +111,7 @@ beforeEach(async () => {
   mocks.run.mockReset();
   mocks.run.mockImplementation((command: string, args: string[]) => {
     if (command.endsWith("plutil")) return ok(args.includes("CFBundleExecutable") ? "ChatGPT" : bundleId);
-    if (command.endsWith("/codex") && args.includes("--version")) return ok(`codex-cli ${runtimeVersion}\n`);
+    if (/[/\\]codex$/.test(command) && args.includes("--version")) return ok(`codex-cli ${runtimeVersion}\n`);
     if (command.endsWith("pgrep")) return appRunning ? ok("98765\n") : { code: 1, stdout: "", stderr: "" };
     return ok();
   });
@@ -490,7 +494,7 @@ describe("explicit Codex home", () => {
     expect(process.env.CODEX_HOME).toBe(codexHome);
   });
 
-  it("prints a shell-safe retry command for an explicit home", async () => {
+  it.skipIf(process.platform === "win32")("prints a POSIX shell-safe retry command for an explicit home", async () => {
     const selected = join(home, "custom home's settings");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {

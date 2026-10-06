@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, beforeEach } from "vitest";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   opperHome,
@@ -26,18 +26,18 @@ describe("paths", () => {
   });
 
   it("honours OPPER_HOME env override", () => {
-    process.env.OPPER_HOME = "/tmp/fakehome";
-    expect(opperHome()).toBe("/tmp/fakehome");
+    process.env.OPPER_HOME = join(tmpdir(), "fakehome");
+    expect(opperHome()).toBe(process.env.OPPER_HOME);
   });
 
   it("configPath() is opperHome()/config.json", () => {
-    process.env.OPPER_HOME = "/tmp/fakehome";
-    expect(configPath()).toBe("/tmp/fakehome/config.json");
+    process.env.OPPER_HOME = join(tmpdir(), "fakehome");
+    expect(configPath()).toBe(join(process.env.OPPER_HOME, "config.json"));
   });
 
   it("backupsDir() is opperHome()/backups", () => {
-    process.env.OPPER_HOME = "/tmp/fakehome";
-    expect(backupsDir()).toBe("/tmp/fakehome/backups");
+    process.env.OPPER_HOME = join(tmpdir(), "fakehome");
+    expect(backupsDir()).toBe(join(process.env.OPPER_HOME, "backups"));
   });
 
   it("legacyConfigPath() is ~/.oppercli", () => {
