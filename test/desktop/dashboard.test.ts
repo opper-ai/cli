@@ -76,7 +76,7 @@ describe("desktop dashboard over real HTTP", () => {
     const f = await fixture();
     const page = await fetch(f.origin);
     const html = await page.text();
-    expect(html).toContain("Desktop sessions");
+    expect(html).toContain("Sessions");
     expect(html).toContain('list="project-options"');
     expect(html).not.toContain(f.cookie.split("=")[1]);
     expect(html).not.toMatch(/https?:\/\//);

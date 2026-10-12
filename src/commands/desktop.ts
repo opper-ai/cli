@@ -99,7 +99,7 @@ function slotIdentity(slot: AuthSlot): string {
 }
 async function requireSlot(key: string): Promise<AuthSlot> {
   const slot = await getSlot(key);
-  if (!slot) throw new OpperError("AUTH_REQUIRED", `No stored API key for slot ${JSON.stringify(key)}.`, "Run `opper login` before starting the desktop bridge.");
+  if (!slot) throw new OpperError("AUTH_REQUIRED", `No stored API key for slot ${JSON.stringify(key)}.`, "Run `opper login` before starting the local proxy.");
   if (isSlotExpired(slot)) throw new OpperError("AUTH_EXPIRED", `Stored API key for slot ${JSON.stringify(key)} has expired.`, "Renew this slot with `opper login`.");
   return slot;
 }
@@ -107,12 +107,12 @@ async function ensurePrivateDirectory(path: string, create = false): Promise<voi
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   let stat;
   try { stat = await lstat(path); } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw error("No desktop bridge state found.", "Start `opper desktop start` first, or choose its --state-dir.");
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw error("No local proxy state found.", "Start `opper proxy start` first, or choose its --state-dir.");
     throw cause;
   }
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 ||
       (process.getuid && stat.uid !== process.getuid())) {
-    throw error("Desktop bridge state must be a private directory owned by the current user (mode 0700), without a symlink.");
+    throw error("Local proxy state must be a private directory owned by the current user (mode 0700), without a symlink.");
   }
 }
 
@@ -121,31 +121,31 @@ async function readPrivateJson(directory: string, name: string): Promise<unknown
   let file;
   try { file = await open(join(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW); } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error(`Cannot safely read desktop bridge ${name}.`);
+    throw error(`Cannot safely read local proxy ${name}.`);
   }
   try {
     const stat = await file.stat();
     if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()) || stat.size > 16_384) {
-      throw error(`Desktop bridge ${name} must be a private regular file owned by the current user (mode 0600).`);
+      throw error(`Local proxy ${name} must be a private regular file owned by the current user (mode 0600).`);
     }
-    try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed desktop bridge ${name}.`); }
+    try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed local proxy ${name}.`); }
   } finally { await file.close(); }
 }
 function validateConnection(value: unknown): DesktopConnection | DesktopManifest {
-  if (!value || typeof value !== "object") throw error("Malformed desktop bridge connection.");
+  if (!value || typeof value !== "object") throw error("Malformed local proxy connection.");
   const manifest = value as Partial<DesktopManifest & DesktopConnection>;
   if (manifest.version !== 1 || typeof manifest.url !== "string" ||
       typeof manifest.token !== "string" || !/^[a-f0-9]{64}$/.test(manifest.token) ||
       typeof manifest.keyName !== "string" || typeof manifest.origin !== "string" ||
       (manifest.projectUuid !== undefined && typeof manifest.projectUuid !== "string")) {
-    throw error("Malformed desktop bridge connection.");
+    throw error("Malformed local proxy connection.");
   }
   let url: URL;
-  try { url = new URL(manifest.url); } catch { throw error("Malformed desktop bridge endpoint."); }
+  try { url = new URL(manifest.url); } catch { throw error("Malformed local proxy endpoint."); }
   // Fixed IPv4 avoids hostname resolution, localhost rebinding and non-local destinations.
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
       url.username || url.password || url.search || url.hash || url.pathname !== "/") {
-    throw error("Desktop bridge endpoint must be an HTTP URL on 127.0.0.1 with an explicit port and no path.");
+    throw error("Local proxy endpoint must be an HTTP URL on 127.0.0.1 with an explicit port and no path.");
   }
   normalizedOrigin(manifest.origin);
   if (manifest.projectUuid !== undefined) validateProjectUuid(manifest.projectUuid);
@@ -154,16 +154,16 @@ function validateConnection(value: unknown): DesktopConnection | DesktopManifest
 /** Read secrets only from a private regular file, and never send them to arbitrary URLs. */
 export async function readDesktopManifest(opts: DesktopStateOptions): Promise<DesktopManifest> {
   const value = await readPrivateJson(stateDirectory(opts), "bridge.json");
-  if (value === undefined) throw error("No running desktop bridge manifest found.", "Start `opper desktop` first.");
+  if (value === undefined) throw error("No running local proxy manifest found.", "Start `opper proxy` first.");
   const manifest = validateConnection(value) as DesktopManifest;
-  if (!Number.isSafeInteger(manifest.pid) || manifest.pid <= 0) throw error("Malformed desktop bridge manifest.");
+  if (!Number.isSafeInteger(manifest.pid) || manifest.pid <= 0) throw error("Malformed local proxy manifest.");
   return manifest;
 }
 async function savedConnection(directory: string): Promise<DesktopConnection | undefined> {
   const value = await readPrivateJson(directory, "connection.json");
   if (value === undefined) return undefined;
   const connection = validateConnection(value) as DesktopConnection;
-  if (typeof connection.identityFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(connection.identityFingerprint)) throw error("Malformed desktop bridge connection identity.");
+  if (typeof connection.identityFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(connection.identityFingerprint)) throw error("Malformed local proxy connection identity.");
   return connection;
 }
 async function writePrivateJson(directory: string, name: string, value: unknown): Promise<void> {
@@ -188,7 +188,7 @@ function pidAlive(pid: number): boolean {
 
 async function startupCredential(opts: { key: string; projectUuid?: string | undefined }): Promise<{origin: string; identity: string; fingerprint: string; slot: AuthSlot}> {
   if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
-  if (process.env.OPPER_API_KEY) throw new OpperError("INVALID_ARGUMENT", "Desktop bridge requires a stored credential slot; unset OPPER_API_KEY.");
+  if (process.env.OPPER_API_KEY) throw new OpperError("INVALID_ARGUMENT", "Local proxy requires a stored credential slot; unset OPPER_API_KEY.");
   const slot = await requireSlot(opts.key);
   const origin = normalizedOrigin(slot.baseUrl ?? "https://api.opper.ai");
   if (process.env.OPPER_BASE_URL && normalizedOrigin(process.env.OPPER_BASE_URL) !== origin) {
@@ -254,7 +254,7 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
     release = await lockfile.lock(directory, { realpath: false, stale: 10_000, update: 2_000, retries: 0 });
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException).code !== "ELOCKED") throw cause;
-    throw error("This desktop bridge state directory is already in use.", "Use `opper desktop status`, or choose a different --state-dir. After a crash, wait ten seconds and retry.");
+    throw error("This local proxy state directory is already in use.", "Use `opper proxy status`, or choose a different --state-dir. After a crash, wait ten seconds and retry.");
   }
   let bridge: Awaited<ReturnType<typeof startDesktopBridge>> | undefined;
   let ownManifest: DesktopManifest | undefined;
@@ -268,7 +268,7 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
       }
       await unlink(path);
     } catch (cause) {
-      if (!(cause instanceof OpperError && cause.message === "No running desktop bridge manifest found.")) throw cause;
+      if (!(cause instanceof OpperError && cause.message === "No running local proxy manifest found.")) throw cause;
     }
     const stopped = new Promise<void>((resolve) => { stop = resolve; });
     const onStop = () => stop?.();
@@ -339,7 +339,7 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
       resolveCredential: async () => {
         const current = await requireSlot(opts.key);
         if (slotIdentity(current) !== expectedIdentity) {
-          throw new OpperError("AUTH_REQUIRED", "The credential slot's host, owner or binding changed. Restart the desktop bridge for that identity.");
+          throw new OpperError("AUTH_REQUIRED", "The credential slot's host, owner or binding changed. Restart the local proxy for that identity.");
         }
         return current.apiKey;
       },
@@ -357,7 +357,7 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
       ...(opts.projectUuid !== undefined ? { projectUuid: opts.projectUuid } : {}),
     };
     await writePrivateJson(directory, "bridge.json", ownManifest);
-    console.log(`Desktop bridge ready at ${bridge.url}`);
+    console.log(`Local proxy ready at ${bridge.url}`);
     console.log(`Runtime state: ${path}`);
     console.log("Changing tags affects every subsequent request through this bridge. Ctrl-C stops it.");
     if (opts.signal?.aborted) stop?.();
@@ -371,7 +371,7 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
           const current = await readDesktopManifest({ stateDir: directory });
           if (current.token === ownManifest.token && current.pid === ownManifest.pid && current.url === ownManifest.url) await unlink(path);
         } catch (cause) {
-          if (!(cause instanceof OpperError && cause.message === "No running desktop bridge manifest found.")) throw cause;
+          if (!(cause instanceof OpperError && cause.message === "No running local proxy manifest found.")) throw cause;
         }
       }
     } finally { await release(); }
@@ -389,9 +389,9 @@ async function requestControl(manifest: DesktopManifest, route = "status", body?
       signal: AbortSignal.timeout(5_000),
     });
   } catch {
-    throw new OpperError("NETWORK_ERROR", "Cannot reach the desktop bridge.", "Check its foreground process. If it crashed, restart it with the same --state-dir after ten seconds.");
+    throw new OpperError("NETWORK_ERROR", "Cannot reach the local proxy.", "Check its foreground process. If it crashed, restart it with the same --state-dir after ten seconds.");
   }
-  if (!response.ok) throw new OpperError("API_ERROR", `Desktop bridge control failed (HTTP ${response.status}).`);
+  if (!response.ok) throw new OpperError("API_ERROR", `Local proxy control failed (HTTP ${response.status}).`);
   return { value: await response.json(), url: manifest.url };
 }
 function printStatus(result: { value: unknown; url: string }): void {
@@ -410,7 +410,7 @@ export async function desktopStatusCommand(opts: DesktopStateOptions): Promise<v
   printStatus(await requestControl(await readDesktopManifest(opts)));
 }
 export async function desktopTagCommand(opts: DesktopStateOptions & { tags: Record<string, string> }): Promise<void> {
-  if (Object.keys(opts.tags).length === 0) throw new OpperError("INVALID_ARGUMENT", "Choose at least one --tag, or use `opper desktop clear`.");
+  if (Object.keys(opts.tags).length === 0) throw new OpperError("INVALID_ARGUMENT", "Choose at least one --tag, or use `opper proxy clear`.");
   validControlTags(opts.tags);
   printStatus(await requestControl(await readDesktopManifest(opts), "context", {tags: opts.tags}));
 }
@@ -425,11 +425,11 @@ export async function desktopStopCommand(opts: DesktopStateOptions): Promise<voi
   while (Date.now() < deadline) {
     let current: DesktopManifest | undefined;
     try { current = await readDesktopManifest(opts); } catch (cause) {
-      if (!(cause instanceof OpperError && cause.message === "No running desktop bridge manifest found.")) throw cause;
+      if (!(cause instanceof OpperError && cause.message === "No running local proxy manifest found.")) throw cause;
     }
     // Another process can legitimately start once the old lifetime lock is released.
     if (current && current.pid !== manifest.pid) {
-      console.log("Desktop bridge stopped. Saved sessions and connection settings remain available."); return;
+      console.log("Local proxy stopped. Saved sessions and connection settings remain available."); return;
     }
     if (!current) {
       let locked = true;
@@ -440,13 +440,13 @@ export async function desktopStopCommand(opts: DesktopStateOptions): Promise<voi
         let reachable = true;
         try { await fetch(`${manifest.url}/opper/status`, {signal: AbortSignal.timeout(250)}); } catch { reachable = false; }
         if (!reachable) {
-          console.log("Desktop bridge stopped. Saved sessions and connection settings remain available."); return;
+          console.log("Local proxy stopped. Saved sessions and connection settings remain available."); return;
         }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  throw new OpperError("NETWORK_ERROR", "Desktop bridge acknowledged stop but has not finished shutting down.", "Wait for its foreground process to finish before restarting it.");
+  throw new OpperError("NETWORK_ERROR", "Local proxy acknowledged stop but has not finished shutting down.", "Wait for its foreground process to finish before restarting it.");
 }
 
 /** Reuse a compatible service, or start a detached CLI process. */
@@ -458,7 +458,7 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
   if (connection) validateBinding(connection, opts, origin, fingerprint);
   let manifest: DesktopManifest | undefined;
   try { manifest = await readDesktopManifest({stateDir: directory}); } catch (cause) {
-    if (!(cause instanceof OpperError && cause.message === "No running desktop bridge manifest found.")) throw cause;
+    if (!(cause instanceof OpperError && cause.message === "No running local proxy manifest found.")) throw cause;
   }
   if (manifest && pidAlive(manifest.pid)) {
     validateBinding(manifest, opts, origin);
@@ -467,11 +467,11 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
     const log = await open(join(directory, "bridge.log"), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     try {
       const stat = await log.stat();
-      if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) throw error("Desktop bridge log must be a private regular file owned by the current user (mode 0600).");
+      if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) throw error("Local proxy log must be a private regular file owned by the current user (mode 0600).");
       const entry = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../index.ts" : "../index.js", import.meta.url));
       const args = [...process.execArgv, entry, "--key", opts.key,
         ...(opts.projectUuid !== undefined ? ["--project-uuid", opts.projectUuid] : []),
-        "desktop", "start", "--state-dir", directory];
+        "proxy", "start", "--state-dir", directory];
       const child = spawn(process.execPath, args, {detached: true, stdio: ["ignore", log.fd, log.fd], env: {...process.env, NO_UPDATE_NOTIFIER: "1"}});
       let spawnFailure: unknown;
       child.once("error", (cause) => { spawnFailure = cause; });
@@ -479,7 +479,7 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
       manifest = undefined;
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
-        if (spawnFailure) throw new OpperError("NETWORK_ERROR", "Could not start the desktop bridge process.");
+        if (spawnFailure) throw new OpperError("NETWORK_ERROR", "Could not start the local proxy process.");
         try {
           const candidate = await readDesktopManifest({stateDir: directory});
           if (pidAlive(candidate.pid)) {
@@ -488,11 +488,11 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
             manifest = candidate; break;
           }
         } catch (cause) {
-          if (cause instanceof OpperError && cause.code === "AGENT_CONFIG_CONFLICT" && cause.message !== "No running desktop bridge manifest found.") throw cause;
+          if (cause instanceof OpperError && cause.code === "AGENT_CONFIG_CONFLICT" && cause.message !== "No running local proxy manifest found.") throw cause;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      if (!manifest) throw new OpperError("NETWORK_ERROR", "Desktop bridge did not become ready within ten seconds.", `Inspect the private log at ${join(directory, "bridge.log")}.`);
+      if (!manifest) throw new OpperError("NETWORK_ERROR", "Local proxy did not become ready within ten seconds.", `Inspect the private log at ${join(directory, "bridge.log")}.`);
     } finally { await log.close(); }
   }
   return manifest;
@@ -503,12 +503,12 @@ export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ ur
   const manifest = await ensureDesktopBridge(opts);
   const result = await requestControl(manifest, "open");
   const launch = result.value as {url?: unknown};
-  if (typeof launch?.url !== "string") throw error("Desktop bridge returned an invalid picker URL.");
+  if (typeof launch?.url !== "string") throw error("Local proxy returned an invalid picker URL.");
   const url = new URL(launch.url);
   if (url.origin !== new URL(manifest.url).origin || url.username || url.password) throw error("Desktop picker must stay on the configured loopback endpoint.");
   if (opts.open !== false) openBrowser(url.href);
   // A one-use local browser ticket, never the inference token or an Opper key.
-  console.log(`Desktop sessions: ${url.href}`);
+  console.log(`Sessions: ${url.href}`);
   return { url: url.href };
 }
 

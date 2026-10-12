@@ -15,7 +15,7 @@ import registerPlatform from "./cli/platform.js";
 import registerAsk from "./cli/ask.js";
 import registerKeys from "./cli/keys.js";
 import registerMcp from "./cli/mcp.js";
-import registerDesktop from "./cli/desktop.js";
+import registerProxy from "./cli/proxy.js";
 import { addGroupedHelpText } from "./cli/help.js";
 import { checkForUpdate } from "./util/update-check.js";
 
@@ -80,7 +80,7 @@ const registrars: RegisterFn[] = [
   registerPlatform,
   registerKeys,
   registerMcp,
-  registerDesktop,
+  registerProxy,
 ];
 for (const register of registrars) register(program, ctx);
 

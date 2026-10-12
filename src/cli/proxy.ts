@@ -4,7 +4,7 @@ import { collectTagPairs } from "./agents.js";
 import type { RegisterFn } from "./types.js";
 
 const register: RegisterFn = (program, ctx) => {
-  const desktop = program.command("desktop").description("Open a local picker for named desktop attribution sessions")
+  const proxy = program.command("proxy").description("Manage the local inference proxy and open its session picker")
     .option("--state-dir <path>", "private directory for this bridge's state")
     .option("--no-open", "print a one-use picker link without opening a browser")
     .action(async (opts: {stateDir?: string; open?: boolean}, cmd: Command) => {
@@ -14,7 +14,7 @@ const register: RegisterFn = (program, ctx) => {
         ...(ctx.projectUuid?.() !== undefined ? {projectUuid: ctx.projectUuid()} : {}),
       });
     });
-  desktop.command("open")
+  proxy.command("open")
     .description("Open the picker; start a local background bridge if needed")
     .option("--state-dir <path>", "private directory for this bridge's state")
     .option("--no-open", "print a one-use picker link without opening a browser")
@@ -25,7 +25,7 @@ const register: RegisterFn = (program, ctx) => {
         ...(ctx.projectUuid?.() !== undefined ? {projectUuid: ctx.projectUuid()} : {}),
       });
     });
-  desktop.command("start")
+  proxy.command("start")
     .description("Start the bridge in the foreground (Ctrl-C stops it)")
     .option("--state-dir <path>", "private directory for this bridge's runtime state")
     .option("--port <port>", "loopback listening port (0 chooses a free port)", (value: string) => {
@@ -40,7 +40,7 @@ const register: RegisterFn = (program, ctx) => {
         ...(ctx.projectUuid?.() !== undefined ? { projectUuid: ctx.projectUuid() } : {}),
       });
     });
-  desktop.command("tag")
+  proxy.command("tag")
     .description("Replace tags for all subsequent requests; running streams keep their original tags")
     .option("--state-dir <path>", "runtime state directory of the running bridge")
     .requiredOption("--tag <pair>", "new key=value attribution tag (repeatable)", (raw: string, tags: Record<string, string> | undefined) => collectTagPairs(raw, tags ?? {}))
@@ -48,21 +48,21 @@ const register: RegisterFn = (program, ctx) => {
       opts = cmd.optsWithGlobals();
       await desktopTagCommand({ tags: opts.tag, ...(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {}) });
     });
-  desktop.command("status")
+  proxy.command("status")
     .description("Show the active tags, session and local endpoint (no credentials)")
     .option("--state-dir <path>", "runtime state directory of the running bridge")
     .action(async (opts: { stateDir?: string }, cmd: Command) => {
       opts = cmd.optsWithGlobals();
       await desktopStatusCommand(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {});
     });
-  desktop.command("clear")
+  proxy.command("clear")
     .description("End the active session and pause new inference until a session is selected")
     .option("--state-dir <path>", "runtime state directory of the running bridge")
     .action(async (opts: { stateDir?: string }, cmd: Command) => {
       opts = cmd.optsWithGlobals();
       await desktopClearCommand(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {});
     });
-  desktop.command("stop")
+  proxy.command("stop")
     .description("Stop the local bridge service; keep saved sessions and connection settings")
     .option("--state-dir <path>", "runtime state directory of the running bridge")
     .action(async (opts: {stateDir?: string}, cmd: Command) => {

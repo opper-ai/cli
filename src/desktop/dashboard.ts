@@ -19,9 +19,9 @@ export interface DashboardDependencies {
 }
 
 const HTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Opper · Desktop sessions</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Opper · Sessions</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
 <body><main><header><a class="brand" href="/" aria-label="Opper home">${WORDMARK}</a><span class="local">On this computer</span></header>
-<div class="intro"><span class="eyebrow">OPPER DESKTOP</span><h1>Desktop sessions</h1><p>Choose the project for your work in Claude and Codex.</p></div>
+<div class="intro"><span class="eyebrow">OPPER PROXY</span><h1>Sessions</h1><p>Choose the project for your work in Claude and Codex.</p></div>
 <section class="active-card" aria-labelledby="active-heading"><div class="section-label"><span class="signal" id="signal"></span><h2 id="active-heading">Current session</h2></div><h3 id="active-name">Choose a session</h3><p id="active-project">Choose a session before using Claude or Codex.</p><div class="active-bottom"><span id="request-status">Checking sessions…</span><button id="pause" class="quiet" disabled>End session</button></div></section>
 <p class="scope">The selected session applies to new inference in both apps. Finish ongoing work before switching.</p>
 <div class="columns"><section class="saved" aria-labelledby="saved-heading"><div class="section-top"><h2 id="saved-heading">Saved sessions</h2><span id="session-count"></span></div><div id="sessions" class="session-list"></div><p id="empty">Create a session to get started.</p></section>

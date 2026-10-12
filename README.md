@@ -199,15 +199,15 @@ A separate Codex home isolates Codex settings and task data. It does not by itse
 
 Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use `--codex-home <path>` to keep a dotfile-managed configuration intact. Restart the app after removal.
 
-### Local desktop sessions (prototype)
+### Local inference proxy and sessions (prototype)
 
-`opper desktop` opens a local session picker in your browser. Create a named
+`opper proxy` opens a local session picker in your browser. Create a named
 session with a project label, or select a saved session to continue it. One
 session is active at a time, across every desktop app configured to use the
 local bridge. Selecting a saved session keeps its attribution ID.
 
 The bridge starts when needed and continues running after the browser page or
-launching terminal closes. Running `opper desktop` again opens the same picker.
+launching terminal closes. Running `opper proxy` again opens the same picker.
 Session names and tags are saved locally; inference uses the existing tagged
 Opper session endpoints. This does not switch your actual Opper project or its
 access policies. Finish or stop ongoing agent work before switching sessions;
@@ -237,7 +237,7 @@ Run the same command without `--proxy` to restore direct Opper routing, preservi
 the same key, model, explicit Opper project and Codex home options. Use
 `opper agents remove <agent>` to remove the integration. Direct routing does not
 require the local bridge. Switching an app back does not stop the bridge, since
-another app may still be using it; use `opper desktop stop` when it is no longer
+another app may still be using it; use `opper proxy stop` when it is no longer
 needed.
 
 `--state-dir <path>` selects a separate bridge; `--no-open` prints its picker link
@@ -249,14 +249,14 @@ For an isolated macOS Codex trial from this checkout, build the CLI and start th
 
 ```sh
 npm run build
-node dist/index.js desktop start --state-dir /private/tmp/opper-desktop-trial
+node dist/index.js proxy start --state-dir /private/tmp/opper-desktop-trial
 ```
 
 In another terminal, prepare a fresh test profile and open its session picker:
 
 ```sh
 node scripts/desktop-tags-demo.mjs --state-dir /private/tmp/opper-desktop-trial --output /private/tmp/opper-codex-trial
-node dist/index.js desktop --state-dir /private/tmp/opper-desktop-trial
+node dist/index.js proxy --state-dir /private/tmp/opper-desktop-trial
 zsh /private/tmp/opper-codex-trial/open.zsh
 ```
 
@@ -265,9 +265,9 @@ normal desktop instance running. These directories must be fresh. The local
 helper reads the bridge's local credential; the real Opper API key stays in the
 selected CLI slot. Use `--key <slot>` when starting the bridge to choose one.
 
-For operator debugging, `desktop status`, `desktop tag --tag project=acme`, and
-`desktop clear` use the same `--state-dir`. `desktop stop` stops the bridge;
-desktop inference is unavailable while it is stopped. `desktop start` stays in
+For operator debugging, `proxy status`, `proxy tag --tag project=acme`, and
+`proxy clear` use the same `--state-dir`. `proxy stop` stops the bridge;
+desktop inference is unavailable while it is stopped. `proxy start` stays in
 the foreground for development; Ctrl-C stops that instance. The current browser
 UI is local HTTP, and inference forwarding supports HTTP/SSE, not WebSockets.
 Claude Desktop and Windows app configuration still need live verification.

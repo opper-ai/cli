@@ -151,7 +151,7 @@ describe("desktop command lifecycle", () => {
     expect((await fetch(opened.url, {redirect: "manual"})).status).toBe(401);
     const cookie = bootstrap.headers.get("set-cookie")!.split(";")[0]!;
     const page = await fetch(`${manifest.url}/`);
-    expect(await page.text()).toContain("Desktop sessions");
+    expect(await page.text()).toContain("Sessions");
     const created = await fetch(`${manifest.url}/api/sessions`, {method: "POST", headers: {cookie, origin: manifest.url, "content-type": "application/json"}, body: JSON.stringify({name: "Website work", project: "acme"})});
     expect(created.status).toBe(200);
     const state = await created.json();
@@ -174,23 +174,23 @@ describe("desktop command lifecycle", () => {
   it("starts a detached service using the actual CLI, reuses it, and stops only that service", async () => {
     const execute = promisify(execFile);
     const entry = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
-    const args = ["--import", "tsx", entry, "--key", "work", "desktop", "--state-dir", stateDir, "--no-open"];
+    const args = ["--import", "tsx", entry, "--key", "work", "proxy", "--state-dir", stateDir, "--no-open"];
     const first = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
-    expect(first.stdout).toContain("Desktop sessions: http://127.0.0.1:");
+    expect(first.stdout).toContain("Sessions: http://127.0.0.1:");
     const manifest = await readDesktopRuntime(stateDir);
     expect(manifest.pid).not.toBe(process.pid);
     expect((await lstat(join(stateDir, "bridge.log"))).mode & 0o777).toBe(0o600);
     const state = await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}}).then((res) => res.json());
     expect(state.paused).toBe(true);
     const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
-    expect(second.stdout).toContain("Desktop sessions: ");
+    expect(second.stdout).toContain("Sessions: ");
     expect((await readDesktopRuntime(stateDir)).pid).toBe(manifest.pid);
-    await execute(process.execPath, ["--import", "tsx", entry, "desktop", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
+    await execute(process.execPath, ["--import", "tsx", entry, "proxy", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
     await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
     await expect(fetch(`${manifest.url}/opper/status`)).rejects.toThrow();
     // Stop returns only once its lifetime lock and listening socket are gone.
     const reopened = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
-    expect(reopened.stdout).toContain("Desktop sessions: ");
+    expect(reopened.stdout).toContain("Sessions: ");
     const restarted = await readDesktopRuntime(stateDir);
     expect(restarted.pid).not.toBe(manifest.pid);
     expect(restarted.url).toBe(manifest.url);
