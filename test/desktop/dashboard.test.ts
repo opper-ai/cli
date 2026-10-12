@@ -7,12 +7,14 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(cleanup.splice(0).map((close) => close())); });
 
 async function fixture(beforeCreate?: () => Promise<void>, port = 0) {
-  const state = {sessions: [] as Array<{id: string; name: string; project: string}>, activeId: null as string | null, activeRequests: 0};
+  const state = {sessions: [] as Array<{id: string; name: string; project: string; archivedAt?: string}>, activeId: null as string | null, activeRequests: 0};
   const dashboard = createDesktopDashboard({
     getState: () => state,
     createSession: async (name, project) => {await beforeCreate?.(); const id = `sess_${state.sessions.length + 1}`; state.sessions.push({id, name, project}); state.activeId = id;},
-    activateSession: async (id) => {if (!state.sessions.some((session) => session.id === id)) throw new Error("private-secret"); state.activeId = id;},
+    activateSession: async (id) => {if (!state.sessions.some((session) => session.id === id && !session.archivedAt)) throw new Error("private-secret"); state.activeId = id;},
     pauseSession: async () => {state.activeId = null;},
+    archiveSession: async (id) => {const session = state.sessions.find((entry) => entry.id === id); if (!session) throw new Error("private-secret"); session.archivedAt = "2026-10-12T21:00:00.000Z"; if (state.activeId === id) state.activeId = null;},
+    restoreSession: async (id) => {const session = state.sessions.find((entry) => entry.id === id); if (!session) throw new Error("private-secret"); delete session.archivedAt;},
   });
   const server = createServer((req, res) => {res.setHeader("Connection", "close"); if (!dashboard.handle(req, res)) {res.writeHead(404); res.end();}});
   server.listen(port, "127.0.0.1");
@@ -60,6 +62,42 @@ describe("desktop dashboard over real HTTP", () => {
     const invalid = await f.api("/api/sessions/sess_missing/activate", {});
     expect(invalid.status).toBe(400);
     expect(await invalid.text()).not.toContain("private-secret");
+  });
+
+  it("archives inactive and active sessions, retains their details, and restores without selecting", async () => {
+    const f = await fixture();
+    await f.api("/api/sessions", {name: "Acme work", project: "acme"});
+    await f.api("/api/sessions", {name: "Beta work", project: "beta"});
+    const archive = await f.api("/api/sessions/sess_1/archive", {});
+    expect(archive.status).toBe(200);
+    expect(await archive.json()).toMatchObject({activeId: "sess_2", sessions: [{id: "sess_1", name: "Acme work", project: "acme", archivedAt: "2026-10-12T21:00:00.000Z"}, {id: "sess_2"}]});
+    const invalid = await f.api("/api/sessions/sess_1/activate", {});
+    expect(invalid.status).toBe(400);
+    expect(await invalid.text()).not.toContain("private-secret");
+    const end = await f.api("/api/sessions/sess_2/archive", {});
+    expect((await end.json()).activeId).toBeNull();
+    const restored = await f.api("/api/sessions/sess_1/restore", {});
+    expect(restored.status).toBe(200);
+    const state = await restored.json();
+    expect(state.activeId).toBeNull();
+    expect(state.sessions).toHaveLength(2);
+    expect(state.sessions[0]).toEqual({id: "sess_1", name: "Acme work", project: "acme"});
+    expect((await f.api("/api/sessions/sess_1/activate", {})).status).toBe(200);
+    expect(f.state.activeId).toBe("sess_1");
+  });
+
+  it.each(["archive", "restore"])("guards %s with browser auth, method, origin, JSON and body limits", async (action) => {
+    const f = await fixture();
+    await f.api("/api/sessions", {name: "Acme work", project: "acme"});
+    const path = `/api/sessions/sess_1/${action}`;
+    expect((await fetch(f.origin + path, {method: "POST", headers: {Origin: f.origin, "Content-Type": "application/json"}, body: "{}"})).status).toBe(401);
+    expect((await f.api(path)).status).toBe(405);
+    expect((await f.api(path, {}, {Origin: "https://attacker.example"})).status).toBe(403);
+    expect((await f.api(path, {}, {"Content-Type": "text/plain"})).status).toBe(415);
+    expect((await f.api(path, {unused: "x".repeat(9000)})).status).toBe(413);
+    expect((await f.api(`/api/sessions/missing/${action}`, {})).status).toBe(400);
+    expect(f.state.sessions[0]!.archivedAt).toBeUndefined();
+    expect(f.state.activeId).toBe("sess_1");
   });
 
   it("rejects cross-origin writes, missing origins, non-JSON bodies, and oversized input", async () => {

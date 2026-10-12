@@ -7,7 +7,7 @@ import { CSS } from "./theme.js";
 const FONT = readFileSync(new URL("../../data/desktop/inter-latin.woff2", import.meta.url));
 
 export interface DashboardState {
-  sessions: Array<{id: string; name: string; project: string}>;
+  sessions: Array<{id: string; name: string; project: string; archivedAt?: string}>;
   activeId: string | null;
   activeRequests: number;
 }
@@ -15,6 +15,8 @@ export interface DashboardDependencies {
   getState(): DashboardState;
   createSession(name: string, project: string): Promise<void>;
   activateSession(id: string): Promise<void>;
+  archiveSession(id: string): Promise<void>;
+  restoreSession(id: string): Promise<void>;
   pauseSession(): Promise<void>;
 }
 
@@ -24,35 +26,56 @@ const HTML = `<!doctype html>
 <div class="intro"><span class="eyebrow">OPPER PROXY</span><h1>Sessions</h1><p>Choose the project for your work in Claude and Codex.</p></div>
 <section class="active-card" aria-labelledby="active-heading"><div class="section-label"><span class="signal" id="signal"></span><h2 id="active-heading">Current session</h2></div><h3 id="active-name">Choose a session</h3><p id="active-project">Choose a session before using Claude or Codex.</p><div class="active-bottom"><span id="request-status">Checking sessions…</span><button id="pause" class="quiet" disabled>End session</button></div></section>
 <p class="scope">The selected session applies to new inference in both apps. Finish ongoing work before switching.</p>
-<div class="columns"><section class="saved" aria-labelledby="saved-heading"><div class="section-top"><h2 id="saved-heading">Saved sessions</h2><span id="session-count"></span></div><div id="sessions" class="session-list"></div><p id="empty">Create a session to get started.</p></section>
+<div class="columns"><section class="saved" aria-labelledby="saved-heading"><div class="section-top"><h2 id="saved-heading">Saved sessions</h2><span id="session-count"></span></div><div class="session-views" role="group" aria-label="Session view"><button id="saved-view" aria-pressed="true">Saved</button><button id="archived-view" aria-pressed="false">Archived</button></div><div id="sessions" class="session-list"></div><p id="empty">Create a session to get started.</p></section>
 <section class="create" aria-labelledby="create-heading"><h2 id="create-heading">New session</h2><p>Give this work a name and project.</p><form id="create-form"><label for="name">Session name</label><input id="name" name="name" placeholder="Website redesign" maxlength="120" required autocomplete="off"><label for="project">Project</label><input id="project" name="project" list="project-options" placeholder="acme" maxlength="256" required autocomplete="off"><datalist id="project-options"></datalist><button class="primary" type="submit">Create and use session <span aria-hidden="true">↗</span></button></form></section></div><p id="feedback" role="status" aria-live="polite"></p><footer>One active session · Your saved sessions stay here</footer></main></body></html>`;
 
 const SCRIPT = `"use strict";
 const el = (id) => document.getElementById(id);
 let busy = false;
 let latest = null;
+let view = "saved";
 function feedback(message, error = false) {el("feedback").textContent = message; el("feedback").classList.toggle("error", error);}
 function render(state) {
   latest = state;
-  const active = state.sessions.find((session) => session.id === state.activeId);
+  const active = state.sessions.find((session) => session.id === state.activeId && !session.archivedAt);
   el("active-name").textContent = active ? active.name : "Choose a session";
   el("active-project").textContent = active ? "Project · " + active.project : "Choose a session before using Claude or Codex.";
   el("signal").classList.toggle("on", Boolean(active));
   el("pause").disabled = busy || !active;
   el("request-status").textContent = state.activeRequests > 0 ? state.activeRequests + " request" + (state.activeRequests === 1 ? "" : "s") + " in progress" : active ? "Ready for your next request" : "No active session";
-  el("session-count").textContent = state.sessions.length + " saved";
-  el("empty").hidden = state.sessions.length > 0;
+  const saved = state.sessions.filter((session) => !session.archivedAt);
+  const archived = state.sessions.filter((session) => session.archivedAt);
+  const visible = view === "archived" ? archived : saved;
+  el("saved-heading").textContent = view === "archived" ? "Archived sessions" : "Saved sessions";
+  el("session-count").textContent = visible.length + " " + view;
+  el("saved-view").textContent = "Saved (" + saved.length + ")";
+  el("archived-view").textContent = "Archived (" + archived.length + ")";
+  el("saved-view").setAttribute("aria-pressed", String(view === "saved"));
+  el("archived-view").setAttribute("aria-pressed", String(view === "archived"));
+  el("saved-view").disabled = busy; el("archived-view").disabled = busy;
+  el("empty").hidden = visible.length > 0;
+  el("empty").textContent = view === "archived" ? "No archived sessions. Archived work keeps its usage history and can be restored here." : "Create a session to get started.";
   el("sessions").replaceChildren();
   el("project-options").replaceChildren();
   for (const project of new Set(state.sessions.map((session) => session.project))) {const option = document.createElement("option"); option.value = project; el("project-options").append(option);}
-  for (const session of state.sessions) {
+  for (const session of visible) {
     const row = document.createElement("div"); row.className = "session";
     const details = document.createElement("div"); details.className = "session-details";
     const name = document.createElement("div"); name.className = "session-name"; name.textContent = session.name;
     const project = document.createElement("div"); project.className = "session-project"; project.textContent = "Project · " + session.project;
     details.append(name, project); row.append(details);
-    if (session.id === state.activeId) {row.classList.add("selected"); const label = document.createElement("span"); label.className = "selected-label"; label.textContent = "In use"; row.append(label);}
-    else {const button = document.createElement("button"); button.textContent = "Use session"; button.disabled = busy; button.addEventListener("click", () => mutate("/api/sessions/" + encodeURIComponent(session.id) + "/activate", {}, "Session selected.")); row.append(button);}
+    const actions = document.createElement("div"); actions.className = "session-actions";
+    const path = "/api/sessions/" + encodeURIComponent(session.id);
+    if (session.archivedAt) {
+      const restore = document.createElement("button"); restore.textContent = "Restore"; restore.disabled = busy;
+      restore.addEventListener("click", async () => {if (await mutate(path + "/restore", {}, "Session restored. Use it when you are ready to continue.")) {view = "saved"; render(latest);}}); actions.append(restore);
+    } else {
+      if (session.id === state.activeId) {row.classList.add("selected"); const label = document.createElement("span"); label.className = "selected-label"; label.textContent = "In use"; actions.append(label);}
+      else {const button = document.createElement("button"); button.textContent = "Use session"; button.disabled = busy; button.addEventListener("click", () => mutate(path + "/activate", {}, "Session selected.")); actions.append(button);}
+      const archive = document.createElement("button"); archive.className = "quiet session-archive"; archive.textContent = "Archive"; archive.disabled = busy;
+      archive.addEventListener("click", () => mutate(path + "/archive", {}, latest.activeId === session.id ? "Session archived and paused. Choose a session before continuing." : "Session archived. Its usage history is kept.")); actions.append(archive);
+    }
+    row.append(actions);
     el("sessions").append(row);
   }
   el("create-form").querySelector("button").disabled = busy;
@@ -68,8 +91,10 @@ async function mutate(path, payload, message) {
   if (busy) return false; busy = true; if (latest) render(latest);
   try {render(await api(path, payload)); feedback(message); return true;} catch (error) {feedback(error.message, true); return false;} finally {busy = false; if (latest) render(latest);}
 }
-el("create-form").addEventListener("submit", async (event) => {event.preventDefault(); if (await mutate("/api/sessions", {name:el("name").value.trim(), project:el("project").value.trim()}, "Session created and selected.")) el("create-form").reset();});
+el("create-form").addEventListener("submit", async (event) => {event.preventDefault(); if (await mutate("/api/sessions", {name:el("name").value.trim(), project:el("project").value.trim()}, "Session created and selected.")) {el("create-form").reset(); view = "saved"; render(latest);}});
 el("pause").addEventListener("click", () => mutate("/api/pause", {}, "Session ended. Select a session when you are ready to continue."));
+el("saved-view").addEventListener("click", () => {view = "saved"; if (latest) render(latest);});
+el("archived-view").addEventListener("click", () => {view = "archived"; if (latest) render(latest);});
 refresh(); setInterval(refresh, 2000);
 `;
 
@@ -92,7 +117,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
   let mutations: Promise<void> = Promise.resolve();
   function state(): DashboardState {
     const current = deps.getState();
-    return {sessions: current.sessions.map(({id, name, project}) => ({id, name, project})), activeId: current.activeId, activeRequests: current.activeRequests};
+    return {sessions: current.sessions.map(({id, name, project, archivedAt}) => ({id, name, project, ...(archivedAt !== undefined ? {archivedAt} : {})})), activeId: current.activeId, activeRequests: current.activeRequests};
   }
   function json(res: ServerResponse, code: number, value: unknown) {res.writeHead(code, {"Content-Type":"application/json; charset=utf-8"}); res.end(JSON.stringify(value));}
   function authenticated(req: IncomingMessage) {
@@ -127,7 +152,13 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
         if (typeof name !== "string" || !name.trim() || name.trim().length > 120 || typeof project !== "string" || !project.trim() || project.trim().length > 256) throw new DashboardError(400, "Enter a session name and project.");
         await deps.createSession(name.trim(), project.trim());
       } else if (path === "/api/pause") await deps.pauseSession();
-      else {const id = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/activate$/.exec(path)?.[1]; if (!id) throw new DashboardError(404, "Session not found."); await deps.activateSession(id);}
+      else {
+        const match = /^\/api\/sessions\/([a-zA-Z0-9_-]+)\/(activate|archive|restore)$/.exec(path);
+        const id = match?.[1]; if (!id) throw new DashboardError(404, "Session not found.");
+        if (match![2] === "archive") await deps.archiveSession(id);
+        else if (match![2] === "restore") await deps.restoreSession(id);
+        else await deps.activateSession(id);
+      }
     };
     const pending = mutations.then(change); mutations = pending.catch(() => {});
     try {await pending;} catch (error) {if (error instanceof DashboardError) throw error; throw new DashboardError(400, "Could not update this session. Check its details and try again.");}
@@ -146,7 +177,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
     },
     handle(req: IncomingMessage, res: ServerResponse): boolean {
       const path = (req.url ?? "/").split("?")[0]!;
-      if (!["/", "/app.js", "/styles.css", "/inter-latin.woff2", "/api/sessions", "/api/pause"].includes(path) && !path.startsWith("/open/") && !/^\/api\/sessions\/[^/]+\/activate$/.test(path)) return false;
+      if (!["/", "/app.js", "/styles.css", "/inter-latin.woff2", "/api/sessions", "/api/pause"].includes(path) && !path.startsWith("/open/") && !/^\/api\/sessions\/[^/]+\/(activate|archive|restore)$/.test(path)) return false;
       void serve(req, res, path).catch((error: unknown) => {if (!res.headersSent) json(res, error instanceof DashboardError ? error.code : 500, {error: error instanceof DashboardError ? error.message : "Could not load sessions. Try again."}); else res.end();});
       return true;
     },

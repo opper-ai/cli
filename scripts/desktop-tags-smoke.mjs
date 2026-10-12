@@ -76,7 +76,7 @@ const evidence = { runtimePid: proc.pid, model, turns: [] };
 try {
   const initial = await fetch(runtime.url + '/opper/status', { headers: { authorization: 'Bearer ' + runtime.token } });
   if (!initial.ok) throw Error('The local bridge is not ready.');
-  const saved = (await initial.json()).sessions ?? [];
+  const saved = ((await initial.json()).sessions ?? []).filter((session) => !session.archivedAt);
   await rpc('initialize', { clientInfo: { name: 'opper_desktop_tags_smoke', version: '0.1.0' } });
   send({ method: 'initialized', params: {} });
   const started = await rpc('thread/start', { cwd: join(demo, 'workspace'), approvalPolicy: 'on-request', sandbox: 'read-only' });

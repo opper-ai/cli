@@ -296,6 +296,8 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
       getState: () => ({ ...sessions.state(), activeRequests: bridge?.status().activeRequests ?? 0 }),
       createSession: async (name, project) => { select(await sessions.create(name, project)); },
       activateSession: async (id) => { select(await sessions.activate(id)); },
+      archiveSession: async (id) => { await sessions.archive(id); if (sessions.state().activeId === null) bridge?.pause(); },
+      restoreSession: async (id) => { await sessions.restore(id); },
       pauseSession: async () => { await sessions.clear(); bridge?.pause(); },
     });
     const status = () => ({ ...bridge?.status(), ...sessions.state() });

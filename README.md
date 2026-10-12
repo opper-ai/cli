@@ -206,6 +206,18 @@ session with a project label, or select a saved session to continue it. One
 session is active at a time, across every desktop app configured to use the
 local bridge. Selecting a saved session keeps its attribution ID.
 
+Archive sessions you no longer need in the main list. The Archived view lets you
+restore them with the same attribution ID. Archiving the current session pauses
+new inference until you select another session; restoring a session does not
+select it automatically. Archiving only changes the local list, so Opper usage
+and traces remain available.
+
+Names, project tags, session IDs and archive state are stored in
+`~/.opper/desktop-bridge/desktop-sessions.json` (or
+`$OPPER_HOME/desktop-bridge/desktop-sessions.json`). A custom `--state-dir` keeps
+its own `desktop-sessions.json`. The file is private to your user and contains
+no prompts or API keys.
+
 The bridge starts when needed and continues running after the browser page or
 launching terminal closes. Running `opper proxy` again opens the same picker.
 Session names and tags are saved locally; inference uses the existing tagged

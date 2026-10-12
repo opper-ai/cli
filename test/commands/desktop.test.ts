@@ -163,6 +163,29 @@ describe("desktop command lifecycle", () => {
     expect(paused.status).toBe(200);
     expect((await inference(manifest.url, manifest.token)).status).toBe(409);
   });
+
+  it("pauses attribution when the current session is archived and restores its ID only after explicit selection", async () => {
+    const manifest = await start({});
+    const opened = await desktopOpenCommand({ key: "work", stateDir, open: false });
+    const bootstrap = await fetch(opened.url, { redirect: "manual" });
+    const cookie = bootstrap.headers.get("set-cookie")!.split(";")[0]!;
+    const headers = { cookie, origin: manifest.url, "content-type": "application/json" };
+    const create = await fetch(manifest.url + "/api/sessions", { method: "POST", headers, body: JSON.stringify({ name: "Archive me", project: "acme" }) });
+    const id = (await create.json()).activeId;
+    expect((await inference(manifest.url, manifest.token)).status).toBe(200);
+    const mutate = (action: string) => fetch(`${manifest.url}/api/sessions/${id}/${action}`, { method: "POST", headers, body: "{}" });
+    const archived = await mutate("archive");
+    expect(archived.status).toBe(200);
+    expect(await archived.json()).toMatchObject({ activeId: null, sessions: [{ id, archivedAt: expect.any(String) }] });
+    expect((await inference(manifest.url, manifest.token)).status).toBe(409);
+    expect((await mutate("activate")).status).toBe(400);
+    expect((await mutate("restore")).status).toBe(200);
+    expect((await inference(manifest.url, manifest.token)).status).toBe(409);
+    expect((await mutate("activate")).status).toBe(200);
+    expect((await inference(manifest.url, manifest.token)).status).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toBe(requests[1]?.url);
+  });
   it("requires local bearer auth for status, context, activation, open and service stop", async () => {
     const manifest = await start();
     expect((await fetch(`${manifest.url}/opper/status`)).status).toBe(401);

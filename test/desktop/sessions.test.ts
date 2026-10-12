@@ -1,11 +1,11 @@
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopSessions, DESKTOP_SESSIONS_FILE } from "../../src/desktop/sessions.js";
 
 const temporary: string[] = [];
-afterEach(async () => {await Promise.all(temporary.splice(0).map((directory) => rm(directory, {recursive: true, force: true})));});
+afterEach(async () => {vi.useRealTimers(); await Promise.all(temporary.splice(0).map((directory) => rm(directory, {recursive: true, force: true})));});
 async function directory() {const path = await mkdtemp(join(tmpdir(), "opper-desktop-sessions-")); temporary.push(path); return path;}
 
 describe("persistent desktop attribution sessions", () => {
@@ -73,6 +73,87 @@ describe("persistent desktop attribution sessions", () => {
     await expect(openDesktopSessions(path)).rejects.toThrow(/sessions/i);
     expect(await readFile(file, "utf8")).toBe(corrupt);
     await writeFile(file, '{"activeId":null,"sessions":[],"credential":"secret"}');
+    await expect(openDesktopSessions(path)).rejects.toThrow(/sessions/i);
+  });
+
+  it("archives the active session, persists its first timestamp, and restores the same ID without selecting", async () => {
+    vi.useFakeTimers({toFake: ["Date"]});
+    vi.setSystemTime(new Date("2026-10-12T08:00:00.000Z"));
+    const path = await directory();
+    const store = await openDesktopSessions(path);
+    const session = await store.create("Acme", "acme", {project: "acme", team: "tools"});
+    vi.setSystemTime(new Date("2026-10-12T09:00:00.000Z"));
+    await store.archive(session.id);
+    expect(store.state()).toMatchObject({activeId: null, sessions: [{...session, updatedAt: "2026-10-12T09:00:00.000Z", archivedAt: "2026-10-12T09:00:00.000Z"}]});
+    const reopened = await openDesktopSessions(path);
+    await expect(reopened.activate(session.id)).rejects.toThrow(/archived/i);
+    vi.setSystemTime(new Date("2026-10-12T10:00:00.000Z"));
+    await reopened.archive(session.id);
+    expect(reopened.state().sessions[0]!.archivedAt).toBe("2026-10-12T09:00:00.000Z");
+    await reopened.restore(session.id);
+    expect(reopened.state().activeId).toBeNull();
+    expect(reopened.state().sessions[0]).not.toHaveProperty("archivedAt");
+    await reopened.restore(session.id);
+    expect(reopened.state().activeId).toBeNull();
+    const restored = await openDesktopSessions(path);
+    expect((await restored.activate(session.id))).toMatchObject({id: session.id, tags: session.tags, createdAt: session.createdAt});
+    expect(restored.state().sessions).toHaveLength(1);
+  });
+
+  it("archives an inactive session without changing the selected session and returns defensive archived metadata", async () => {
+    const store = await openDesktopSessions(await directory());
+    const a = await store.create("A", "a");
+    const b = await store.create("B", "b");
+    await store.archive(a.id);
+    expect(store.state().activeId).toBe(b.id);
+    const copied = store.state();
+    copied.sessions[0]!.archivedAt = "tampered";
+    copied.sessions[0]!.tags.project = "tampered";
+    expect(store.state().sessions[0]).toMatchObject({tags: a.tags, archivedAt: expect.any(String)});
+    expect(store.state().sessions[0]!.archivedAt).not.toBe("tampered");
+    await store.restore(a.id);
+    expect(store.state().activeId).toBe(b.id);
+    for (const id of ["bad", "sess_11111111-1111-4111-8111-111111111111"]) {
+      await expect(store.archive(id)).rejects.toThrow();
+      await expect(store.restore(id)).rejects.toThrow();
+    }
+    expect(store.state().activeId).toBe(b.id);
+  });
+
+  it("does not expose archive or restore changes if persistence fails", async () => {
+    const path = await directory();
+    const file = join(path, DESKTOP_SESSIONS_FILE);
+    const store = await openDesktopSessions(path);
+    const session = await store.create("A", "a");
+    await rm(file); await mkdir(file);
+    await expect(store.archive(session.id)).rejects.toThrow();
+    expect(store.state()).toMatchObject({activeId: session.id, sessions: [session]});
+    await rm(file, {recursive: true});
+    await store.archive(session.id);
+    const archived = store.state();
+    await rm(file); await mkdir(file);
+    await expect(store.restore(session.id)).rejects.toThrow();
+    expect(store.state()).toEqual(archived);
+    await rm(file, {recursive: true});
+    await store.restore(session.id);
+    expect((await openDesktopSessions(path)).state().sessions[0]).not.toHaveProperty("archivedAt");
+    expect(await readdir(path)).toEqual([DESKTOP_SESSIONS_FILE]);
+  });
+
+  it("accepts legacy entries but rejects malformed archive timestamps and archived active IDs", async () => {
+    const path = await directory();
+    const file = join(path, DESKTOP_SESSIONS_FILE);
+    const store = await openDesktopSessions(path);
+    await store.create("Legacy", "legacy");
+    const legacy = store.state();
+    expect((await openDesktopSessions(path)).state()).toEqual(legacy);
+    for (const archivedAt of [null, 42, "", "not-a-date"]) {
+      const invalid = {...legacy, activeId: null, sessions: legacy.sessions.map((session) => ({...session, archivedAt}))};
+      await writeFile(file, JSON.stringify(invalid));
+      await expect(openDesktopSessions(path)).rejects.toThrow(/sessions/i);
+    }
+    const invalidActive = {...legacy, sessions: legacy.sessions.map((session) => ({...session, archivedAt: "2026-10-12T09:00:00.000Z"}))};
+    await writeFile(file, JSON.stringify(invalidActive));
     await expect(openDesktopSessions(path)).rejects.toThrow(/sessions/i);
   });
 });
