@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     run: vi.fn(),
     fetchCatalog: vi.fn(),
     apps: new Set<string>(),
+    runtimeLayout: "legacy",
   };
 });
 
@@ -30,6 +31,8 @@ vi.mock("node:fs", async () => ({
     const normalized = path.replaceAll("\\", "/");
     if ([...mocks.apps].some((app) => {
       const normalizedApp = app.replaceAll("\\", "/");
+      if (normalized === `${normalizedApp}/Contents/Resources/codex`) return mocks.runtimeLayout === "legacy";
+      if (normalized === `${normalizedApp}/Contents/Resources/codex-cli/bin/codex`) return mocks.runtimeLayout === "nested";
       return normalized === normalizedApp || normalized.startsWith(`${normalizedApp}/`);
     })) return true;
     if (normalized.startsWith("/Applications/")) return false;
@@ -105,6 +108,7 @@ beforeEach(async () => {
   mocks.platform.mockReturnValue("darwin");
   mocks.apps.clear();
   mocks.apps.add("/Applications/ChatGPT.app");
+  mocks.runtimeLayout = "legacy";
   appRunning = false;
   bundleId = "com.openai.codex";
   runtimeVersion = "0.153.4";
@@ -161,6 +165,17 @@ describe("Codex desktop detection", () => {
   it("accepts the combined ChatGPT app with the Codex bundle and supported runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
     expect(mocks.run.mock.calls.some(([command]) => command === join("/Applications/ChatGPT.app", "Contents", "Resources", "codex"))).toBe(true);
+  });
+
+  it("detects and launches current apps with the nested Codex CLI runtime", async () => {
+    mocks.runtimeLayout = "nested";
+    runtimeVersion = "0.162.0-alpha.17.2";
+    const runtime = join("/Applications/ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex");
+
+    expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.162.0" });
+    await expect(codexDesktop.spawn!([], routing())).resolves.toBe(0);
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"]);
+    expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(true);
   });
 
   it("also finds the separate Codex app", async () => {

@@ -33,8 +33,11 @@ function findApp(): { app: string; runtime: string; version: string } | null {
   if (platform() !== "darwin") return null;
   let outdatedApp: { app: string; runtime: string; version: string } | null = null;
   for (const app of appCandidates()) {
-    const runtime = join(app, "Contents", "Resources", "codex");
-    if (!existsSync(runtime)) continue;
+    const runtime = [
+      join(app, "Contents", "Resources", "codex"),
+      join(app, "Contents", "Resources", "codex-cli", "bin", "codex"),
+    ].find((candidate) => existsSync(candidate));
+    if (!runtime) continue;
     const bundle = run("/usr/bin/plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", join(app, "Contents", "Info.plist")]);
     if (bundle.code !== 0 || bundle.stdout.trim() !== "com.openai.codex") continue;
     const version = run(runtime, ["--version"]);
