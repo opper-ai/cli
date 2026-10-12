@@ -81,6 +81,7 @@ describe("desktop dashboard over real HTTP", () => {
     expect(html).not.toContain(f.cookie.split("=")[1]);
     expect(html).not.toMatch(/https?:\/\//);
     expect(page.headers.get("content-security-policy")).toContain("script-src 'self'");
+    expect(page.headers.get("content-security-policy")).toContain("font-src 'self'");
     expect(page.headers.get("content-security-policy")).not.toContain("unsafe-inline");
     expect(page.headers.get("referrer-policy")).toBe("no-referrer");
     expect(page.headers.get("cache-control")).toBe("no-store");
@@ -88,6 +89,10 @@ describe("desktop dashboard over real HTTP", () => {
     expect(script).toContain("textContent");
     expect(script).not.toContain("innerHTML");
     expect(script).toContain("2000");
+    const font = await fetch(f.origin + "/inter-latin.woff2");
+    expect(font.status).toBe(200);
+    expect(font.headers.get("content-type")).toBe("font/woff2");
+    expect(Buffer.from(await font.arrayBuffer()).subarray(0, 4).toString()).toBe("wOF2");
   });
 
   it("rejects hostile Host headers and refuses browser cookies on inference paths", async () => {

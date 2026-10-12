@@ -1,5 +1,10 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { WORDMARK } from "./brand.js";
+import { CSS } from "./theme.js";
+
+const FONT = readFileSync(new URL("../../data/desktop/inter-latin.woff2", import.meta.url));
 
 export interface DashboardState {
   sessions: Array<{id: string; name: string; project: string}>;
@@ -15,14 +20,12 @@ export interface DashboardDependencies {
 
 const HTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Opper · Desktop sessions</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
-<body><main><header><a class="brand" href="/" aria-label="Opper home">opper<span class="brand-dot">●</span></a><span class="local">On this computer</span></header>
-<div class="intro"><span class="eyebrow">YOUR WORK, CORRECTLY ATTRIBUTED</span><h1>Desktop sessions</h1><p>Choose the project for your work in Claude and Codex.</p></div>
+<body><main><header><a class="brand" href="/" aria-label="Opper home">${WORDMARK}</a><span class="local">On this computer</span></header>
+<div class="intro"><span class="eyebrow">OPPER DESKTOP</span><h1>Desktop sessions</h1><p>Choose the project for your work in Claude and Codex.</p></div>
 <section class="active-card" aria-labelledby="active-heading"><div class="section-label"><span class="signal" id="signal"></span><h2 id="active-heading">Current session</h2></div><h3 id="active-name">Choose a session</h3><p id="active-project">Choose a session before using Claude or Codex.</p><div class="active-bottom"><span id="request-status">Checking sessions…</span><button id="pause" class="quiet" disabled>End session</button></div></section>
 <p class="scope">The selected session applies to new inference in both apps. Finish ongoing work before switching.</p>
 <div class="columns"><section class="saved" aria-labelledby="saved-heading"><div class="section-top"><h2 id="saved-heading">Saved sessions</h2><span id="session-count"></span></div><div id="sessions" class="session-list"></div><p id="empty">Create a session to get started.</p></section>
 <section class="create" aria-labelledby="create-heading"><h2 id="create-heading">New session</h2><p>Give this work a name and project.</p><form id="create-form"><label for="name">Session name</label><input id="name" name="name" placeholder="Website redesign" maxlength="120" required autocomplete="off"><label for="project">Project</label><input id="project" name="project" list="project-options" placeholder="acme" maxlength="256" required autocomplete="off"><datalist id="project-options"></datalist><button class="primary" type="submit">Create and use session <span aria-hidden="true">↗</span></button></form></section></div><p id="feedback" role="status" aria-live="polite"></p><footer>One active session · Your saved sessions stay here</footer></main></body></html>`;
-
-const CSS = `:root{color-scheme:light;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#202326;background:#f6f7f8;font-synthesis:none}*{box-sizing:border-box}body{margin:0}main{max-width:1020px;margin:auto;padding:32px 36px}header{display:flex;align-items:center;justify-content:space-between;margin-bottom:55px}.brand{font-size:30px;font-weight:700;letter-spacing:-1.7px;color:#1d232b;text-decoration:none}.brand-dot{font-size:12px;margin-left:4px;color:#735cff}.local{font-size:12px;color:#717780;border:1px solid #dfe2e7;border-radius:20px;padding:7px 11px}.eyebrow{font-size:10px;font-weight:650;letter-spacing:1.7px;color:#707885}h1{font-size:38px;letter-spacing:-1.3px;margin:12px 0 10px;line-height:1.15}.intro>p{color:#747b86;font-size:15px;margin:0 0 28px}.active-card{background:#1c222c;color:#f5f7fc;border-radius:14px;padding:25px 28px;box-shadow:0 8px 30px #101b3010}.section-label{display:flex;align-items:center;gap:9px}.section-label h2{font-size:12px;color:#c1c6d2;margin:0;font-weight:500}.signal{width:7px;height:7px;border-radius:50%;background:#798396}.signal.on{background:#a6edb6;box-shadow:0 0 0 4px #a6edb612}.active-card h3{font-size:24px;margin:19px 0 7px;font-weight:550;letter-spacing:-.5px}.active-card>p{color:#aeb8c9;font-size:13px;margin:0}.active-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:22px;border-top:1px solid #3c4451;padding-top:17px}.active-bottom>span{font-size:12px;color:#aeb8c9}button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid #dce0e6;background:#fff;padding:9px 12px;font-size:12px;color:#2d3542;font-weight:550;transition:background .15s}button:hover{background:#f1f2f6}button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #a99cff;outline-offset:3px}button:disabled{cursor:default;opacity:.45}.quiet{color:#dae1eb;background:transparent;border-color:#515c6d;padding:7px 11px}.quiet:hover{background:#333c4b}.scope{font-size:12px;color:#757e8d;margin:14px 2px 31px;line-height:1.6}.columns{display:grid;grid-template-columns:1.35fr 1fr;gap:30px}h2{font-size:15px;font-weight:600;letter-spacing:-.2px;margin:0}.section-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:17px}.section-top>span{font-size:11px;color:#8b929c}.session-list{display:flex;flex-direction:column;gap:8px}.session{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:15px 16px;background:#fff;border:1px solid #e3e6eb;border-radius:9px}.session.selected{border-color:#b6a7fa;background:#faf9ff}.session-details{min-width:0}.session-name{font-size:13px;font-weight:550;overflow-wrap:anywhere}.session-project{font-size:11px;color:#828a98;margin-top:5px;overflow-wrap:anywhere}.selected-label{font-size:11px;color:#7353d9;white-space:nowrap}#empty{font-size:13px;color:#89919b;padding:23px 0}.create{padding:20px 23px;background:#fff;border:1px solid #e3e6eb;border-radius:10px;align-self:start}.create>p{font-size:12px;color:#828a98;margin:8px 0 22px}form{display:flex;flex-direction:column}label{font-size:11px;font-weight:550;color:#5c6573;margin-bottom:7px}input{background:#fbfcfd;color:#273142;border:1px solid #dce1e8;border-radius:6px;padding:11px 12px;font:inherit;font-size:13px;margin-bottom:17px;min-width:0}input::placeholder{color:#a0a7b3}.primary{display:flex;align-items:center;justify-content:space-between;background:#7254de;color:#fff;border-color:#7254de;padding:11px 13px;margin-top:3px}.primary:hover{background:#6342cc}#feedback{font-size:12px;color:#7353d9;min-height:18px;margin:23px 0 12px}#feedback.error{color:#a63143}footer{border-top:1px solid #e2e5ea;padding-top:18px;font-size:11px;color:#9299a3;margin-top:8px}@media(max-width:680px){main{padding:24px 20px}header{margin-bottom:38px}.columns{grid-template-columns:1fr;gap:24px}h1{font-size:32px}.active-card{padding:22px}.scope{margin-bottom:26px}}`;
 
 const SCRIPT = `"use strict";
 const el = (id) => document.getElementById(id);
@@ -99,7 +102,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
   }
   async function serve(req: IncomingMessage, res: ServerResponse, path: string) {
     res.setHeader("Cache-Control", "no-store"); res.setHeader("Referrer-Policy", "no-referrer"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
     if (!allowedOrigin || req.headers.host !== new URL(allowedOrigin).host) throw new DashboardError(403, "This page is available only on this computer.");
     if (path.startsWith("/open/")) {
       if (req.method !== "GET") throw new DashboardError(405, "Method not allowed.");
@@ -107,10 +110,10 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
       if (!expires || expires <= Date.now()) throw new DashboardError(401, "Reopen this page from Opper.");
       res.writeHead(303, {Location:"/", "Set-Cookie":`${cookieName}=${browserToken}; Path=/api; HttpOnly; SameSite=Strict`}); res.end(); return;
     }
-    if (["/", "/app.js", "/styles.css"].includes(path)) {
+    if (["/", "/app.js", "/styles.css", "/inter-latin.woff2"].includes(path)) {
       if (req.method !== "GET") throw new DashboardError(405, "Method not allowed.");
-      res.writeHead(200, {"Content-Type": path === "/" ? "text/html; charset=utf-8" : path === "/app.js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8"});
-      res.end(path === "/" ? HTML : path === "/app.js" ? SCRIPT : CSS); return;
+      res.writeHead(200, {"Content-Type": path === "/" ? "text/html; charset=utf-8" : path === "/app.js" ? "text/javascript; charset=utf-8" : path === "/styles.css" ? "text/css; charset=utf-8" : "font/woff2"});
+      res.end(path === "/" ? HTML : path === "/app.js" ? SCRIPT : path === "/styles.css" ? CSS : FONT); return;
     }
     if (!authenticated(req)) throw new DashboardError(401, "Reopen this page from Opper.");
     if (req.method === "GET" && path === "/api/sessions") {json(res, 200, state()); return;}
@@ -143,7 +146,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
     },
     handle(req: IncomingMessage, res: ServerResponse): boolean {
       const path = (req.url ?? "/").split("?")[0]!;
-      if (!["/", "/app.js", "/styles.css", "/api/sessions", "/api/pause"].includes(path) && !path.startsWith("/open/") && !/^\/api\/sessions\/[^/]+\/activate$/.test(path)) return false;
+      if (!["/", "/app.js", "/styles.css", "/inter-latin.woff2", "/api/sessions", "/api/pause"].includes(path) && !path.startsWith("/open/") && !/^\/api\/sessions\/[^/]+\/activate$/.test(path)) return false;
       void serve(req, res, path).catch((error: unknown) => {if (!res.headersSent) json(res, error instanceof DashboardError ? error.code : 500, {error: error instanceof DashboardError ? error.message : "Could not load sessions. Try again."}); else res.end();});
       return true;
     },
