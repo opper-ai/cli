@@ -199,6 +199,50 @@ A separate Codex home isolates Codex settings and task data. It does not by itse
 
 Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use `--codex-home <path>` to keep a dotfile-managed configuration intact. Restart the app after removal.
 
+### Local desktop sessions (prototype)
+
+`opper desktop` opens a local session picker in your browser. Create a named
+session with a project label, or select a saved session to continue it. One
+session is active at a time, across every desktop app configured to use the
+local bridge. Selecting a saved session keeps its attribution ID.
+
+The bridge starts when needed and continues running after the browser page or
+launching terminal closes. Running `opper desktop` again opens the same picker.
+Session names and tags are saved locally; inference uses the existing tagged
+Opper session endpoints. This does not switch your actual Opper project or its
+access policies. Finish or stop ongoing agent work before switching sessions;
+an in-flight request keeps its original tags, but later steps use the active
+session. Ending the session blocks new inference until another session is
+selected.
+
+Desktop apps need a one-time configuration against the local endpoint. For an
+isolated macOS Codex trial from this checkout, build the CLI and start the bridge:
+
+```sh
+npm run build
+node dist/index.js desktop start --state-dir /private/tmp/opper-desktop-trial
+```
+
+In another terminal, prepare a fresh test profile and open its session picker:
+
+```sh
+node scripts/desktop-tags-demo.mjs --state-dir /private/tmp/opper-desktop-trial --output /private/tmp/opper-codex-trial
+node dist/index.js desktop --state-dir /private/tmp/opper-desktop-trial
+zsh /private/tmp/opper-codex-trial/open.zsh
+```
+
+The test profile uses a separate Codex home and Electron profile. It leaves the
+normal desktop instance running. These directories must be fresh. The local
+helper reads the bridge's local credential; the real Opper API key stays in the
+selected CLI slot. Use `--key <slot>` when starting the bridge to choose one.
+
+For operator debugging, `desktop status`, `desktop tag --tag project=acme`, and
+`desktop clear` use the same `--state-dir`. `desktop stop` stops the bridge;
+desktop inference is unavailable while it is stopped. `desktop start` stays in
+the foreground for development; Ctrl-C stops that instance. The current browser
+UI is local HTTP, and inference forwarding supports HTTP/SSE, not WebSockets.
+Claude Desktop and Windows app configuration still need live verification.
+
 ## Routing through a session without the CLI
 
 For terminal agents, `opper launch` mints a session id and points the agent's inference base URL at a **session-scoped** Opper endpoint, then lets the agent's own SDK speak its native protocol on top. You can wire this up by hand with any OpenAI-, Responses-, or Anthropic-shaped client — no CLI required. Desktop integrations use persistent `/v3/compat` configuration and do not get a per-launch session.
