@@ -6,6 +6,12 @@ import { useTempOpperHome } from "../helpers/temp-home.js";
 
 const hermesDetect = vi.fn();
 const hermesIsConfigured = vi.fn().mockResolvedValue(false);
+const desktopPrepare = vi.fn();
+const desktopOpen = vi.fn();
+vi.mock("../../src/commands/desktop.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/commands/desktop.js")>(),
+  prepareDesktopProxy: desktopPrepare, desktopOpenCommand: desktopOpen,
+}));
 vi.mock("../../src/agents/registry.js", () => ({
   listAdapters: () => [
     {
@@ -137,6 +143,7 @@ describe("agentsConfigureCommand", () => {
   let log: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    desktopPrepare.mockReset(); desktopOpen.mockReset().mockResolvedValue({ url: "http://127.0.0.1:12345/open/fresh" });
     vi.stubEnv("OPPER_API_KEY", undefined);
     vi.stubEnv("OPPER_BASE_URL", undefined);
     configure.mockReset().mockResolvedValue(undefined);
@@ -157,6 +164,34 @@ describe("agentsConfigureCommand", () => {
   afterEach(() => {
     log.mockRestore();
     vi.unstubAllEnvs();
+  });
+
+  it("configures opt-in proxy routing without launching the app and opens a fresh picker after setup", async () => {
+    const proxy = { baseUrl: "http://127.0.0.1:12345", token: "local-token", stateDir: "/tmp/proxy" };
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await setSlot("prod", { apiKey: "real-key", baseUrl: "https://api.opper.ai" });
+    desktopPrepare.mockResolvedValue({ proxy });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await agentsConfigureCommand("codex-desktop", "prod", "claude-sonnet-5", "/tmp/home", projectUuid, { proxy: true, stateDir: "/tmp/proxy", open: false });
+    expect(desktopPrepare).toHaveBeenCalledExactlyOnceWith({ key: "prod", stateDir: "/tmp/proxy", projectUuid });
+    expect(configure).toHaveBeenCalledExactlyOnceWith({ keyName: "prod", apiKey: "real-key", baseUrl: "https://api.opper.ai", projectUuid, model: "claude-sonnet-5", codexHome: "/tmp/home", desktopProxy: proxy });
+    expect(desktopOpen).toHaveBeenCalledExactlyOnceWith({ key: "prod", stateDir: "/tmp/proxy", projectUuid, open: false });
+    expect(configure.mock.invocationCallOrder[0]).toBeLessThan(desktopOpen.mock.invocationCallOrder[0]!);
+  });
+
+  it("keeps configuration direct by default and never starts a proxy", async () => {
+    await setSlot("prod", { apiKey: "real-key" });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await agentsConfigureCommand("codex-desktop", "prod");
+    expect(configure.mock.calls[0]![0]).not.toHaveProperty("desktopProxy");
+    expect(desktopPrepare).not.toHaveBeenCalled(); expect(desktopOpen).not.toHaveBeenCalled();
+  });
+
+  it.each([{ proxy: true }, { stateDir: "/tmp/proxy" }, { open: false }])("rejects unsupported proxy options before credentials or writes (%j)", async (opts) => {
+    getAdapterMock.mockReturnValue({ name: "codex", displayName: "Codex", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await expect(agentsConfigureCommand("codex", "missing", undefined, undefined, undefined, opts)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(configure).not.toHaveBeenCalled(); expect(desktopPrepare).not.toHaveBeenCalled();
   });
 
   it("forwards an independent environment credential without borrowing the selected slot host", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -91,6 +91,16 @@ function allText(directory: string): string {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? allText(path) : readFileSync(path, "utf8");
   }).join("\n");
+}
+function desktopProxy() {
+  const stateDir = join(home, "private bridge state");
+  mkdirSync(stateDir, { mode: 0o700 });
+  const proxy = {baseUrl: "http://127.0.0.1:19437", token: "a".repeat(64), stateDir};
+  const manifest = {version: 1, url: proxy.baseUrl, token: proxy.token, pid: process.pid};
+  const path = join(stateDir, "bridge.json");
+  const write = (updates = {}) => writeFileSync(path, JSON.stringify({...manifest, ...updates}), {mode: 0o600});
+  write();
+  return {proxy, path, write};
 }
 
 beforeEach(async () => {
@@ -447,6 +457,101 @@ describe("Codex desktop launching", () => {
     await expect(codexDesktop.spawn!(["--profile", "other"], routing())).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(configText()).toBe(ORIGINAL);
     expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex desktop opt-in local proxy", () => {
+  it("discovers models with the real credential while persisting only local routing and a token reader", async () => {
+    const {proxy, write} = desktopProxy();
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await codexDesktop.spawn!([], routing({desktopProxy: proxy, projectUuid}));
+    expect(mocks.fetchCatalog).toHaveBeenCalledWith({apiKey: KEY, baseUrl: API_ROOT, projectUuid}, MODEL);
+    expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, wire_api: "responses", supports_websockets: false});
+    expect(provider().http_headers).toBeUndefined();
+    expect(allText(codexHome)).not.toContain(KEY);
+    expect(allText(codexHome)).not.toContain(proxy.token);
+    const helper = configuredHelper();
+    expect(helper().stdout).toBe(proxy.token);
+    const renewed = "b".repeat(64);
+    write({token: renewed});
+    expect(helper().stdout).toBe(renewed);
+  });
+
+  it("supports direct to proxy to direct transitions and removal restores personal settings", async () => {
+    const {proxy} = desktopProxy();
+    await codexDesktop.configure(options());
+    expect(configuredHelper()().stdout).toBe(KEY);
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    expect(provider().base_url).toBe(`${proxy.baseUrl}/v3/compat`);
+    expect(configuredHelper()().stdout).toBe(proxy.token);
+    await codexDesktop.configure(options());
+    expect(provider().base_url).toBe(`${API_ROOT}/v3/compat`);
+    expect(provider().supports_websockets).toBeUndefined();
+    expect(configuredHelper()().stdout).toBe(KEY);
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.realExists(join(codexHome, "opper-desktop"))).toBe(false);
+  });
+
+  it("removes a proxy integration without changing saved bridge state or personal defaults", async () => {
+    const {proxy, path} = desktopProxy();
+    const savedRuntime = readFileSync(path, "utf8");
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(readFileSync(path, "utf8")).toBe(savedRuntime);
+    expect(mocks.realExists(join(codexHome, "opper-desktop"))).toBe(false);
+  });
+
+  it.each([
+    {url: "http://127.0.0.1:19438"},
+    {url: "https://attacker.example", token: "private-token-never-print"},
+    {token: "private-token-never-print"},
+    {pid: 2147483647},
+    {version: 2},
+  ])("refuses invalid or stale bridge runtime state %j without exposing credentials", async (updates) => {
+    const {proxy, write} = desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const helper = configuredHelper();
+    write(updates);
+    const result = helper();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain(KEY);
+    expect(result.stderr).not.toContain("private-token-never-print");
+  });
+
+  it("refuses public or symlinked runtime files and missing bridge state", async () => {
+    const {proxy, path} = desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const helper = configuredHelper();
+    chmodSync(path, 0o644);
+    expect(helper().status).toBe(1);
+    chmodSync(path, 0o600);
+    chmodSync(proxy.stateDir, 0o755);
+    expect(helper().status).toBe(1);
+    chmodSync(proxy.stateDir, 0o700);
+    const target = join(home, "linked-runtime.json");
+    writeFileSync(target, readFileSync(path), {mode: 0o600});
+    rmSync(path); symlinkSync(target, path);
+    expect(helper().status).toBe(1);
+    rmSync(path);
+    expect(helper().status).toBe(1);
+  });
+
+  it("preserves proxy selection in a custom-home restart hint", async () => {
+    const {proxy} = desktopProxy();
+    appRunning = true;
+    await expect(codexDesktop.spawn!([], routing({desktopProxy: proxy}))).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT",
+      hint: expect.stringContaining(`'--proxy' '--state-dir' '${proxy.stateDir}'`),
+    });
+  });
+
+  it.each(["https://api.opper.ai", "http://localhost:19437", "http://127.0.0.1:19437/path", "http://user:password@127.0.0.1:19437"])('rejects a non-loopback-root proxy URL "%s" before changing settings', async (baseUrl) => {
+    const {proxy} = desktopProxy();
+    await expect(codexDesktop.configure(options({desktopProxy: {...proxy, baseUrl}}))).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(configText()).toBe(ORIGINAL);
   });
 });
 

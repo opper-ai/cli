@@ -26,6 +26,12 @@ const loginMock = vi.fn();
 vi.mock("../../src/commands/login.js", () => ({ loginCommand: loginMock }));
 
 const apiGetMock = vi.fn().mockResolvedValue([]);
+const desktopPrepareMock = vi.fn();
+const desktopOpenMock = vi.fn();
+vi.mock("../../src/commands/desktop.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/commands/desktop.js")>(),
+  prepareDesktopProxy: desktopPrepareMock, desktopOpenCommand: desktopOpenMock,
+}));
 vi.mock("../../src/api/client.js", () => ({
   OpperApi: class {
     get = apiGetMock;
@@ -48,6 +54,65 @@ describe("launchCommand", () => {
     loginMock.mockReset();
     apiGetMock.mockClear();
     apiGetMock.mockResolvedValue([]);
+    desktopPrepareMock.mockReset();
+    desktopOpenMock.mockReset().mockResolvedValue({ url: "http://127.0.0.1:12345/open/fresh-ticket" });
+  });
+
+  it("keeps desktop launches direct unless --proxy is explicit", async () => {
+    await setSlot("default", { apiKey: "real-key" });
+    adapter.detect.mockResolvedValue({ installed: true }); adapter.spawn.mockResolvedValue(0);
+    getAdapterMock.mockReturnValueOnce({ ...adapter, name: "codex-desktop", launchesInBackground: true });
+    await launchCommand({ agent: "codex-desktop", key: "default" });
+    expect(desktopPrepareMock).not.toHaveBeenCalled(); expect(desktopOpenMock).not.toHaveBeenCalled();
+    expect(adapter.spawn.mock.calls[0]![1]).not.toHaveProperty("desktopProxy");
+  });
+
+  it.each([false, true])("skips process-lifetime usage summaries for actual Claude desktop background metadata (proxy=%s)", async (proxy) => {
+    const { claudeDesktop } = await import("../../src/agents/claude-desktop.js");
+    await setSlot("default", { apiKey: "real-key" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    desktopPrepareMock.mockResolvedValue({ proxy: { baseUrl: "http://127.0.0.1:12345", token: "local", stateDir: "/tmp/proxy" } });
+    getAdapterMock.mockReturnValueOnce({ ...adapter, name: "claude-desktop", launchesInBackground: claudeDesktop.launchesInBackground } as typeof adapter);
+    vi.useFakeTimers();
+    try {
+      adapter.spawn.mockImplementation(async () => { vi.advanceTimersByTime(2000); return 0; });
+      await launchCommand({ agent: "claude-desktop", key: "default", proxy });
+      expect(apiGetMock).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("ensures the scoped desktop proxy and opens the picker after successful app setup", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    const proxy = { baseUrl: "http://127.0.0.1:12345", token: "local-token", stateDir: "/tmp/proxy" };
+    desktopPrepareMock.mockResolvedValue({ proxy });
+    await setSlot("default", { apiKey: "real-key", baseUrl: "https://api.opper.ai" });
+    adapter.detect.mockResolvedValue({ installed: true }); adapter.spawn.mockResolvedValue(0);
+    getAdapterMock.mockReturnValueOnce({ ...adapter, name: "codex-desktop", launchesInBackground: true });
+    expect(await launchCommand({ agent: "codex-desktop", key: "default", proxy: true, stateDir: "/tmp/proxy", codexHome: "/tmp/home", projectUuid })).toBe(0);
+    expect(desktopPrepareMock).toHaveBeenCalledExactlyOnceWith({ key: "default", stateDir: "/tmp/proxy", projectUuid });
+    expect(adapter.spawn).toHaveBeenCalledWith([], expect.objectContaining({ desktopProxy: proxy, apiBaseUrl: "https://api.opper.ai", apiKey: "real-key", projectUuid }), { codexHome: "/tmp/home" });
+    expect(desktopOpenMock).toHaveBeenCalledExactlyOnceWith({ key: "default", stateDir: proxy.stateDir, projectUuid });
+    expect(adapter.spawn.mock.invocationCallOrder[0]).toBeLessThan(desktopOpenMock.mock.invocationCallOrder[0]!);
+    expect(apiGetMock).not.toHaveBeenCalled();
+  });
+
+  it("does not launch an app when its bound proxy cannot start", async () => {
+    await setSlot("default", { apiKey: "real-key" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    getAdapterMock.mockReturnValueOnce({ ...adapter, name: "claude-desktop", launchesInBackground: true });
+    desktopPrepareMock.mockRejectedValue(new Error("owner changed"));
+    await expect(launchCommand({ agent: "claude-desktop", key: "default", proxy: true })).rejects.toThrow("owner changed");
+    expect(adapter.spawn).not.toHaveBeenCalled(); expect(desktopOpenMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agent: "hermes", proxy: true },
+    { agent: "hermes", stateDir: "/tmp/proxy" },
+    { agent: "codex-desktop", proxy: true, tags: { project: "acme" } },
+  ])("rejects ambiguous or unsupported proxy options before login (%j)", async (options) => {
+    getAdapterMock.mockReturnValueOnce({ ...adapter, name: options.agent });
+    await expect(launchCommand({ key: "missing", ...options })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(loginMock).not.toHaveBeenCalled(); expect(desktopPrepareMock).not.toHaveBeenCalled(); expect(adapter.spawn).not.toHaveBeenCalled();
   });
 
   it("throws AGENT_NOT_FOUND when the adapter name is unknown", async () => {

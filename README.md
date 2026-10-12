@@ -215,8 +215,37 @@ an in-flight request keeps its original tags, but later steps use the active
 session. Ending the session blocks new inference until another session is
 selected.
 
-Desktop apps need a one-time configuration against the local endpoint. For an
-isolated macOS Codex trial from this checkout, build the CLI and start the bridge:
+Local proxy routing is optional. Normal desktop configuration and launch use
+Opper directly; choose `--proxy` to use the session picker instead:
+
+```sh
+opper launch --proxy codex-desktop
+opper launch --proxy claude-desktop
+
+# Configure without launching the desktop app:
+opper agents configure --proxy codex-desktop
+opper agents configure --proxy claude-desktop
+```
+
+These commands start or reuse the local background bridge, save the app's
+provider configuration, and open the picker. Configuration alone does not launch
+the app. Quit and reopen the app when changing routing mode; selecting a session
+afterward does not require restarting it. The saved routing continues to apply
+to future app launches. Existing Codex tasks may retain their previous provider.
+
+Run the same command without `--proxy` to restore direct Opper routing, preserving
+the same key, model, explicit Opper project and Codex home options. Use
+`opper agents remove <agent>` to remove the integration. Direct routing does not
+require the local bridge. Switching an app back does not stop the bridge, since
+another app may still be using it; use `opper desktop stop` when it is no longer
+needed.
+
+`--state-dir <path>` selects a separate bridge; `--no-open` prints its picker link
+instead of opening a browser. Both require `--proxy`. Proxy sessions are selected
+in the picker, so `--proxy` cannot be combined with per-launch `--tag` flags.
+Proxy mode requires a stored CLI credential slot, not `OPPER_API_KEY`.
+
+For an isolated macOS Codex trial from this checkout, build the CLI and start the bridge:
 
 ```sh
 npm run build

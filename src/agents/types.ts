@@ -4,7 +4,15 @@ export interface DetectResult {
   configPath?: string;
 }
 
+/** Opt-in desktop inference routing; the credential is local to this computer. */
+export interface DesktopProxy {
+  baseUrl: string;
+  token: string;
+  stateDir: string;
+}
+
 export interface OpperRouting {
+  desktopProxy?: DesktopProxy;
   /** Selected stored credential, for desktop integrations that outlive launch. */
   keyName?: string;
   /** Original API root for model discovery, before the inference session path. */
@@ -19,6 +27,7 @@ export interface OpperRouting {
 }
 
 export interface ConfigureOptions {
+  desktopProxy?: DesktopProxy;
   /** API key for adapters that bake the key into their config. */
   apiKey?: string;
   projectUuid?: string | undefined;

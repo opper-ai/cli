@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { readFileSync as readFileSyncReal } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -531,6 +531,98 @@ const ROUTING = {
   model: "claude-opus-5",
   compatShape: "openai" as const,
 };
+
+describe("claude-desktop adapter — opt-in desktop proxy", () => {
+  let home: string;
+  let profilePath: string;
+  let metaPath: string;
+  let normalPath: string;
+  const desktopProxy = {baseUrl: "http://127.0.0.1:45752", token: "local-proxy-token", stateDir: "/synthetic/state"};
+  beforeEach(() => {
+    platformMock.mockReturnValue("darwin");
+    home = makeTempHome(); homedirMock.mockReturnValue(home);
+    const base = join(home, "Library", "Application Support");
+    profilePath = join(base, "Claude-3p", "configLibrary", "727f05c8-a429-43cc-b1c6-36d8883d98b8.json");
+    metaPath = join(base, "Claude-3p", "configLibrary", "_meta.json");
+    normalPath = join(base, "Claude", "claude_desktop_config.json");
+    runMock.mockReset(); runMock.mockReturnValue(ok());
+  });
+  afterEach(() => rmSync(home, {recursive: true, force: true}));
+  const readJSON = (path: string) => JSON.parse(readFileSyncReal(path, "utf8"));
+
+  it("writes only the local token and recognizes the configured managed loopback gateway", async () => {
+    await claudeDesktop.configure({apiKey: "real-upstream-key", desktopProxy, projectUuid: "synthetic-project"});
+    expect(readJSON(profilePath)).toMatchObject({inferenceGatewayBaseUrl: "http://127.0.0.1:45752/v3/compat", inferenceGatewayApiKey: "local-proxy-token", inferenceGatewayAuthScheme: "bearer"});
+    expect(readFileSyncReal(profilePath, "utf8")).not.toContain("real-upstream-key");
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+  });
+
+  it("transitions direct to proxy and back using one managed profile", async () => {
+    await claudeDesktop.configure({apiKey: "direct-key"});
+    await claudeDesktop.configure({apiKey: "direct-key", desktopProxy});
+    expect(readJSON(profilePath).inferenceGatewayApiKey).toBe("local-proxy-token");
+    await claudeDesktop.configure({apiKey: "replacement-direct-key"});
+    expect(readJSON(profilePath)).toMatchObject({inferenceGatewayBaseUrl: "https://api.opper.ai/v3/compat", inferenceGatewayApiKey: "replacement-direct-key"});
+    expect(readJSON(metaPath).entries.filter((entry: {name:string}) => entry.name === "Opper")).toHaveLength(1);
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+  });
+
+  it("spawns through the proxy with the selected model and retains the existing restart workflow", async () => {
+    let checks = 0;
+    runMock.mockImplementation((command: string) => command === "pgrep" ? ok(++checks === 1 ? "12345\n" : "") : ok());
+    await expect(claudeDesktop.spawn!([], {...ROUTING, apiBaseUrl: "https://api.opper.ai", apiKey: "real-upstream-key", model: "claude-sonnet-5", desktopProxy, projectUuid: "synthetic-project"})).resolves.toBe(0);
+    expect(readJSON(profilePath)).toMatchObject({inferenceGatewayApiKey: "local-proxy-token", inferenceModels: [{name: "claude-sonnet-5"}, ...CURRENT_CLAUDE_MODELS.filter((name) => name !== "claude-sonnet-5").map((name) => ({name}))]});
+    expect(readFileSyncReal(profilePath, "utf8")).not.toContain("real-upstream-key");
+    expect(runMock).toHaveBeenCalledWith("osascript", ["-e", 'tell application "Claude" to quit']);
+    expect(runMock).toHaveBeenCalledWith("open", ["-a", "Claude"]);
+  });
+
+  it("removes a managed proxy without removing unrelated profile fields", async () => {
+    await claudeDesktop.configure({apiKey: "real-upstream-key", desktopProxy});
+    writeFileSync(profilePath, JSON.stringify({...readJSON(profilePath), unrelated: "keep"}));
+    await claudeDesktop.unconfigure();
+    expect(readJSON(profilePath)).toMatchObject({unrelated: "keep", disableDeploymentModeChooser: false});
+    expect(readJSON(profilePath).inferenceGatewayApiKey).toBeUndefined();
+    expect(readJSON(profilePath).inferenceGatewayBaseUrl).toBeUndefined();
+    expect(readJSON(normalPath).deploymentMode).toBe("1p");
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+  });
+
+  it("does not classify or remove another remote gateway using the same profile ID", async () => {
+    await claudeDesktop.configure({apiKey: "direct-key"});
+    writeFileSync(profilePath, JSON.stringify({...readJSON(profilePath), inferenceGatewayBaseUrl: "https://other.example/v3/compat", inferenceGatewayApiKey: "other-key"}));
+    const before = [profilePath, metaPath, normalPath].map((path) => readFileSyncReal(path, "utf8"));
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+    await claudeDesktop.unconfigure();
+    expect([profilePath, metaPath, normalPath].map((path) => readFileSyncReal(path, "utf8"))).toEqual(before);
+  });
+
+  it("does not classify ambiguous loopback URLs or an inactive managed profile as the active gateway", async () => {
+    await claudeDesktop.configure({apiKey: "real-key", desktopProxy});
+    const profile = readJSON(profilePath);
+    for (const inferenceGatewayBaseUrl of ["http://localhost:45752/v3/compat", "http://127.1:45752/v3/compat", "http://127.0.0.1:45752/v3/compat?extra=x", "http://127.0.0.1:65536/v3/compat", "http://127.0.0.1:45752.evil.example/v3/compat", "http://127.0.0.1:45752/other/v3/compat"]) {
+      writeFileSync(profilePath, JSON.stringify({...profile, inferenceGatewayBaseUrl}));
+      expect(await claudeDesktop.isConfigured()).toBe(false);
+    }
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const meta = readJSON(metaPath);
+    writeFileSync(metaPath, JSON.stringify({...meta, appliedId: "user-other", entries: [...meta.entries, {id: "user-other", name: "Other"}]}));
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+    await claudeDesktop.unconfigure();
+    expect(readJSON(metaPath)).toMatchObject({appliedId: "user-other", entries: [{id: "user-other", name: "Other"}]});
+    expect(readJSON(normalPath).deploymentMode).toBe("3p");
+    expect(readJSON(profilePath).inferenceGatewayApiKey).toBeUndefined();
+  });
+
+  it("rejects invalid proxy URLs and empty local credentials before writing", async () => {
+    for (const baseUrl of ["https://other.example", "http://127.0.0.1:45752/path", "http://127.0.0.1:45752?next=x", "http://user:pass@127.0.0.1:45752", "http://127.0.0.1:45752.evil.example", "http://localhost:45752", "http://127.0.0.1:65536", "http://127.0.0.1:0"]) {
+      await expect(claudeDesktop.configure({apiKey: "real-key", desktopProxy: {...desktopProxy, baseUrl}})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    }
+    await expect(claudeDesktop.configure({apiKey: "real-key", desktopProxy: {...desktopProxy, token: " "}})).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(readJSON.bind(null, profilePath)).toThrow();
+    expect(runMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("claude-desktop adapter — spawn (macOS)", () => {
   let home: string;

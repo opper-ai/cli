@@ -39,8 +39,17 @@ const register: RegisterFn = (program, ctx) => {
     .description("Configure an agent to use the selected Opper key without launching it")
     .option("--model <id>", "Opper model identifier (where supported)")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
-    .action(async (name: string, opts: { model?: string; codexHome?: string }) => {
-      await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.());
+    .option("--proxy", "configure the local desktop session proxy (codex-desktop or claude-desktop)")
+    .option("--state-dir <path>", "local proxy state directory (requires --proxy)")
+    .option("--no-open", "print the session picker link without opening a browser (requires --proxy)")
+    .action(async (name: string, opts: { model?: string; codexHome?: string; proxy?: boolean; stateDir?: string; open?: boolean }) => {
+      if (opts.proxy || opts.stateDir !== undefined || opts.open === false) {
+        await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.(), {
+          ...(opts.proxy ? { proxy: true } : {}),
+          ...(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {}),
+          ...(opts.open === false ? { open: false } : {}),
+        });
+      } else await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.());
     });
 
   agentsCmd
@@ -73,6 +82,9 @@ const register: RegisterFn = (program, ctx) => {
     .option("--model <id>", "Opper model identifier")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--install", "install the agent if missing", false)
+    .option("--proxy", "use the local desktop session proxy (codex-desktop or claude-desktop)")
+    .option("--state-dir <path>", "local proxy state directory (requires --proxy)")
+    .option("--no-open", "print the session picker link without opening a browser (requires --proxy)")
     .option(
       "--project",
       "write the Opper config into the cwd-local project config (where supported, e.g. opencode) instead of the user-level config",
@@ -95,6 +107,9 @@ const register: RegisterFn = (program, ctx) => {
           install?: boolean;
           project?: boolean;
           tag?: Record<string, string>;
+          proxy?: boolean;
+          stateDir?: string;
+          open?: boolean;
         },
         cmd,
       ) => {
@@ -105,6 +120,9 @@ const register: RegisterFn = (program, ctx) => {
           ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
           ...(cmdOpts.codexHome !== undefined ? { codexHome: cmdOpts.codexHome } : {}),
+          ...(cmdOpts.proxy ? { proxy: true } : {}),
+          ...(cmdOpts.stateDir !== undefined ? { stateDir: cmdOpts.stateDir } : {}),
+          ...(cmdOpts.open === false ? { open: false } : {}),
           ...(cmdOpts.install ? { install: true } : {}),
           ...(cmdOpts.project ? { configScope: "project" as const } : {}),
           ...(cmdOpts.tag && Object.keys(cmdOpts.tag).length > 0

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopStatusCommand, desktopOpenCommand, desktopStopCommand, readDesktopRuntime, resolveDesktopApiContext } from "../../src/commands/desktop.js";
+import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopStatusCommand, desktopOpenCommand, desktopStopCommand, readDesktopRuntime, resolveDesktopApiContext, prepareDesktopProxy } from "../../src/commands/desktop.js";
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
 
 let directory: string;
@@ -73,6 +73,13 @@ async function inference(url: string, token: string) {
 }
 
 describe("desktop command lifecycle", () => {
+  it("prepares a reusable loopback route for launching without exposing the inference token", async () => {
+    const manifest = await start();
+    const prepared = await prepareDesktopProxy({ key: "work", stateDir });
+    expect(prepared.proxy).toEqual({ baseUrl: manifest.url, token: manifest.token, stateDir });
+    expect(await resolveDesktopApiContext(stateDir)).toEqual({ apiKey: slot.apiKey, baseUrl: origin });
+    expect(vi.mocked(console.log).mock.calls.flat().join("\n")).not.toContain(manifest.token);
+  });
   it("pins catalog preparation to the bridge host and owner while allowing same-owner renewal", async () => {
     await start();
     expect(await resolveDesktopApiContext(stateDir)).toEqual({ apiKey: slot.apiKey, baseUrl: origin });

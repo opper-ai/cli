@@ -118,6 +118,38 @@ try {
 }
 `;
 
+// Read only the local bridge's credential; the upstream key remains with the bridge.
+const PROXY_AUTH_HELPER = `import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const [stateDir, expectedEndpoint] = process.argv.slice(2);
+let file;
+try {
+  const directory = lstatSync(stateDir);
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
+  file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
+  const info = fstatSync(file);
+  if (!info.isFile() || (info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid()) || info.size > 16384) throw new Error("invalid file");
+  const bridge = JSON.parse(readFileSync(file, "utf8"));
+  if (bridge.version !== 1 || typeof bridge.url !== "string" || typeof bridge.token !== "string" || !/^[a-f0-9]{64}$/.test(bridge.token) || !Number.isSafeInteger(bridge.pid) || bridge.pid <= 0) throw new Error("invalid runtime");
+  const endpoint = new URL(bridge.url);
+  if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.origin !== expectedEndpoint) throw new Error("changed endpoint");
+  process.kill(bridge.pid, 0);
+  process.stdout.write(bridge.token);
+} catch {
+  process.stderr.write("The local Opper desktop bridge is unavailable or its endpoint changed. Start the bridge and relaunch Codex desktop with opper --proxy.\\n");
+  process.exitCode = 1;
+} finally { if (file !== undefined) closeSync(file); }
+`;
+
+function proxySettings(proxy: NonNullable<ConfigureOptions["desktopProxy"]>) {
+  let endpoint: URL;
+  try {endpoint = new URL(proxy.baseUrl);} catch {throw new OpperError("INVALID_ARGUMENT", "Desktop proxy must use an HTTP endpoint on 127.0.0.1 with an explicit port.");}
+  if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || !proxy.stateDir?.trim() || !/^[a-f0-9]{64}$/.test(proxy.token)) {
+    throw new OpperError("INVALID_ARGUMENT", "Desktop proxy requires a local HTTP root endpoint, private state directory and local credential.");
+  }
+  return {baseUrl: endpoint.origin, stateDir: resolve(proxy.stateDir)};
+}
+
 interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; }
 async function readState(path: string): Promise<StoredState | undefined> {
   const raw = await readOptional(path);
@@ -139,7 +171,7 @@ async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { await rm(p.lock, { recursive: true }); }
 }
 
-interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; }
+interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; proxyStateDir?: string; }
 
 async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Codex Desktop requires a stored Opper credential so Finder launches can refresh it.", "Store the key in its own CLI slot and unset OPPER_API_KEY before configuring or launching Codex Desktop.");
@@ -151,6 +183,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${keyName}"`, "Run `opper login` first.");
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
+  const proxy = opts.desktopProxy ? proxySettings(opts.desktopProxy) : undefined;
   const model = opts.model ?? DEFAULT_MODELS.opus;
   const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model);
   await locked(home, async () => {
@@ -159,9 +192,10 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
     const provider = {
-      name: "Opper", base_url: `${baseUrl}/v3/compat`, wire_api: "responses",
-      ...(opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
-      auth: { command: await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
+      name: "Opper", base_url: `${proxy?.baseUrl ?? baseUrl}/v3/compat`, wire_api: "responses",
+      ...(proxy ? {supports_websockets: false} : {}),
+      ...(!proxy && opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
+      auth: { command: await nodeLauncher(), args: proxy ? [p.auth, proxy.stateDir, proxy.baseUrl] : [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
@@ -171,7 +205,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     const backups = new Map<string, string | null>();
     for (const file of [p.auth, p.catalog, p.state]) backups.set(file, await readOptional(file));
     try {
-      await atomicWrite(p.auth, AUTH_HELPER);
+      await atomicWrite(p.auth, proxy ? PROXY_AUTH_HELPER : AUTH_HELPER);
       await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
       await atomicWrite(p.state, JSON.stringify(state, null, 2) + "\n");
       if (await readOptional(p.config) !== existing) throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during setup. Retry to preserve those edits.");
@@ -184,7 +218,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
       throw e;
     }
   });
-  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid };
+  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid, ...(proxy ? {proxyStateDir: proxy.stateDir} : {}) };
 }
 
 function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
@@ -194,6 +228,7 @@ function launchCommand(settings: ConfiguredDesktop): string {
   if (process.env.CODEX_ELECTRON_USER_DATA_PATH) args.push(`CODEX_ELECTRON_USER_DATA_PATH=${resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH)}`);
   args.push("opper", "--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home);
   if (settings.projectUuid) args.push("--project-uuid", settings.projectUuid);
+  if (settings.proxyStateDir) args.push("--proxy", "--state-dir", settings.proxyStateDir);
   return args.map(shellQuote).join(" ");
 }
 function reopenHint(settings: ConfiguredDesktop): string {
@@ -243,7 +278,7 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   if (args.length) throw new OpperError("INVALID_ARGUMENT", "codex-desktop does not accept passthrough arguments.");
   const app = requireApp();
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
-  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
+  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
   const executable = run("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", join(app.app, "Contents", "Info.plist")]);
   const binary = join(app.app, "Contents", "MacOS", executable.stdout.trim() || "ChatGPT");

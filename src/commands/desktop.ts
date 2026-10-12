@@ -4,7 +4,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import type { DesktopProxy } from "../agents/types.js";
 import lockfile from "proper-lockfile";
 import { getSlot, isSlotExpired, type AuthSlot } from "../auth/config.js";
 import { opperHome } from "../auth/paths.js";
@@ -38,6 +39,26 @@ interface DesktopConnection {
   origin: string;
   projectUuid?: string;
   identityFingerprint: string;
+}
+
+export interface DesktopRoutingOptions {
+  proxy?: boolean;
+  stateDir?: string;
+  open?: boolean;
+}
+export function validateDesktopRoutingOptions(agent: string, opts: DesktopRoutingOptions & {tags?: Record<string, string>}): void {
+  if (opts.proxy && !["codex-desktop", "claude-desktop"].includes(agent)) {
+    throw new OpperError("INVALID_ARGUMENT", "--proxy is supported only for codex-desktop and claude-desktop.");
+  }
+  if ((opts.stateDir !== undefined || opts.open === false) && !opts.proxy) {
+    throw new OpperError("INVALID_ARGUMENT", "--state-dir and --no-open require --proxy.");
+  }
+  if (opts.proxy && Object.keys(opts.tags ?? {}).length) {
+    throw new OpperError("INVALID_ARGUMENT", "Choose tags in the desktop session picker when using --proxy; --tag applies to direct CLI launches.");
+  }
+  if (opts.proxy && process.env.OPPER_API_KEY) {
+    throw new OpperError("INVALID_ARGUMENT", "Desktop proxy requires a stored credential slot; unset OPPER_API_KEY.");
+  }
 }
 export interface DesktopManifest {
   version: 1;
@@ -428,8 +449,8 @@ export async function desktopStopCommand(opts: DesktopStateOptions): Promise<voi
   throw new OpperError("NETWORK_ERROR", "Desktop bridge acknowledged stop but has not finished shutting down.", "Wait for its foreground process to finish before restarting it.");
 }
 
-/** Open the local picker, reusing a compatible service or starting a detached CLI process. */
-export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ url: string }> {
+/** Reuse a compatible service, or start a detached CLI process. */
+async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopManifest> {
   const { origin, fingerprint } = await startupCredential(opts);
   const directory = stateDirectory(opts);
   await ensurePrivateDirectory(directory, true);
@@ -474,6 +495,12 @@ export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ ur
       if (!manifest) throw new OpperError("NETWORK_ERROR", "Desktop bridge did not become ready within ten seconds.", `Inspect the private log at ${join(directory, "bridge.log")}.`);
     } finally { await log.close(); }
   }
+  return manifest;
+}
+
+/** Open the local picker after the bound service is ready. */
+export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ url: string }> {
+  const manifest = await ensureDesktopBridge(opts);
   const result = await requestControl(manifest, "open");
   const launch = result.value as {url?: unknown};
   if (typeof launch?.url !== "string") throw error("Desktop bridge returned an invalid picker URL.");
@@ -483,4 +510,11 @@ export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ ur
   // A one-use local browser ticket, never the inference token or an Opper key.
   console.log(`Desktop sessions: ${url.href}`);
   return { url: url.href };
+}
+
+/** Start/reuse the bound bridge, but defer opening its picker until app setup succeeds. */
+export async function prepareDesktopProxy(opts: Omit<DesktopOpenOptions, "open">): Promise<{proxy: DesktopProxy}> {
+  const manifest = await ensureDesktopBridge(opts);
+  const directory = resolve(stateDirectory(opts));
+  return { proxy: { baseUrl: manifest.url, token: manifest.token, stateDir: directory } };
 }
