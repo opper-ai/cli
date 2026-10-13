@@ -138,7 +138,12 @@ async function readPrivateJson(directory: string, name: string): Promise<unknown
       throw error(`Local proxy ${name} must be a private regular file owned by the current user (mode 0600).`);
     }
     if (process.platform === "win32") {
-      try { await assertPrivateStateFile(join(directory, name)); } catch { throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`); }
+      try { await assertPrivateStateFile(join(directory, name)); } catch (cause) {
+        // Startup can remove its stale manifest after this reader opened it.
+        // Never consume the old handle when pathname validation reports it missing.
+        if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`);
+      }
     }
     try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed local proxy ${name}.`); }
   } finally { await file.close(); }
