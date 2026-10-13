@@ -85,6 +85,7 @@ describe("checkForUpdate", () => {
   let tmpDir: string;
   const savedEnv: Record<string, string | undefined> = {};
   let restoreTty: () => void;
+  let savedExitListeners: Set<ReturnType<typeof process.rawListeners>[number]>;
 
   function stubTty(value: boolean): void {
     const original = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
@@ -105,16 +106,21 @@ describe("checkForUpdate", () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "update-check-test-"));
-    for (const k of ["XDG_CACHE_HOME", "NO_UPDATE_NOTIFIER", "CI"]) {
+    for (const k of ["XDG_CACHE_HOME", "NO_UPDATE_NOTIFIER", "CI", "OPPER_DISTRIBUTION"]) {
       savedEnv[k] = process.env[k];
     }
     process.env.XDG_CACHE_HOME = tmpDir;
     delete process.env.NO_UPDATE_NOTIFIER;
     delete process.env.CI;
+    delete process.env.OPPER_DISTRIBUTION;
+    savedExitListeners = new Set(process.rawListeners("exit"));
     stubTty(true);
   });
 
   afterEach(() => {
+    for (const listener of process.rawListeners("exit")) {
+      if (!savedExitListeners.has(listener)) process.removeListener("exit", listener);
+    }
     restoreTty?.();
     for (const [k, v] of Object.entries(savedEnv)) {
       if (v === undefined) delete process.env[k];
@@ -143,6 +149,141 @@ describe("checkForUpdate", () => {
     vi.stubGlobal("fetch", fn);
     return fn;
   }
+
+  function bundleCacheFile(): string {
+    return join(tmpDir, "opper", "update-check-bundle.json");
+  }
+
+  function mockRelease(tag = "v1.0.0", fields = {}): ReturnType<typeof vi.fn> {
+    const fn = vi.fn(async () => new Response(JSON.stringify({ tag_name: tag, draft: false, prerelease: false, ...fields }), { status: 200 }));
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  function newExitListeners() {
+    return process.rawListeners("exit").filter((listener) => !savedExitListeners.has(listener));
+  }
+
+  it("ignores an npm-only newer version when the published bundle release is current", async () => {
+    seedCache("1.1.0");
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    const fetchMock = mockRelease("v1.0.0");
+    await checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+    expect(newExitListeners()).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledWith("https://api.github.com/repos/opper-ai/cli/releases/latest", expect.objectContaining({
+      signal: expect.any(AbortSignal),
+      headers: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" },
+    }));
+    expect(JSON.parse(readFileSync(bundleCacheFile(), "utf8")).latest).toBe("1.0.0");
+    expect(JSON.parse(readFileSync(cacheFile(), "utf8")).latest).toBe("1.1.0");
+  });
+
+  it("uses the fresh bundle cache without fetching npm or GitHub", async () => {
+    seedCache("1.1.0");
+    writeFileSync(bundleCacheFile(), JSON.stringify({ checkedAt: Date.now(), latest: "1.0.0" }));
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    const fetchMock = mockRelease("v1.2.0");
+    await checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(newExitListeners()).toHaveLength(0);
+  });
+
+  it("advertises a published newer GitHub bundle with captured installer instructions", async () => {
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    const fetchMock = mockRelease("v1.1.0");
+    await checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(existsSync(cacheFile())).toBe(false);
+    const handlers = newExitListeners();
+    expect(handlers).toHaveLength(1);
+    // Environment changes before exit must not change this check's distribution.
+    delete process.env.OPPER_DISTRIBUTION;
+    const write = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      handlers[0]!(0);
+      const notice = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(notice).toContain("1.1.0");
+      expect(notice).toContain("mise up");
+      expect(notice).not.toContain("npm i -g");
+    } finally { write.mockRestore(); }
+  });
+
+  it.each([
+    ["draft", { tag_name: "v1.1.0", draft: true, prerelease: false }],
+    ["prerelease", { tag_name: "v1.1.0", draft: false, prerelease: true }],
+    ["prerelease tag", { tag_name: "v1.1.0-rc.1", draft: false, prerelease: false }],
+    ["malformed tag", { tag_name: "version-1.1.0", draft: false, prerelease: false }],
+    ["incomplete version", { tag_name: "v1.1", draft: false, prerelease: false }],
+    ["leading zero", { tag_name: "v01.1.0", draft: false, prerelease: false }],
+    ["missing metadata", { tag_name: "v1.1.0" }],
+    ["null body", null],
+  ])("silently ignores a GitHub %s response", async (_name, body) => {
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status: 200 })));
+    await expect(checkForUpdate({ name: "@opperai/cli", version: "1.0.0" })).resolves.toBeUndefined();
+    expect(newExitListeners()).toHaveLength(0);
+    expect(existsSync(bundleCacheFile())).toBe(false);
+  });
+
+  it.each(["404", "network"])("silently ignores GitHub %s without using the npm cache", async (failure) => {
+    seedCache("1.1.0");
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      if (failure === "network") throw new Error("offline");
+      return new Response("{}", { status: 404 });
+    }));
+    await expect(checkForUpdate({ name: "@opperai/cli", version: "1.0.0" })).resolves.toBeUndefined();
+    expect(newExitListeners()).toHaveLength(0);
+    expect(existsSync(bundleCacheFile())).toBe(false);
+  });
+
+  it("captures the bundle distribution before asynchronous discovery and cache writes", async () => {
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      delete process.env.OPPER_DISTRIBUTION;
+      return new Response(JSON.stringify({ tag_name: "v1.0.0", draft: false, prerelease: false }), { status: 200 });
+    }));
+    await checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+    expect(JSON.parse(readFileSync(bundleCacheFile(), "utf8")).latest).toBe("1.0.0");
+    expect(existsSync(cacheFile())).toBe(false);
+  });
+
+  it("aborts a stalled GitHub check within the existing timeout and stays silent", async () => {
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn((_url: string, options: RequestInit) => {
+      signal = options.signal as AbortSignal;
+      return new Promise((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+    }));
+    vi.useFakeTimers();
+    try {
+      const check = checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(check).resolves.toBeUndefined();
+      expect(signal?.aborted).toBe(true);
+      expect(newExitListeners()).toHaveLength(0);
+      expect(existsSync(bundleCacheFile())).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("continues when the bundle cache cannot be written", async () => {
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    writeFileSync(join(tmpDir, "opper"), "Block the cache directory.");
+    mockRelease("v1.1.0");
+    await expect(checkForUpdate({ name: "@opperai/cli", version: "1.0.0" })).resolves.toBeUndefined();
+    expect(newExitListeners()).toHaveLength(1);
+    expect(existsSync(bundleCacheFile())).toBe(false);
+  });
+
+  it("uses a previously published stale bundle cache when GitHub is unavailable", async () => {
+    seedCache("2.0.0");
+    writeFileSync(bundleCacheFile(), JSON.stringify({ checkedAt: Date.now() - 2 * 60 * 60 * 1000, latest: "1.1.0" }));
+    process.env.OPPER_DISTRIBUTION = "bundle";
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    await checkForUpdate({ name: "@opperai/cli", version: "1.0.0" });
+    expect(newExitListeners()).toHaveLength(1);
+    expect(JSON.parse(readFileSync(bundleCacheFile(), "utf8")).latest).toBe("1.1.0");
+  });
 
   it("fetches latest from npm and writes cache when no cache exists", async () => {
     mockFetch("1.0.0");
