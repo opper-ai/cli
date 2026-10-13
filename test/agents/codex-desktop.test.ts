@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -48,6 +48,8 @@ const { toCodexModelCatalog } = await import("../../src/setup/codex-models.js");
 const API_ROOT = "https://gateway.example/tenant";
 const MODEL = "claude-sonnet-5";
 const KEY = "fixture-prod-key-not-a-real-credential";
+const ORIGINAL_EXEC_PATH = process.execPath;
+const NODE_NAME = process.platform === "win32" ? "node.exe" : "node";
 const ORIGINAL = '# personal defaults\nmodel = "gpt-5.5" # chosen model\nmodel_provider = "openai"\n\n[features]\nmulti_agent = true\n\n[projects."/personal/project"]\ntrust_level = "trusted"\n\n[mcp_servers.notes]\ncommand = "notes"\n';
 
 let home: string;
@@ -101,6 +103,7 @@ beforeEach(async () => {
   vi.stubEnv("OPPER_API_KEY", undefined);
   vi.stubEnv("OPPER_BASE_URL", undefined);
   vi.stubEnv("CODEX_ELECTRON_USER_DATA_PATH", undefined);
+  vi.stubEnv("OPPER_DISTRIBUTION", undefined);
   mocks.homedir.mockReturnValue(home);
   mocks.platform.mockReturnValue("darwin");
   mocks.apps.clear();
@@ -125,6 +128,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  process.execPath = ORIGINAL_EXEC_PATH;
   vi.unstubAllEnvs();
   rmSync(home, { recursive: true, force: true });
 });
@@ -231,6 +235,101 @@ describe("Codex desktop detection", () => {
 });
 
 describe("Codex desktop configuration and credentials", () => {
+  function useBundleRuntime(license = true) {
+    const bundle = join(home, "mise version", "lib");
+    mkdirSync(bundle, { recursive: true });
+    if (process.platform === "win32") copyFileSync(ORIGINAL_EXEC_PATH, join(bundle, NODE_NAME));
+    else {
+      // Homebrew's Node launcher is dynamically linked and cannot relocate.
+      // This executable fixture runs the real helper with the test interpreter;
+      // bundle smoke/integration checks exercise the official self-contained Node.
+      const executable = "'" + ORIGINAL_EXEC_PATH.replace(/'/g, "'\\''") + "'";
+      writeFileSync(join(bundle, NODE_NAME), `#!/bin/sh\nexec ${executable} "$@"\n`, { mode: 0o700 });
+    }
+    if (license) writeFileSync(join(bundle, "NODE-LICENSE"), "Fixture Node and third-party license notices.\n");
+    process.execPath = join(bundle, NODE_NAME);
+    vi.stubEnv("OPPER_DISTRIBUTION", "bundle");
+    return bundle;
+  }
+
+  it("keeps bundled desktop credentials working after the original bundle is pruned and removes owned runtime files", async () => {
+    const bundle = useBundleRuntime();
+    await codexDesktop.configure(options());
+    const auth = provider().auth as { command: string; args: string[] };
+    expect(auth.command).toBe(join(codexHome, "opper-desktop", NODE_NAME));
+    expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toContain("third-party license notices");
+    const execute = () => spawnSync(auth.command, auth.args, {
+      encoding: "utf8", timeout: 5_000, env: { PATH: "", HOME: home },
+    });
+    expect(execute().stdout).toBe(KEY);
+    rmSync(bundle, { recursive: true });
+    expect(execute()).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
+    const note = join(codexHome, "opper-desktop", "personal-note.txt");
+    writeFileSync(note, "Keep this user file.");
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.realExists(auth.command)).toBe(false);
+    expect(mocks.realExists(join(codexHome, "opper-desktop", "NODE-LICENSE"))).toBe(false);
+    expect(readFileSync(note, "utf8")).toBe("Keep this user file.");
+  });
+
+  it.each([NODE_NAME, "NODE-LICENSE"])("rejects an unmanaged bundled %s even in a configured integration", async (file) => {
+    await codexDesktop.configure(options());
+    const existing = configText();
+    const target = join(codexHome, "opper-desktop", file);
+    writeFileSync(target, "User-owned file.");
+    useBundleRuntime();
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(configText()).toBe(existing);
+    expect(readFileSync(target, "utf8")).toBe("User-owned file.");
+    await codexDesktop.unconfigure();
+    expect(readFileSync(target, "utf8")).toBe("User-owned file.");
+  });
+
+  it("rolls back bundled runtime installation when the source license is missing", async () => {
+    await codexDesktop.configure(options());
+    const existing = configText();
+    const state = readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8");
+    useBundleRuntime(false);
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(configText()).toBe(existing);
+    expect(readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8")).toBe(state);
+    expect(mocks.realExists(join(codexHome, "opper-desktop", NODE_NAME))).toBe(false);
+    expect(mocks.realExists(join(codexHome, "opper-desktop", "NODE-LICENSE"))).toBe(false);
+  });
+
+  it("refreshes an owned runtime and rolls back a failed upgrade without changing the working helper", async () => {
+    const bundle = useBundleRuntime();
+    await codexDesktop.configure(options());
+    const auth = provider().auth as { command: string; args: string[] };
+    const firstLicense = readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8");
+    const firstRuntime = readFileSync(auth.command);
+    // A shell comment on POSIX and ignored PE overlay bytes on Windows make
+    // this executable distinguishable from the preceding fixture release.
+    appendFileSync(join(bundle, NODE_NAME), "\n# fixture runtime upgrade\n");
+    writeFileSync(join(bundle, "NODE-LICENSE"), `${firstLicense}Updated release notices.\n`);
+    await codexDesktop.configure(options({ model: "claude-opus-5" }));
+    expect(readFileSync(auth.command)).not.toEqual(firstRuntime);
+    expect(readFileSync(auth.command)).toEqual(readFileSync(join(bundle, NODE_NAME)));
+    expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toContain("Updated release notices.");
+    expect(readDesktopConfig(configText()).model).toBe("claude-opus-5");
+    const runtime = readFileSync(auth.command);
+    const mode = lstatSync(auth.command).mode & 0o777;
+    const license = readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8");
+    const config = configText();
+    const state = readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8");
+    // The runtime write succeeds before the missing license aborts the upgrade.
+    writeFileSync(join(bundle, NODE_NAME), "broken replacement runtime");
+    rmSync(join(bundle, "NODE-LICENSE"));
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(readFileSync(auth.command)).toEqual(runtime);
+    expect(lstatSync(auth.command).mode & 0o777).toBe(mode);
+    expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toBe(license);
+    expect(configText()).toBe(config);
+    expect(readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8")).toBe(state);
+    expect(spawnSync(auth.command, auth.args, { encoding: "utf8", timeout: 5_000, env: { PATH: "", HOME: home } })).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
+  });
+
   it("uses the selected slot and host for discovery and writes persistent keyless configuration", async () => {
     await codexDesktop.configure(options());
     expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT }, MODEL);
@@ -277,7 +376,7 @@ describe("Codex desktop configuration and credentials", () => {
     expect(mocks.realExists(join(codexHome, "opper-desktop"))).toBe(false);
   });
 
-  it.each(["config.toml", "opper-desktop/auth.mjs", "opper-desktop/catalog.json", "opper-desktop/state.json", "opper-desktop"])(
+  it.each(["config.toml", "opper-desktop/auth.mjs", "opper-desktop/catalog.json", "opper-desktop/state.json", `opper-desktop/${NODE_NAME}`, "opper-desktop/NODE-LICENSE", "opper-desktop"])(
     "preserves linked %s and its target instead of configuring through it",
     async (relativePath) => {
       const linked = join(codexHome, relativePath);
