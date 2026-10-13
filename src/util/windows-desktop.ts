@@ -11,7 +11,7 @@ export function powerShellLiteral(value: string): string {
 /** Query registered packages for the current user; read executable and AUMID from their manifest. */
 export function windowsDesktopApps(packageName: "OpenAI.Codex" | "Claude"): WindowsDesktopApp[] {
   const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $items = @(); foreach ($package in @(Get-AppxPackage -Name ${powerShellLiteral(packageName)} -ErrorAction SilentlyContinue)) { $manifest = Get-AppxPackageManifest -Package $package; foreach ($application in @($manifest.Package.Applications.Application)) { if ($application.Executable) { $items += [pscustomobject]@{installLocation=$package.InstallLocation; executable=[string]$application.Executable; aumid=($package.PackageFamilyName + '!' + $application.Id)} } } }; ConvertTo-Json -InputObject @($items) -Compress`;
-  const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+  const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {timeout: 5_000});
   if (!result || result.code !== 0 || !result.stdout.trim()) return [];
   let value: unknown;
   try { value = JSON.parse(result.stdout); } catch { return []; }

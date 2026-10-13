@@ -597,6 +597,20 @@ describe("claude-desktop adapter — opt-in desktop proxy", () => {
     expect([profilePath, metaPath, normalPath].map((path) => readFileSyncReal(path, "utf8"))).toEqual(before);
   });
 
+  it.each([
+    {inferenceGatewayBaseUrl: "http://127.0.0.1:45753/v3/compat"},
+    {inferenceGatewayApiKey: "another-local-gateway-key"},
+    {inferenceGatewayAuthScheme: "x-api-key"},
+    {inferenceModels: [{name: "another-model"}]},
+  ])("preserves an independently changed local gateway %j", async (changes) => {
+    await claudeDesktop.configure({apiKey: "real-upstream-key", desktopProxy});
+    writeFileSync(profilePath, JSON.stringify({...readJSON(profilePath), ...changes}));
+    const before = [profilePath, metaPath, normalPath].map((path) => readFileSyncReal(path, "utf8"));
+    expect(await claudeDesktop.isConfigured()).toBe(false);
+    await claudeDesktop.unconfigure();
+    expect([profilePath, metaPath, normalPath].map((path) => readFileSyncReal(path, "utf8"))).toEqual(before);
+  });
+
   it("does not classify ambiguous loopback URLs or an inactive managed profile as the active gateway", async () => {
     await claudeDesktop.configure({apiKey: "real-key", desktopProxy});
     const profile = readJSON(profilePath);
@@ -799,6 +813,9 @@ describe("Claude desktop on Windows with a local proxy", () => {
     expect(await claudeDesktop.isConfigured()).toBe(true);
     const launch = runMock.mock.calls.find(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))?.[1].at(-1);
     expect(launch).toContain(executable);
+    for (const [command, , options] of runMock.mock.calls) {
+      if (command === "powershell.exe") expect(options).toMatchObject({timeout: 5_000});
+    }
   });
   it("does not quit a customer's already running Windows app", async () => {
     running = true;

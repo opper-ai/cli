@@ -81,11 +81,21 @@ function configuredHelper() {
   expect(isAbsolute(auth.command)).toBe(true);
   expect(realpathSync(auth.command)).toBe(realpathSync(process.execPath));
   expect(auth.args.some((arg) => arg === join(codexHome, "opper-desktop", "auth.mjs"))).toBe(true);
+  const operatingSystemEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    /^(?:SystemRoot|WINDIR|SystemDrive|TEMP|TMP|USERPROFILE|LOCALAPPDATA|APPDATA)$/i.test(key)));
   return () => spawnSync(auth.command, auth.args, {
     encoding: "utf8", timeout: process.platform === "win32" ? 20_000 : 5_000,
     // Finder has neither the launch shell's key nor its Opper home override.
-    env: { PATH: process.env.PATH ?? "", HOME: join(home, "finder-home") },
+    env: { ...operatingSystemEnv, PATH: process.env.PATH ?? "", HOME: join(home, "finder-home") },
   });
+}
+function successfulHelperOutput(helper: ReturnType<typeof configuredHelper>): string {
+  const result = helper();
+  // Never include stdout in diagnostics: it contains the authentication token.
+  const diagnostics = JSON.stringify({status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    stderr: result.stderr.replaceAll(KEY, "[redacted]").replace(/[a-f0-9]{64}/g, "[redacted]")});
+  expect(result.status, diagnostics).toBe(0);
+  return result.stdout;
 }
 function allText(directory: string): string {
   return readdirSync(directory, { withFileTypes: true }).map((entry) => {
@@ -473,19 +483,19 @@ describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
     expect(allText(codexHome)).not.toContain(KEY);
     expect(allText(codexHome)).not.toContain(proxy.token);
     const helper = configuredHelper();
-    expect(helper().stdout).toBe(proxy.token);
+    expect(successfulHelperOutput(helper)).toBe(proxy.token);
     const renewed = "b".repeat(64);
     write({token: renewed});
-    expect(helper().stdout).toBe(renewed);
+    expect(successfulHelperOutput(helper)).toBe(renewed);
   });
 
   it("supports direct to proxy to direct transitions and removal restores personal settings", async () => {
     const {proxy} = await desktopProxy();
     await codexDesktop.configure(options());
-    expect(configuredHelper()().stdout).toBe(KEY);
+    expect(successfulHelperOutput(configuredHelper())).toBe(KEY);
     await codexDesktop.configure(options({desktopProxy: proxy}));
     expect(provider().base_url).toBe(`${proxy.baseUrl}/v3/compat`);
-    expect(configuredHelper()().stdout).toBe(proxy.token);
+    expect(successfulHelperOutput(configuredHelper())).toBe(proxy.token);
     await codexDesktop.configure(options());
     expect(provider().base_url).toBe(`${API_ROOT}/v3/compat`);
     expect(provider().supports_websockets).toBeUndefined();
@@ -679,7 +689,7 @@ describe("Codex desktop on Windows", {timeout: 60_000}, () => {
 
   it("discovers the registered MSIX app and its supported bundled runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({installed: true, version: "0.162.0"});
-    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"]);
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"], {timeout: 5_000});
     expect(mocks.run.mock.calls.some(([command]) => /plutil|pgrep/.test(command))).toBe(false);
   });
   it("configures the proxy and launches Windows with the selected Codex home", async () => {
@@ -691,6 +701,9 @@ describe("Codex desktop on Windows", {timeout: 60_000}, () => {
     expect(launch).toContain(executable);
     expect(launch).toContain(codexHome);
     expect(launch).toContain("CODEX_HOME");
+    for (const [command, , options] of mocks.run.mock.calls) {
+      if (command === "powershell.exe") expect(options).toMatchObject({timeout: 5_000});
+    }
     expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(false);
   });
   it("leaves a running Windows app available and reports restart guidance", async () => {
@@ -721,7 +734,7 @@ describe("Codex desktop on Windows", {timeout: 60_000}, () => {
     runtime = join(appRoot, "resources", "runtime-v2", "tools", "codex.exe");
     mkdirSync(dirname(runtime), {recursive: true}); writeFileSync(runtime, "fixture");
     expect(await codexDesktop.detect()).toMatchObject({installed: true, version: "0.162.0"});
-    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"]);
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"], {timeout: 5_000});
   });
   it("refuses Windows process-inspection failures without launching another app", async () => {
     const run = mocks.run.getMockImplementation()!;

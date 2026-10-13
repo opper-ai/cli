@@ -62,7 +62,7 @@ function findWindowsApp(): DesktopApp | null {
   for (const app of windowsDesktopApps("OpenAI.Codex")) {
     const runtime = windowsRuntime(app.executable);
     if (!runtime) continue;
-    const result = run(runtime, ["--version"]);
+    const result = run(runtime, ["--version"], {timeout: 5_000});
     const version = result.stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/)?.[1];
     if (result.code !== 0 || !version) continue;
     const found: DesktopApp = {app: app.installLocation, runtime, version, executable: app.executable, aumid: app.aumid};
@@ -342,7 +342,7 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
   if (platform() === "win32") {
-    const processState = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id"]);
+    const processState = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id"], {timeout: 5_000});
     if (processState.code !== 0) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the app's running state could not be checked.", reopenHint(settings));
     if (processState.stdout.trim() && !userData) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the Codex/ChatGPT app is already running.", reopenHint(settings));
     if (!app.executable) throw new OpperError("AGENT_NOT_FOUND", "The registered Codex desktop executable is unavailable.", reopenHint(settings));
@@ -356,7 +356,7 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
       argumentsList = ` -ArgumentList ${powerShellLiteral(`"--user-data-dir=${profile}"`)}`;
     }
     const script = [...environment, `Start-Process -FilePath ${powerShellLiteral(app.executable)}${argumentsList}`].join("; ");
-    const opened = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+    const opened = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {timeout: 5_000});
     if (opened.code !== 0) throw new OpperError("AGENT_NOT_FOUND", "Opper is configured, but the Codex/ChatGPT app could not be opened.", reopenHint(settings));
     console.log("Opened Codex/ChatGPT with Opper for new local Codex tasks.");
     return 0;

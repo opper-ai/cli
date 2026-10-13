@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
@@ -98,6 +99,7 @@ interface ThirdPartyPaths {
   desktopConfig: string;
   meta: string;
   profile: string;
+  ownership: string;
 }
 
 interface ConfigTargets {
@@ -156,6 +158,7 @@ function targetPaths(): ConfigTargets {
       desktopConfig: join(root, "claude_desktop_config.json"),
       meta: join(root, "configLibrary", "_meta.json"),
       profile: join(root, "configLibrary", `${OPPER_PROFILE_ID}.json`),
+      ownership: join(root, ".opper-gateway-state.json"),
     })),
   };
 }
@@ -206,12 +209,22 @@ function isLocalGatewayUrl(value: string): boolean {
   return !!match && Number(match[1]) <= 65535;
 }
 
-function profileHasManagedGateway(profile: JsonObject): boolean {
+function gatewayFingerprint(profile: JsonObject): string {
+  const fields = ["inferenceProvider", "inferenceGatewayBaseUrl", "inferenceGatewayApiKey", "inferenceGatewayAuthScheme", "disableDeploymentModeChooser", "inferenceModels"];
+  return createHash("sha256").update(JSON.stringify(fields.map((field) => profile[field]))).digest("hex");
+}
+
+async function profileHasManagedGateway(target: ThirdPartyPaths, profile: JsonObject): Promise<boolean> {
   if (profile.inferenceProvider !== "gateway") return false;
+  const ownership = await readJsonOrNull(target.ownership);
+  if (ownership) return ownership.version === 1 && ownership.fingerprint === gatewayFingerprint(profile);
+  // Older direct integrations predate the ownership record. A loopback URL
+  // alone never proves ownership of a customer's local gateway.
+  if (existsSync(target.ownership)) return false;
   const url = typeof profile.inferenceGatewayBaseUrl === "string"
     ? profile.inferenceGatewayBaseUrl.replace(/\/+$/, "")
     : "";
-  return url === OPPER_COMPAT_URL.replace(/\/+$/, "") || isLocalGatewayUrl(url);
+  return url === OPPER_COMPAT_URL.replace(/\/+$/, "");
 }
 
 function gatewayCredentials(apiKey: string, proxy?: ConfigureOptions["desktopProxy"]): {url: string; key: string} {
@@ -228,7 +241,7 @@ async function profileIsOpperGateway(target: ThirdPartyPaths): Promise<boolean> 
   if (meta?.appliedId !== OPPER_PROFILE_ID) return false;
   const profile = await readJsonOrNull(target.profile);
   if (!profile) return false;
-  if (!profileHasManagedGateway(profile)) return false;
+  if (!(await profileHasManagedGateway(target, profile))) return false;
   const key = typeof profile.inferenceGatewayApiKey === "string"
     ? profile.inferenceGatewayApiKey.trim()
     : "";
@@ -266,12 +279,12 @@ async function writeMetaWithOpperEntry(path: string): Promise<void> {
 }
 
 async function writeGatewayProfile(
-  path: string,
+  target: ThirdPartyPaths,
   apiKey: string,
   primaryModel: string,
   baseUrl: string,
 ): Promise<void> {
-  const cfg = await readJsonAllowMissing(path);
+  const cfg = await readJsonAllowMissing(target.profile);
   cfg.inferenceProvider = "gateway";
   cfg.inferenceGatewayBaseUrl = baseUrl;
   cfg.inferenceGatewayApiKey = apiKey;
@@ -284,7 +297,8 @@ async function writeGatewayProfile(
     ...CLAUDE_DESKTOP_MODEL_IDS.filter((name) => name !== primaryModel),
   ];
   cfg.inferenceModels = names.map((name) => ({ name }));
-  await writeJson(path, cfg);
+  await writeJson(target.profile, cfg);
+  await writeJson(target.ownership, {version: 1, fingerprint: gatewayFingerprint(cfg)});
 }
 
 async function detect(): Promise<DetectResult> {
@@ -318,7 +332,7 @@ async function applyOpperProfile(apiKey: string, primaryModel: string, proxy?: C
   for (const target of targets.thirdPartyProfiles) {
     await writeDeploymentMode(target.desktopConfig, "3p");
     await writeMetaWithOpperEntry(target.meta);
-    await writeGatewayProfile(target.profile, gateway.key, primaryModel, gateway.url);
+    await writeGatewayProfile(target, gateway.key, primaryModel, gateway.url);
   }
 }
 
@@ -379,7 +393,7 @@ async function unconfigure(): Promise<void> {
   let activeOpperProfile = false;
   for (const target of targets.thirdPartyProfiles) {
     const profile = await readJsonOrNull(target.profile);
-    if (!profile || !profileHasManagedGateway(profile)) continue;
+    if (!profile || !(await profileHasManagedGateway(target, profile))) continue;
     const meta = await readJsonOrNull(target.meta);
     if (meta?.appliedId === OPPER_PROFILE_ID) {
       activeOpperProfile = true;
@@ -387,6 +401,7 @@ async function unconfigure(): Promise<void> {
     }
     await clearOpperEntryFromMeta(target.meta);
     await blankGatewayProfile(target.profile);
+    await rm(target.ownership, {force: true});
   }
   if (activeOpperProfile) {
     for (const path of targets.normalConfigs) await maybeFlipToFirstParty(path);
@@ -410,11 +425,13 @@ function isClaudeRunning(): boolean {
     case "win32": {
       const result = run("powershell.exe", [
         "-NoProfile",
+        "-NonInteractive",
         "-Command",
         "(Get-Process claude -ErrorAction SilentlyContinue | " +
           "Where-Object { $_.MainWindowHandle -ne 0 } | " +
           "Select-Object -First 1).Id",
-      ]);
+      ], {timeout: 5_000});
+      if (result.code !== 0) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unable to check whether Claude Desktop is running.", "Open Claude Desktop manually after checking your Windows processes.");
       return result.code === 0 && result.stdout.trim().length > 0;
     }
     default:
@@ -442,7 +459,7 @@ function quitClaude(): void {
         "Get-Process claude -ErrorAction SilentlyContinue | " +
           "Where-Object { $_.MainWindowHandle -ne 0 } | " +
           "ForEach-Object { [void]$_.CloseMainWindow() }",
-      ]);
+      ], {timeout: 5_000});
       return;
   }
 }
@@ -483,7 +500,7 @@ function openClaude(): void {
         "-NoProfile",
         "-Command",
         `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
-      ]);
+      ], {timeout: 5_000});
       if (result.code !== 0) {
         throw new OpperError(
           "AGENT_NOT_FOUND",

@@ -112,6 +112,14 @@ function conflict(kind: "directory" | "file"): OpperError {
   return new OpperError("AGENT_CONFIG_CONFLICT", `Local proxy state ${kind} must be private, owned by the current user, and without a symlink or junction.`);
 }
 
+async function requireExistingWindowsState(path: string, kind: "directory" | "file"): Promise<void> {
+  try {await lstat(path);}
+  catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw cause;
+    throw conflict(kind);
+  }
+}
+
 async function windowsState(path: string, kind: "directory" | "file", create: boolean): Promise<void> {
   const executable = win32.join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const encoded = Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64");
@@ -132,7 +140,7 @@ async function windowsState(path: string, kind: "directory" | "file", create: bo
 /** Existing directories are checked, never chmodded or granted access automatically. */
 export async function ensurePrivateStateDirectory(path: string, create = false): Promise<void> {
   if (process.platform === "win32") {
-    if (!create) await lstat(path); // Preserve ENOENT without spawning PowerShell during readiness polling.
+    if (!create) await requireExistingWindowsState(path, "directory"); // Preserve ENOENT during readiness polling.
     return windowsState(path, "directory", create);
   }
   if (create) {
@@ -146,7 +154,7 @@ export async function ensurePrivateStateDirectory(path: string, create = false):
 /** Creates an empty private file when missing. Existing contents and ACLs are untouched. */
 export async function ensurePrivateStateFile(path: string, create = false): Promise<void> {
   if (process.platform === "win32") {
-    if (!create) await lstat(path);
+    if (!create) await requireExistingWindowsState(path, "file");
     return windowsState(path, "file", create);
   }
   if (create) {
