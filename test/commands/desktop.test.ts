@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopStatusCommand, desktopOpenCommand, desktopStopCommand, readDesktopRuntime, resolveDesktopApiContext, prepareDesktopProxy } from "../../src/commands/desktop.js";
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
-import { ensurePrivateStateDirectory, assertPrivateStateFile } from "../../src/desktop/private-state.js";
+import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "../../src/desktop/private-state.js";
 
 let directory: string;
 let stateDir: string;
@@ -158,17 +158,18 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     const bootstrap = await fetch(opened.url, {redirect: "manual"});
     expect(bootstrap.status).toBe(303);
     expect((await fetch(opened.url, {redirect: "manual"})).status).toBe(401);
-    const cookie = bootstrap.headers.get("set-cookie")!.split(";")[0]!;
+    expect(bootstrap.headers.get("set-cookie")).toBeNull();
+    const browserToken = new URL(bootstrap.headers.get("location")!, manifest.url).hash.slice(1);
     const page = await fetch(`${manifest.url}/`);
     expect(await page.text()).toContain("Sessions");
-    const created = await fetch(`${manifest.url}/api/sessions`, {method: "POST", headers: {cookie, origin: manifest.url, "content-type": "application/json"}, body: JSON.stringify({name: "Website work", project: "acme"})});
+    const created = await fetch(`${manifest.url}/api/sessions`, {method: "POST", headers: {"X-Opper-Desktop-Browser": browserToken, origin: manifest.url, "content-type": "application/json"}, body: JSON.stringify({name: "Website work", project: "acme"})});
     expect(created.status).toBe(200);
     const state = await created.json();
     expect(state.sessions).toHaveLength(1);
     expect(state.sessions[0].name).toBe("Website work");
     expect((await inference(manifest.url, manifest.token)).status).toBe(200);
     expect(requests[0]?.url).toContain(`/v3/session/${state.activeId}/project:acme/`);
-    const paused = await fetch(`${manifest.url}/api/pause`, {method: "POST", headers: {cookie, origin: manifest.url, "content-type": "application/json"}, body: "{}"});
+    const paused = await fetch(`${manifest.url}/api/pause`, {method: "POST", headers: {"X-Opper-Desktop-Browser": browserToken, origin: manifest.url, "content-type": "application/json"}, body: "{}"});
     expect(paused.status).toBe(200);
     expect((await inference(manifest.url, manifest.token)).status).toBe(409);
   });
@@ -177,8 +178,8 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     const manifest = await start({});
     const opened = await desktopOpenCommand({ key: "work", stateDir, open: false });
     const bootstrap = await fetch(opened.url, { redirect: "manual" });
-    const cookie = bootstrap.headers.get("set-cookie")!.split(";")[0]!;
-    const headers = { cookie, origin: manifest.url, "content-type": "application/json" };
+    const browserToken = new URL(bootstrap.headers.get("location")!, manifest.url).hash.slice(1);
+    const headers = { "X-Opper-Desktop-Browser": browserToken, origin: manifest.url, "content-type": "application/json" };
     const create = await fetch(manifest.url + "/api/sessions", { method: "POST", headers, body: JSON.stringify({ name: "Archive me", project: "acme" }) });
     const id = (await create.json()).activeId;
     expect((await inference(manifest.url, manifest.token)).status).toBe(200);
@@ -207,27 +208,27 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     const execute = promisify(execFile);
     const entry = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
     const args = ["--import", "tsx", entry, "--key", "work", "proxy", "--state-dir", stateDir, "--no-open"];
-    const first = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
+    const first = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
     expect(first.stdout).toContain("Sessions: http://127.0.0.1:");
     const manifest = await readDesktopRuntime(stateDir);
     expect(manifest.pid).not.toBe(process.pid);
     await privateFile(join(stateDir, "bridge.log"));
     const state = await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}}).then((res) => res.json());
     expect(state.paused).toBe(true);
-    const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
+    const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
     expect(second.stdout).toContain("Sessions: ");
     expect((await readDesktopRuntime(stateDir)).pid).toBe(manifest.pid);
-    await execute(process.execPath, ["--import", "tsx", entry, "proxy", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
+    await execute(process.execPath, ["--import", "tsx", entry, "proxy", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
     await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
     await expect(fetch(`${manifest.url}/opper/status`)).rejects.toThrow();
     // Stop returns only once its lifetime lock and listening socket are gone.
-    const reopened = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
+    const reopened = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
     expect(reopened.stdout).toContain("Sessions: ");
     const restarted = await readDesktopRuntime(stateDir);
     expect(restarted.pid).not.toBe(manifest.pid);
     expect(restarted.url).toBe(manifest.url);
     expect(restarted.token).toBe(manifest.token);
-  }, 30_000);
+  }, process.platform === "win32" ? 120_000 : 30_000);
   it("refuses a second service in the same state directory without changing the active manifest", async () => {
     await start();
     const original = await readFile(join(stateDir, "bridge.json"), "utf8");
@@ -279,7 +280,8 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     expect(requests).toHaveLength(0);
   });
   it("restarts safely after a crashed process, replacing only its stale manifest", async () => {
-    await mkdir(stateDir, { mode: 0o700 });
+    await ensurePrivateStateDirectory(stateDir, true);
+    if (process.platform === "win32") await ensurePrivateStateFile(join(stateDir, "bridge.json"), true);
     await writeFile(join(stateDir, "bridge.json"), JSON.stringify({ version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: 2147483647 }), { mode: 0o600 });
     const manifest = await start();
     expect(manifest.token).not.toBe("a".repeat(64));
@@ -298,7 +300,8 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     expect(requests).toHaveLength(0);
   });
   it("refuses an alive manifest PID even if its runtime lock is absent", async () => {
-    await mkdir(stateDir, { mode: 0o700 });
+    await ensurePrivateStateDirectory(stateDir, true);
+    if (process.platform === "win32") await ensurePrivateStateFile(join(stateDir, "bridge.json"), true);
     const previous = { version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid };
     await writeFile(join(stateDir, "bridge.json"), JSON.stringify(previous), { mode: 0o600 });
     await expect(desktopStartCommand({ key: "work", stateDir, signal: AbortSignal.abort() })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });

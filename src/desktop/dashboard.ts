@@ -30,6 +30,15 @@ const HTML = `<!doctype html>
 <section class="create" aria-labelledby="create-heading"><h2 id="create-heading">New session</h2><p>Give this work a name and project.</p><form id="create-form"><label for="name">Session name</label><input id="name" name="name" placeholder="Website redesign" maxlength="128" required autocomplete="off"><label for="project">Project</label><input id="project" name="project" list="project-options" placeholder="acme" maxlength="256" required autocomplete="off"><datalist id="project-options"></datalist><button class="primary" type="submit">Create and use session <span aria-hidden="true">↗</span></button></form></section></div><p id="feedback" role="status" aria-live="polite"></p><footer>One active session · Your saved sessions stay here</footer></main></body></html>`;
 
 const SCRIPT = `"use strict";
+const credentialKey = "opper_desktop_browser";
+const browserOrigin = location.origin;
+const launchCredential = location.hash.slice(1);
+history.replaceState(null, "", location.pathname + location.search);
+let browserToken = /^[a-f0-9]{64}$/.test(launchCredential) ? launchCredential : "";
+try {
+  if (browserToken) sessionStorage.setItem(credentialKey, browserToken);
+  else browserToken = sessionStorage.getItem(credentialKey) || "";
+} catch {} // The current page can still use its launch credential when storage is unavailable.
 const el = (id) => document.getElementById(id);
 let busy = false;
 let latest = null;
@@ -81,7 +90,15 @@ function render(state) {
   el("create-form").querySelector("button").disabled = busy;
 }
 async function api(path, payload) {
-  const response = await fetch(path, payload === undefined ? {cache:"no-store"} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+  const target = new URL(path, browserOrigin);
+  if (target.origin !== browserOrigin || !target.pathname.startsWith("/api/")) throw new Error("Session requests must stay on this page's origin.");
+  if (!/^[a-f0-9]{64}$/.test(browserToken)) throw new Error("This page needs to be reopened from Opper.");
+  const response = await fetch(target.href, {
+    redirect:"error", credentials:"omit", mode:"same-origin", cache:"no-store",
+    method: payload === undefined ? "GET" : "POST",
+    headers:{"X-Opper-Desktop-Browser":browserToken, ...(payload === undefined ? {} : {"Content-Type":"application/json"})},
+    ...(payload === undefined ? {} : {body:JSON.stringify(payload)})
+  });
   if (response.status === 401) throw new Error("This page needs to be reopened from Opper.");
   if (!response.ok) {let message = "Could not update sessions. Try again."; try {message = (await response.json()).error || message;} catch {} throw new Error(message);}
   return response.json();
@@ -121,7 +138,6 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
   const browserToken = randomBytes(32).toString("hex");
   const tickets = new Map<string, number>();
   let allowedOrigin: string | undefined;
-  let cookieName: string | undefined;
   let mutations: Promise<void> = Promise.resolve();
   function state(): DashboardState {
     const current = deps.getState();
@@ -129,9 +145,8 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
   }
   function json(res: ServerResponse, code: number, value: unknown) {res.writeHead(code, {"Content-Type":"application/json; charset=utf-8"}); res.end(JSON.stringify(value));}
   function authenticated(req: IncomingMessage) {
-    const prefix = `${cookieName}=`;
-    const token = req.headers.cookie?.split(";").map((item) => item.trim()).find((item) => item.startsWith(prefix))?.slice(prefix.length);
-    return token !== undefined && /^[a-f0-9]{64}$/.test(token) && timingSafeEqual(Buffer.from(token), Buffer.from(browserToken));
+    const token = req.headers["x-opper-desktop-browser"];
+    return typeof token === "string" && /^[a-f0-9]{64}$/.test(token) && timingSafeEqual(Buffer.from(token), Buffer.from(browserToken));
   }
   async function serve(req: IncomingMessage, res: ServerResponse, path: string) {
     res.setHeader("Cache-Control", "no-store"); res.setHeader("Referrer-Policy", "no-referrer"); res.setHeader("X-Frame-Options", "DENY"); res.setHeader("X-Content-Type-Options", "nosniff");
@@ -141,7 +156,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
       if (req.method !== "GET") throw new DashboardError(405, "Method not allowed.");
       const ticket = path.slice("/open/".length); const expires = tickets.get(ticket); tickets.delete(ticket);
       if (!expires || expires <= Date.now()) throw new DashboardError(401, "Reopen this page from Opper.");
-      res.writeHead(303, {Location:"/", "Set-Cookie":`${cookieName}=${browserToken}; Path=/api; HttpOnly; SameSite=Strict`}); res.end(); return;
+      res.writeHead(303, {Location:`/#${browserToken}`}); res.end(); return;
     }
     if (["/", "/app.js", "/styles.css", "/inter-latin.woff2"].includes(path)) {
       if (req.method !== "GET") throw new DashboardError(405, "Method not allowed.");
@@ -149,6 +164,7 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
       res.end(path === "/" ? HTML : path === "/app.js" ? SCRIPT : path === "/styles.css" ? CSS : FONT); return;
     }
     if (!authenticated(req)) throw new DashboardError(401, "Reopen this page from Opper.");
+    if (req.headers.origin !== undefined && req.headers.origin !== allowedOrigin) throw new DashboardError(403, "This action must come from the session page.");
     if (req.method === "GET" && path === "/api/sessions") {json(res, 200, state()); return;}
     if (req.method !== "POST") throw new DashboardError(405, "Method not allowed.");
     if (req.headers.origin !== allowedOrigin) throw new DashboardError(403, "This action must come from the session page.");
@@ -179,8 +195,6 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
       const url = new URL(origin);
       if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.pathname !== "/" || url.search || url.hash || (allowedOrigin && url.origin !== allowedOrigin)) throw new Error("Dashboard origin must be this server's 127.0.0.1 HTTP origin.");
       allowedOrigin = url.origin;
-      // Browser cookies are scoped by host/path, not port. Keep parallel local bridges independent.
-      cookieName = `opper_desktop_browser_${url.port || "80"}`;
       for (const [ticket, expires] of tickets) if (expires <= Date.now()) tickets.delete(ticket);
       const ticket = randomBytes(24).toString("hex"); tickets.set(ticket, Date.now() + 60_000);
       return `${allowedOrigin}/open/${ticket}`;
