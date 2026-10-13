@@ -19,7 +19,7 @@ function codexHome(explicit?: string): string {
 }
 function paths(home = codexHome()) {
   const directory = join(home, "opper-desktop");
-  return { home, directory, config: join(home, "config.toml"), catalog: join(directory, "catalog.json"), auth: join(directory, "auth.mjs"), state: join(directory, "state.json"), lock: join(home, ".opper-desktop.lock") };
+  return { home, directory, config: join(home, "config.toml"), catalog: join(directory, "catalog.json"), auth: join(directory, "auth.mjs"), state: join(directory, "state.json"), runtime: join(directory, process.platform === "win32" ? "node.exe" : "node"), runtimeLicense: join(directory, "NODE-LICENSE"), lock: join(home, ".opper-desktop.lock") };
 }
 function appCandidates(): string[] {
   return ["/Applications/ChatGPT.app", "/Applications/Codex.app", join(homedir(), "Applications", "ChatGPT.app"), join(homedir(), "Applications", "Codex.app")];
@@ -63,7 +63,7 @@ async function readOptional(path: string): Promise<string | null> {
 }
 async function checkConfigPaths(home: string): Promise<void> {
   const p = paths(home);
-  for (const file of [p.config, p.auth, p.catalog, p.state, p.directory]) {
+  for (const file of [p.config, p.auth, p.catalog, p.state, p.runtime, p.runtimeLicense, p.directory]) {
     try {
       const info = await lstat(file);
       if (info.isSymbolicLink() || (file === p.directory ? !info.isDirectory() : !info.isFile())) {
@@ -72,7 +72,7 @@ async function checkConfigPaths(home: string): Promise<void> {
     } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; }
   }
 }
-async function atomicWrite(path: string, contents: string, mode = 0o600): Promise<void> {
+async function atomicWrite(path: string, contents: string | Buffer, mode = 0o600): Promise<void> {
   const temporary = `${path}.tmp.${process.pid}`;
   try {
     await writeFile(temporary, contents, { mode });
@@ -115,12 +115,12 @@ try {
 }
 `;
 
-interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; }
+interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; bundledRuntime?: boolean; }
 async function readState(path: string): Promise<StoredState | undefined> {
   const raw = await readOptional(path);
   if (raw === null) return undefined;
   const state = JSON.parse(raw) as StoredState;
-  if (state.version !== 1 || state.config?.version !== 1 || typeof state.config.originalText !== "string" || typeof state.config.appliedText !== "string") {
+  if (state.version !== 1 || state.config?.version !== 1 || typeof state.config.originalText !== "string" || typeof state.config.appliedText !== "string" || (state.bundledRuntime !== undefined && typeof state.bundledRuntime !== "boolean")) {
     throw new OpperError("AGENT_CONFIG_CONFLICT", "Invalid Opper desktop backup. Preserve it and restore the previous Codex configuration before retrying.");
   }
   return state;
@@ -155,19 +155,32 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     const p = paths(home);
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
+    const bundled = process.env.OPPER_DISTRIBUTION === "bundle";
+    if (!previous?.bundledRuntime && (existsSync(p.runtime) || existsSync(p.runtimeLicense))) {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged Node runtime files already exist in the Opper desktop configuration directory.");
+    }
     const provider = {
       name: "Opper", base_url: `${baseUrl}/v3/compat`, wire_api: "responses",
       ...(opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
-      auth: { command: await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
+      auth: { command: bundled ? p.runtime : await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
     await mkdir(p.directory, { recursive: true, mode: 0o700 });
     await chmod(p.directory, 0o700);
-    const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state };
-    const backups = new Map<string, string | null>();
-    for (const file of [p.auth, p.catalog, p.state]) backups.set(file, await readOptional(file));
+    const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state, ...((bundled || previous?.bundledRuntime) ? { bundledRuntime: true } : {}) };
+    const backups = new Map<string, { contents: Buffer; mode: number } | null>();
+    for (const file of [p.auth, p.catalog, p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
+      try { backups.set(file, { contents: await readFile(file), mode: (await stat(file)).mode & 0o777 }); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; backups.set(file, null); }
+    }
     try {
+      // A version manager can prune the bundle after upgrading. Desktop auth
+      // must survive that independently, just like the standalone auth helper.
+      if (bundled) {
+        await atomicWrite(p.runtime, await readFile(process.execPath), 0o700);
+        await atomicWrite(p.runtimeLicense, await readFile(join(dirname(process.execPath), "NODE-LICENSE")));
+      }
       await atomicWrite(p.auth, AUTH_HELPER);
       await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
       await atomicWrite(p.state, JSON.stringify(state, null, 2) + "\n");
@@ -176,7 +189,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
       await atomicWrite(p.config, applied.text, mode);
     } catch (e) {
       for (const [file, backup] of backups) {
-        if (backup === null) await rm(file, { force: true }); else await atomicWrite(file, backup);
+        if (backup === null) await rm(file, { force: true }); else await atomicWrite(file, backup.contents, backup.mode);
       }
       throw e;
     }
@@ -218,7 +231,7 @@ async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
       if (!state.configExisted && restored.trim() === "") await rm(p.config);
       else await atomicWrite(p.config, restored, (await stat(p.config)).mode & 0o777);
     }
-    for (const file of [p.auth, p.catalog, p.state]) await rm(file, { force: true });
+    for (const file of [p.auth, p.catalog, p.state, ...(state.bundledRuntime ? [p.runtime, p.runtimeLicense] : [])]) await rm(file, { force: true });
     // Keep independently added files; only remove the directory when empty.
     try { const { rmdir } = await import("node:fs/promises"); await rmdir(p.directory); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw e; }

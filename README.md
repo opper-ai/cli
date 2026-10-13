@@ -15,6 +15,19 @@ npx @opperai/cli login
 
 The package installs an `opper` binary on PATH. Once installed, every command is just `opper <…>`.
 
+### Without Node
+
+Starting with the first release containing standalone bundles, [GitHub releases](https://github.com/opper-ai/cli/releases) carry `opper-<os>-<arch>.tar.gz` for Linux and macOS and `opper-windows-<arch>.zip` for Windows, on x64 and arm64. Each includes its own Node runtime. Unpack one anywhere and run `bin/opper` (`bin\opper.cmd` on Windows), or let [mise](https://mise.jdx.dev/) track releases for you:
+
+```bash
+mise use -g github:opper-ai/cli
+opper --help
+```
+
+The Linux bundles support Omarchy's mise installation flow. Update a mise installation with `mise up`; for a manual installation, download and unpack a newer release. Bundles provide the runtime for the Opper CLI itself. Agents that use npm or npx, including `opper launch <agent> --install` for npm-distributed agents, still require a separate Node.js/npm installation.
+
+When a bundle configures Codex Desktop, it retains a private copy of Node and its license in that Codex home's `opper-desktop` directory. Credential refresh continues working when an old CLI bundle is removed. Reconfiguring from a newer bundle refreshes the retained runtime; removing the desktop integration removes it.
+
 > **Heads up:** if you previously installed the legacy Go CLI (`brew install opper-ai/oppercli/opper`), uninstall it first — both ship the `opper` binary and PATH order decides which one runs:
 >
 > ```bash
