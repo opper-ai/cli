@@ -1,26 +1,24 @@
-# Builds the standalone bundles (scripts/build-bundles.mjs) without releasing
-# them, so a change to the bundle script, the launcher or the dependency tree
-# is exercised before a tag turns it into release assets. The release workflow
-# runs the same script and the same smoke test, then uploads.
+# Build and test the exact standalone archives on every supported platform.
+# The release workflow calls this workflow before publishing anything.
 name: Bundles
 
 on:
   pull_request:
-    paths:
-      - scripts/build-bundles.mjs
-      - scripts/smoke-bundle.sh
-      - .github/workflows/bundles.yml
-      - .github/workflows/release.yml
-      - package.json
-      - package-lock.json
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build; defaults to this workflow's ref
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: bundles-${{ github.ref }}
-  cancel-in-progress: true
+  group: bundles-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref || 'default' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -28,6 +26,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
@@ -35,24 +35,46 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: node scripts/build-bundles.mjs
-      - name: Smoke-test the Linux bundle
-        run: scripts/smoke-bundle.sh dist-bundles/opper-linux-x64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: bundles
           path: |
             dist-bundles/*.tar.gz
+            dist-bundles/*.zip
             dist-bundles/SHA256SUMS
+          if-no-files-found: error
           retention-days: 7
 
-  # The macOS bundle runs on a Mac runner; Node's darwin binaries cannot run on
-  # the Linux builder, so the Linux job can only check that they were packed.
-  smoke-macos:
+  smoke:
     needs: build
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            extension: tar.gz
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            extension: tar.gz
+          - os: macos-15-intel
+            target: darwin-x64
+            extension: tar.gz
+          - os: macos-latest
+            target: darwin-arm64
+            extension: tar.gz
+          - os: windows-latest
+            target: windows-x64
+            extension: zip
+          - os: windows-11-arm
+            target: windows-arm64
+            extension: zip
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v5
         with:
           node-version: "24"
@@ -60,4 +82,10 @@ jobs:
         with:
           name: bundles
           path: dist-bundles
-      - run: scripts/smoke-bundle.sh dist-bundles/opper-darwin-arm64.tar.gz
+      - name: Smoke-test the POSIX bundle
+        if: runner.os != 'Windows'
+        run: scripts/smoke-bundle.sh dist-bundles/opper-${{ matrix.target }}.${{ matrix.extension }}
+      - name: Smoke-test the Windows bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke-bundle.ps1 dist-bundles/opper-${{ matrix.target }}.${{ matrix.extension }}

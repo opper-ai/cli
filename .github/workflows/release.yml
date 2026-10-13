@@ -18,10 +18,9 @@
 # absence of an NPM_TOKEN). That config pins org, repo AND this workflow's
 # filename, so renaming this file breaks publishing.
 #
-# After npm, the `bundles` job attaches self-contained tarballs (the CLI plus a
-# Node runtime per platform, see scripts/build-bundles.mjs) to the GitHub
-# release, so `mise use -g github:opper-ai/cli` and Omarchy's mise stub can
-# install the CLI from the release without npm.
+# Build and natively smoke-test all six standalone bundles before publishing
+# to npm. Upload assets to a draft GitHub release, then publish it so installers
+# never see a new release without its archives and checksums.
 name: Release
 
 on:
@@ -34,20 +33,29 @@ on:
         required: true
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  bundles:
+    uses: ./.github/workflows/bundles.yml
+    with:
+      ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
   release:
+    needs: bundles
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - uses: actions/setup-node@v5
         with:
@@ -61,13 +69,13 @@ jobs:
       - name: Check the tag matches package.json
         id: version
         env:
-          RAW_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          case "$RAW_TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::'$RAW_TAG' is not a vMAJOR.MINOR.PATCH tag"; exit 1 ;;
-          esac
+          if [[ ! "$RAW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$RAW_TAG' is not a vMAJOR.MINOR.PATCH tag"
+            exit 1
+          fi
           VERSION="${RAW_TAG#v}"
           PKG=$(node -p "require('./package.json').version")
           if [ "$PKG" != "$VERSION" ]; then
@@ -85,10 +93,27 @@ jobs:
           npm run typecheck
           npm run build
           npm test
+          npm run test:smoke
 
-      # Both remaining steps are idempotent so a re-run after a half-finished
-      # release (published to npm but failed to cut the GitHub release, or the
-      # reverse) completes it instead of failing.
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundles
+          path: dist-bundles
+
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          cd dist-bundles
+          sha256sum --check SHA256SUMS
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            test -f "opper-$target.tar.gz"
+          done
+          for target in windows-x64 windows-arm64; do
+            test -f "opper-$target.zip"
+          done
+
+      # Publishing and uploads are idempotent so a re-run can finish a release
+      # after an npm publish or GitHub upload failure.
       - name: Publish to npm
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -99,45 +124,35 @@ jobs:
             npm publish --access public
           fi
 
-      - name: Create GitHub release
+      - name: Create draft GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
+          set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; skipping."
+            echo "Release $TAG already exists; finishing its assets."
           else
-            gh release create "$TAG" --title "$TAG" --generate-notes
+            gh release create "$TAG" --verify-tag --draft --title "$TAG" --generate-notes
           fi
 
-  bundles:
-    needs: release
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install and build
-        run: |
-          npm ci
-          npm run build
-
-      - name: Build the bundles
-        run: node scripts/build-bundles.mjs
-
-      - name: Smoke-test the Linux bundle
-        run: scripts/smoke-bundle.sh dist-bundles/opper-linux-x64.tar.gz
-
-      # --clobber makes a re-run replace half-uploaded assets instead of failing.
       - name: Attach the bundles to the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" dist-bundles/*.tar.gz dist-bundles/SHA256SUMS --clobber
+          TAG: ${{ steps.version.outputs.tag }}
+        # --clobber supports retries after partially completed uploads or a
+        # public release created with this workflow on mutable repositories.
+        run: gh release upload "$TAG" dist-bundles/*.tar.gz dist-bundles/*.zip dist-bundles/SHA256SUMS --clobber
+
+      - name: Publish the completed GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+          if [ "$IS_DRAFT" = true ]; then
+            gh release edit "$TAG" --draft=false
+          else
+            echo "Release $TAG is already public; assets updated."
+          fi
