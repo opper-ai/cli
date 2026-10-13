@@ -79,8 +79,8 @@ function error(message: string, hint?: string): OpperError {
 }
 function normalizedOrigin(raw: string): string {
   const url = new URL(raw);
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
-    throw new OpperError("INVALID_ARGUMENT", "The Opper API root must be an HTTP(S) URL without a path, credentials, query or fragment.");
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new OpperError("INVALID_ARGUMENT", "The Opper API root must be an HTTP(S) URL without credentials, query or fragment.");
   }
   return url.href.replace(/\/+$/, "");
 }
@@ -511,7 +511,9 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
       child.once("error", (cause) => { spawnFailure = cause; });
       child.unref();
       manifest = undefined;
-      const deadline = Date.now() + 10_000;
+      // Native Windows ACL validation runs in both the daemon and readiness polling.
+      const readinessTimeout = process.platform === "win32" ? 30_000 : 10_000;
+      const deadline = Date.now() + readinessTimeout;
       while (Date.now() < deadline) {
         if (spawnFailure) throw new OpperError("NETWORK_ERROR", "Could not start the local proxy process.");
         try {
@@ -525,7 +527,7 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      if (!manifest) throw new OpperError("NETWORK_ERROR", "Local proxy did not become ready within ten seconds.", `Inspect the private log at ${join(directory, "bridge.log")}.`);
+      if (!manifest) throw new OpperError("NETWORK_ERROR", `Local proxy did not become ready within ${readinessTimeout / 1000} seconds.`, `Inspect the private log at ${join(directory, "bridge.log")}.`);
     } finally { await log.close(); }
   }
   return manifest;

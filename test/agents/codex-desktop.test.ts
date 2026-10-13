@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { readDesktopConfig } from "../../src/setup/codex-desktop-config.js";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
 import { OpperError } from "../../src/errors.js";
-import { ensurePrivateStateDirectory, ensurePrivateStateFile, POWERSHELL_PRIVATE_STATE_SCRIPT } from "../../src/desktop/private-state.js";
+import { ensurePrivateStateDirectory, ensurePrivateStateFile } from "../../src/desktop/private-state.js";
 
 const mocks = vi.hoisted(() => {
   const { existsSync } = require("node:fs") as typeof import("node:fs");
@@ -595,39 +595,6 @@ describe("Codex desktop launching", () => {
 });
 
 describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
-  it.runIf(process.platform === "win32" && process.env.OPPER_NATIVE_DIAGNOSTIC === "1")("diagnoses the actual Windows native checker transport", async () => {
-    const {proxy} = await desktopProxy();
-    await codexDesktop.configure(options({desktopProxy: proxy}));
-    const auth = provider().auth as {command: string; args: string[]};
-    const source = readFileSync(auth.args[0]!, "utf8");
-    const traced = POWERSHELL_PRIVATE_STATE_SCRIPT
-      .replace("try {\n  $request", "try {\n  [Console]::Error.WriteLine('OPPER_NATIVE_STAGE=READ_INPUT')\n  $request")
-      .replace("  if ($request.path", "  [Console]::Error.WriteLine('OPPER_NATIVE_STAGE=PARSED_INPUT')\n  if ($request.path")
-      .replace("  Assert-PathChain $path\n  $exists", "  [Console]::Error.WriteLine('OPPER_NATIVE_STAGE=PATH_CHAIN')\n  Assert-PathChain $path\n  $exists")
-      .replace("  Assert-PrivateAcl $path ($request.kind -eq 'directory')", "  [Console]::Error.WriteLine('OPPER_NATIVE_STAGE=FINAL_ACL')\n  Assert-PrivateAcl $path ($request.kind -eq 'directory')");
-    const encoded = Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64");
-    const diagnosticScript = source.replace(encoded, Buffer.from(traced, "utf16le").toString("base64"))
-      .replace("if (cause) reject(cause); else resolve(stdout);", "process.stderr.write((stderr || '').split(/\\r?\\n/).filter(line => /^OPPER_NATIVE_STAGE=(READ_INPUT|PARSED_INPUT|PATH_CHAIN|FINAL_ACL)$/.test(line)).join('\\n') + '\\n'); if (cause) reject(cause); else resolve(stdout);");
-    const probe = join(home, "windows-native-diagnostic.mjs");
-    const cleanEnv = {...process.env};
-    for (const key of Object.keys(cleanEnv)) if (/^OPPER_/i.test(key)) delete cleanEnv[key];
-    const results = [];
-    for (const [name, environment, keepOpen] of [
-      ["normal-environment-open-file", cleanEnv, true],
-      ["normal-environment-no-open-file", cleanEnv, false],
-      ["desktop-environment-without-credentials-open-file", desktopHelperEnvironment(), true],
-    ] as const) {
-      writeFileSync(probe, keepOpen ? diagnosticScript : diagnosticScript.replace('stage = "Windows access controls";', 'stage = "Windows access controls"; closeSync(file); file = undefined;').replace('stage = "runtime manifest";', 'stage = "runtime manifest"; if (file === undefined) file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);'));
-      const started = Date.now();
-      const result = spawnSync(auth.command, [probe, ...auth.args.slice(1)], {encoding: "utf8", timeout: 20_000, env: environment});
-      results.push({name, milliseconds: Date.now() - started, status: result.status, signal: result.signal,
-        tokenMatched: result.stdout === proxy.token, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
-        stderr: result.stderr.replaceAll(proxy.token, "[redacted]").replaceAll(KEY, "[redacted]")});
-    }
-    console.log("Windows native checker probe", JSON.stringify(results));
-    expect(results.every((result) => result.tokenMatched), JSON.stringify(results)).toBe(true);
-  }, 90_000);
-
   it("closes native-checker stdin and reports only safe validation stages", async () => {
     const {proxy} = await desktopProxy();
     await codexDesktop.configure(options({desktopProxy: proxy}));

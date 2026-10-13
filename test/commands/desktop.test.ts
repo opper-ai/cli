@@ -59,7 +59,8 @@ async function start(tags: Record<string, string> = { project: "acme" }) {
   // Observe startup failures immediately as well as making manifest readiness bounded.
   let failure: unknown;
   void run.catch((cause) => { failure = cause; });
-  for (let attempt = 0; attempt < 200; attempt++) {
+  const deadline = Date.now() + (process.platform === "win32" ? 30_000 : 5_000);
+  while (Date.now() < deadline) {
     if (failure) throw failure;
     try {
       const manifest = await readDesktopRuntime(stateDir);
@@ -82,6 +83,21 @@ async function privateFile(path: string) {
   else expect((await lstat(path)).mode & 0o777).toBe(0o600);
 }
 describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 120_000 : 5_000, hookTimeout: process.platform === "win32" ? 60_000 : 10_000}, () => {
+  it("preserves a normalized API prefix and binds credentials to that complete root", async () => {
+    await setSlot("work", {...slot, baseUrl: `${origin}/api/tenant///`});
+    vi.stubEnv("OPPER_BASE_URL", `${origin}/api/tenant/`);
+    const manifest = await start();
+    expect(manifest.origin).toBe(`${origin}/api/tenant`);
+    expect(await resolveDesktopApiContext(stateDir)).toEqual({apiKey: slot.apiKey, baseUrl: `${origin}/api/tenant`});
+    expect((await inference(manifest.url, manifest.token)).status).toBe(200);
+    expect(requests[0]).toMatchObject({url: expect.stringMatching(/^\/api\/tenant\/v3\/session\/sess_[^/]+\/project:acme\/responses$/), key: `Bearer ${slot.apiKey}`});
+    await setSlot("work", {...slot, baseUrl: `${origin}/other`});
+    vi.stubEnv("OPPER_BASE_URL", "");
+    await expect(resolveDesktopApiContext(stateDir)).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
+    expect((await inference(manifest.url, manifest.token)).status).toBe(502);
+    expect(requests).toHaveLength(1);
+  });
+
   it("prepares a reusable loopback route for launching without exposing the inference token", async () => {
     const manifest = await start();
     const prepared = await prepareDesktopProxy({ key: "work", stateDir });
@@ -212,21 +228,21 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     const execute = promisify(execFile);
     const entry = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
     const args = ["--import", "tsx", entry, "--key", "work", "proxy", "--state-dir", stateDir, "--no-open"];
-    const first = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
+    const first = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 60_000 : 15_000});
     expect(first.stdout).toContain("Sessions: http://127.0.0.1:");
     const manifest = await readDesktopRuntime(stateDir);
     expect(manifest.pid).not.toBe(process.pid);
     await privateFile(join(stateDir, "bridge.log"));
     const state = await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}}).then((res) => res.json());
     expect(state.paused).toBe(true);
-    const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
+    const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 60_000 : 15_000});
     expect(second.stdout).toContain("Sessions: ");
     expect((await readDesktopRuntime(stateDir)).pid).toBe(manifest.pid);
-    await execute(process.execPath, ["--import", "tsx", entry, "proxy", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
+    await execute(process.execPath, ["--import", "tsx", entry, "proxy", "stop", "--state-dir", stateDir], {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 60_000 : 15_000});
     await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
     await expect(fetch(`${manifest.url}/opper/status`)).rejects.toThrow();
     // Stop returns only once its lifetime lock and listening socket are gone.
-    const reopened = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 30_000 : 15_000});
+    const reopened = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: process.platform === "win32" ? 60_000 : 15_000});
     expect(reopened.stdout).toContain("Sessions: ");
     const restarted = await readDesktopRuntime(stateDir);
     expect(restarted.pid).not.toBe(manifest.pid);

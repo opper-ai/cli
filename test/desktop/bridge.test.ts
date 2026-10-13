@@ -28,6 +28,25 @@ function call(url: string, path = "/v3/compat/responses", opts: RequestInit = {}
 }
 
 describe("desktop bridge with real HTTP", () => {
+  it("retains an API root prefix for every supported inference and model route", async () => {
+    const forwarded: string[] = [];
+    const origin = await upstream(async (req, res) => {forwarded.push(req.url!); await body(req); res.end("ok");});
+    const proxy = await bridge(`${origin}/api/tenant///`, {initialTags: {project: "A"}});
+    const session = proxy.status().sessionId;
+    for (const path of ["/responses", "/v1/messages", "/chat/completions"]) {
+      expect((await call(proxy.url, `/v3/compat${path}?beta=true`)).status).toBe(200);
+    }
+    for (const path of ["/models", "/v1/models"]) {
+      expect((await call(proxy.url, `/v3/compat${path}?limit=2`, {method: "GET", body: null})).status).toBe(200);
+    }
+    expect(forwarded).toEqual([
+      ...["/responses", "/v1/messages", "/chat/completions"].map((path) => `/api/tenant/v3/session/${session}/project:A${path}?beta=true`),
+      "/api/tenant/v3/compat/models?limit=2", "/api/tenant/v3/compat/v1/models?limit=2",
+    ]);
+    expect((await call(proxy.url, "/api/tenant/v3/compat/responses")).status).toBe(404);
+    expect(forwarded).toHaveLength(5);
+  });
+
   it("preserves Claude beta queries, provider headers, bytes and SSE attribution across a switch", async () => {
     const received: Array<{url: string; headers: IncomingMessage["headers"]; payload: string}> = [];
     const events: Array<{path: string}> = [];
@@ -265,7 +284,7 @@ describe("desktop bridge with real HTTP", () => {
     const origin = await upstream((_req, res) => res.end("unused"));
     for (const port of [-1, 65536, 1.5]) await expect(bridge(origin, {port})).rejects.toThrow(/port/);
     await expect(bridge(origin, {token: " "})).rejects.toThrow(/token/);
-    for (const invalid of ["file:///tmp/model", "https://user:password@example.com", "https://example.com/path", "https://example.com?next=foo"]) {
+    for (const invalid of ["file:///tmp/model", "https://user:password@example.com", "https://example.com/path#fragment", "https://example.com?next=foo"]) {
       await expect(bridge(invalid)).rejects.toThrow(/origin/);
     }
     const events: Array<{status: number}> = [];

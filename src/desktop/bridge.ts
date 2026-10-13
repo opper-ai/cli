@@ -91,9 +91,10 @@ export async function startDesktopBridge(opts: DesktopBridgeOptions): Promise<De
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("port must be an integer from 0 to 65535");
   if (!opts.token.trim() || /[\r\n]/.test(opts.token)) throw new Error("a nonempty local token is required");
   const origin = new URL(opts.origin);
-  if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
-    throw new Error("origin must be an HTTP(S) origin without a path or credentials");
+  if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) {
+    throw new Error("origin must be an HTTP(S) API root without credentials, query or fragment");
   }
+  const apiRoot = origin.href.replace(/\/+$/, "");
   if (opts.projectUuid && /[\r\n]/.test(opts.projectUuid)) throw new Error("invalid project UUID");
   function copyContext(selected: DesktopContext): DesktopContext {
     if (!selected || typeof selected.sessionId !== "string" || !DESKTOP_SESSION_ID.test(selected.sessionId)) throw new Error("invalid desktop session ID");
@@ -162,8 +163,8 @@ export async function startDesktopBridge(opts: DesktopBridgeOptions): Promise<De
       if (closed || res.destroyed || req.aborted) { finish(); return; }
       if (!credential.trim()) throw new Error("missing credential");
       const target = new URL(inference
-        ? `${buildSessionBaseUrl(origin.origin, selected.sessionId, selected.tags)}${path.slice("/v3/compat".length)}`
-        : `${origin.origin}${path}`);
+        ? `${buildSessionBaseUrl(apiRoot, selected.sessionId, selected.tags)}${path.slice("/v3/compat".length)}`
+        : `${apiRoot}${path}`);
       const headers = copyHeaders(req.headers, true);
       headers.authorization = `Bearer ${credential}`;
       if (opts.projectUuid) headers["x-opper-project"] = opts.projectUuid;
