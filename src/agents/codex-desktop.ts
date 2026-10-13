@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,9 +8,11 @@ import { DEFAULT_MODELS } from "../config/models.js";
 import { OPPER_HOST } from "../config/endpoints.js";
 import { OpperError } from "../errors.js";
 import { run } from "../util/run.js";
+import { windowsDesktopApps, powerShellLiteral } from "../util/windows-desktop.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
 import { applyDesktopConfig, removeDesktopConfig, readDesktopConfig, DESKTOP_PROVIDER, type DesktopConfigState } from "../setup/codex-desktop-config.js";
 import type { AgentAdapter, ConfigureOptions, OpperRouting, SpawnOptions, UnconfigureOptions } from "./types.js";
+import { POWERSHELL_PRIVATE_STATE_SCRIPT, ensurePrivateStateDirectory } from "../desktop/private-state.js";
 
 const MINIMUM_RUNTIME = [0, 153, 4];
 function codexHome(explicit?: string): string {
@@ -29,7 +31,48 @@ function isSupportedRuntime(version: string): boolean {
   const comparison = parts.findIndex((n, i) => n !== MINIMUM_RUNTIME[i]);
   return comparison === -1 || parts[comparison]! > MINIMUM_RUNTIME[comparison]!;
 }
-function findApp(): { app: string; runtime: string; version: string } | null {
+interface DesktopApp { app: string; runtime: string; version: string; executable?: string; aumid?: string }
+function windowsRuntime(executable: string): string | undefined {
+  const resources = join(dirname(executable), "resources");
+  const candidates = [join(resources, "codex.exe"), join(resources, "codex-cli", "bin", "codex.exe")];
+  for (const target of ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]) {
+    candidates.push(join(resources, "codex-cli", "vendor", target, "codex", "codex.exe"));
+  }
+  const known = candidates.find((candidate) => existsSync(candidate));
+  if (known) return known;
+  // Packaging layouts can change without moving the registered app executable.
+  // Stay inside its resource directory and bound the discovery work.
+  let visited = 0;
+  function find(directory: string, depth: number): string | undefined {
+    if (depth > 6 || visited > 2000) return undefined;
+    let entries;
+    try { entries = readdirSync(directory, {withFileTypes: true}); } catch { return undefined; }
+    for (const entry of entries) {
+      if (++visited > 2000) return undefined;
+      const path = join(directory, entry.name);
+      if (entry.isFile() && entry.name.toLowerCase() === "codex.exe") return path;
+      if (entry.isDirectory()) { const found = find(path, depth + 1); if (found) return found; }
+    }
+    return undefined;
+  }
+  return find(resources, 0);
+}
+function findWindowsApp(): DesktopApp | null {
+  let outdated: DesktopApp | null = null;
+  for (const app of windowsDesktopApps("OpenAI.Codex")) {
+    const runtime = windowsRuntime(app.executable);
+    if (!runtime) continue;
+    const result = run(runtime, ["--version"]);
+    const version = result.stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/)?.[1];
+    if (result.code !== 0 || !version) continue;
+    const found: DesktopApp = {app: app.installLocation, runtime, version, executable: app.executable, aumid: app.aumid};
+    if (isSupportedRuntime(version)) return found;
+    outdated ??= found;
+  }
+  return outdated;
+}
+function findApp(): DesktopApp | null {
+  if (platform() === "win32") return findWindowsApp();
   if (platform() !== "darwin") return null;
   let outdatedApp: { app: string; runtime: string; version: string } | null = null;
   for (const app of appCandidates()) {
@@ -53,7 +96,7 @@ function findApp(): { app: string; runtime: string; version: string } | null {
 }
 function requireApp() {
   const app = findApp();
-  if (!app) throw new OpperError("AGENT_NOT_FOUND", "The Codex/ChatGPT desktop app for macOS is not installed.", "Install the app with local Codex support from https://chatgpt.com/download.");
+  if (!app) throw new OpperError("AGENT_NOT_FOUND", "The Codex/ChatGPT desktop app with a supported bundled local runtime was not found.", "Install the app with local Codex support from https://chatgpt.com/download.");
   if (!isSupportedRuntime(app.version)) {
     throw new OpperError("AGENT_NOT_FOUND", `The app bundles Codex ${app.version}; Opper desktop requires 0.153.4 or later.`, "Update the desktop app and try again.");
   }
@@ -120,15 +163,21 @@ try {
 
 // Read only the local bridge's credential; the upstream key remains with the bridge.
 const PROXY_AUTH_HELPER = `import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
+import { execFileSync } from "node:child_process";
 const [stateDir, expectedEndpoint] = process.argv.slice(2);
 let file;
 try {
   const directory = lstatSync(stateDir);
-  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0 || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (process.platform !== "win32" && (directory.mode & 0o077) !== 0) || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
   file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
   const info = fstatSync(file);
-  if (!info.isFile() || (info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid()) || info.size > 16384) throw new Error("invalid file");
+  if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0) || (process.getuid && info.uid !== process.getuid()) || info.size > 16384) throw new Error("invalid file");
+  if (process.platform === "win32") {
+    const executable = win32.join(process.env.SystemRoot || process.env.WINDIR || "C:\\\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const result = execFileSync(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {input: JSON.stringify({path: join(stateDir, "bridge.json"), kind: "file", create: false}), encoding: "utf8", timeout: 15000, windowsHide: true, stdio: ["pipe", "pipe", "pipe"]});
+    if (JSON.parse(result).ok !== true) throw new Error("invalid Windows access controls");
+  }
   const bridge = JSON.parse(readFileSync(file, "utf8"));
   if (bridge.version !== 1 || typeof bridge.url !== "string" || typeof bridge.token !== "string" || !/^[a-f0-9]{64}$/.test(bridge.token) || !Number.isSafeInteger(bridge.pid) || bridge.pid <= 0) throw new Error("invalid runtime");
   const endpoint = new URL(bridge.url);
@@ -199,8 +248,11 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
-    await mkdir(p.directory, { recursive: true, mode: 0o700 });
-    await chmod(p.directory, 0o700);
+    if (process.platform === "win32") await ensurePrivateStateDirectory(p.directory, true);
+    else {
+      await mkdir(p.directory, { recursive: true, mode: 0o700 });
+      await chmod(p.directory, 0o700);
+    }
     const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state };
     const backups = new Map<string, string | null>();
     for (const file of [p.auth, p.catalog, p.state]) backups.set(file, await readOptional(file));
@@ -224,6 +276,14 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
 function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
 function shellQuote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
 function launchCommand(settings: ConfiguredDesktop): string {
+  if (platform() === "win32") {
+    const environment = [`Remove-Item Env:OPPER_API_KEY -ErrorAction SilentlyContinue`, `$env:OPPER_HOME=${powerShellLiteral(settings.credentialHome)}`, `$env:OPPER_BASE_URL=${powerShellLiteral(settings.baseUrl)}`];
+    if (process.env.CODEX_ELECTRON_USER_DATA_PATH) environment.push(`$env:CODEX_ELECTRON_USER_DATA_PATH=${powerShellLiteral(resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH))}`);
+    const args = ["--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home];
+    if (settings.projectUuid) args.push("--project-uuid", settings.projectUuid);
+    if (settings.proxyStateDir) args.push("--proxy", "--state-dir", settings.proxyStateDir);
+    return [...environment, `& opper.cmd ${args.map(powerShellLiteral).join(" ")}`].join("; ");
+  }
   const args = ["env", "-u", "OPPER_API_KEY", `OPPER_HOME=${settings.credentialHome}`, `OPPER_BASE_URL=${settings.baseUrl}`];
   if (process.env.CODEX_ELECTRON_USER_DATA_PATH) args.push(`CODEX_ELECTRON_USER_DATA_PATH=${resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH)}`);
   args.push("opper", "--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home);
@@ -232,13 +292,14 @@ function launchCommand(settings: ConfiguredDesktop): string {
   return args.map(shellQuote).join(" ");
 }
 function reopenHint(settings: ConfiguredDesktop): string {
+  if (platform() === "win32") return `Quit the app, then run this PowerShell command to use the configured Codex home:\n${launchCommand(settings)}\nOrdinary Start menu launches use %USERPROFILE%\\.codex. Existing tasks keep their provider.`;
   return customHome(settings)
     ? `Quit the app, then use the same Codex home with this command:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex, not this custom home. Existing tasks keep their provider.`
     : "Quit and reopen the app to use Opper for new local Codex tasks. Existing tasks keep their provider.";
 }
 async function configure(opts: ConfigureOptions): Promise<void> {
   const settings = await setup(opts);
-  if (customHome(settings)) console.log(`Configured only ${settings.home}. To use the same Codex home, run:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex. The command above runs opper launch codex-desktop with your selected key and model.`);
+  if (customHome(settings)) console.log(`Configured only ${settings.home}. To use the same Codex home, run:\n${launchCommand(settings)}\n${platform() === "win32" ? "Ordinary Start menu launches use %USERPROFILE%\\.codex." : "Ordinary Finder launches use ~/.codex."} The command above runs opper launch codex-desktop with your selected key and model.`);
 }
 
 async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
@@ -280,6 +341,26 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
   const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
+  if (platform() === "win32") {
+    const processState = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id"]);
+    if (processState.code !== 0) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the app's running state could not be checked.", reopenHint(settings));
+    if (processState.stdout.trim() && !userData) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the Codex/ChatGPT app is already running.", reopenHint(settings));
+    if (!app.executable) throw new OpperError("AGENT_NOT_FOUND", "The registered Codex desktop executable is unavailable.", reopenHint(settings));
+    const environment = [`$ErrorActionPreference = 'Stop'`, `$env:CODEX_HOME=${powerShellLiteral(settings.home)}`];
+    let argumentsList = "";
+    if (userData) {
+      const profile = resolve(userData);
+      environment.push(`$env:CODEX_ELECTRON_USER_DATA_PATH=${powerShellLiteral(profile)}`);
+      // Start-Process joins ArgumentList into a Windows command line: keep the whole
+      // profile argument quoted so spaces in the directory survive that conversion.
+      argumentsList = ` -ArgumentList ${powerShellLiteral(`"--user-data-dir=${profile}"`)}`;
+    }
+    const script = [...environment, `Start-Process -FilePath ${powerShellLiteral(app.executable)}${argumentsList}`].join("; ");
+    const opened = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+    if (opened.code !== 0) throw new OpperError("AGENT_NOT_FOUND", "Opper is configured, but the Codex/ChatGPT app could not be opened.", reopenHint(settings));
+    console.log("Opened Codex/ChatGPT with Opper for new local Codex tasks.");
+    return 0;
+  }
   const executable = run("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", join(app.app, "Contents", "Info.plist")]);
   const binary = join(app.app, "Contents", "MacOS", executable.stdout.trim() || "ChatGPT");
   const processes = run("pgrep", ["-f", `^${binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([[:space:]]|$)`]);

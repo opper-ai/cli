@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopSessions, DESKTOP_SESSIONS_FILE } from "../../src/desktop/sessions.js";
+import { ensurePrivateStateDirectory, assertPrivateStateFile } from "../../src/desktop/private-state.js";
 
 const temporary: string[] = [];
 afterEach(async () => {vi.useRealTimers(); await Promise.all(temporary.splice(0).map((directory) => rm(directory, {recursive: true, force: true})));});
-async function directory() {const path = await mkdtemp(join(tmpdir(), "opper-desktop-sessions-")); temporary.push(path); return path;}
+async function directory() {const root = await mkdtemp(join(tmpdir(), "opper-desktop-sessions-")); temporary.push(root); const path=join(root,"state"); await ensurePrivateStateDirectory(path,true); return path;}
 
-describe("persistent desktop attribution sessions", () => {
+describe("persistent desktop attribution sessions", {timeout: process.platform === "win32" ? 60_000 : 5_000}, () => {
   it("creates named sessions, activates old stable IDs, and restores after restart", async () => {
     const path = await directory();
     const store = await openDesktopSessions(path);
@@ -24,7 +25,8 @@ describe("persistent desktop attribution sessions", () => {
     expect(reopened.state().sessions.map((session) => session.id)).toEqual([a.id, b.id]);
     await reopened.clear();
     expect((await openDesktopSessions(path)).state()).toMatchObject({activeId: null, sessions: [{id: a.id}, {id: b.id}]});
-    expect((await stat(join(path, DESKTOP_SESSIONS_FILE))).mode & 0o777).toBe(0o600);
+    if (process.platform === "win32") await assertPrivateStateFile(join(path, DESKTOP_SESSIONS_FILE));
+    else expect((await stat(join(path, DESKTOP_SESSIONS_FILE))).mode & 0o777).toBe(0o600);
     expect(await readFile(join(path, DESKTOP_SESSIONS_FILE), "utf8")).not.toMatch(/token|credential|prompt|authorization/i);
   });
 

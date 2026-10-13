@@ -160,9 +160,9 @@ opper agents remove claude-desktop   # works for any registered adapter
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
-### Codex / ChatGPT desktop on macOS
+### Codex / ChatGPT desktop on macOS and Windows
 
-Install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
+On macOS, install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). On Windows, install the [Codex app](https://openai.com/codex/) from the Microsoft Store; the CLI discovers its registered MSIX package and bundled runtime. The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
 
 ```bash
 # Configure and open the app with the selected stored key and model
@@ -223,6 +223,11 @@ Names, project tags, session IDs and archive state are stored in
 its own `desktop-sessions.json`. The file is private to your user and contains
 no prompts or API keys.
 
+On Windows, the proxy creates private state with Windows ACLs for the current
+user and verifies ownership, access rules and reparse points before reading
+credentials. Existing unsafe state is rejected rather than made private
+automatically. The default path is `%USERPROFILE%\.opper\desktop-bridge\`.
+
 The bridge starts when needed and continues running after the browser page or
 launching terminal closes. Running `opper proxy` again opens the same picker.
 Session names and tags are saved locally; inference uses the existing tagged
@@ -262,6 +267,24 @@ instead of opening a browser. Both require `--proxy`. Proxy sessions are selecte
 in the picker, so `--proxy` cannot be combined with per-launch `--tag` flags.
 Proxy mode requires a stored CLI credential slot, not `OPPER_API_KEY`.
 
+For a Windows trial, sign in and opt the installed app into the proxy from
+PowerShell (unset any `OPPER_API_KEY` first):
+
+```powershell
+opper login
+opper launch --proxy codex-desktop
+# Or:
+opper launch --proxy claude-desktop
+```
+
+If the app is already running, quit it and rerun the launch command. Create a
+new local Codex chat after changing its provider. Choose a session in the
+browser, send a message, switch sessions and send another message in the same
+chat. `opper proxy status` shows the selected project label and attribution ID;
+check Opper usage records to confirm attribution. Running `opper` and choosing
+**Proxy** reopens the picker and offers status, end and stop controls. To return
+to direct routing, run the launch command without `--proxy` and reopen the app.
+
 For an isolated macOS Codex trial from this checkout, build the CLI and start the bridge:
 
 ```sh
@@ -287,7 +310,9 @@ For operator debugging, `proxy status`, `proxy tag --tag project=acme`, and
 desktop inference is unavailable while it is stopped. `proxy start` stays in
 the foreground for development; Ctrl-C stops that instance. The current browser
 UI is local HTTP, and inference forwarding supports HTTP/SSE, not WebSockets.
-Claude Desktop and Windows app configuration still need live verification.
+Native Windows proxy lifecycle and access controls are exercised in Windows CI.
+Actual Windows desktop launch and inference, and live Claude Desktop inference,
+still need verification on machines with those apps installed.
 
 ## Routing through a session without the CLI
 

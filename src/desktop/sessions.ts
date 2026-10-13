@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { newSessionId, validateTags } from "../util/session-url.js";
+import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "./private-state.js";
 
 export const DESKTOP_SESSIONS_FILE = "desktop-sessions.json";
 export const DESKTOP_SESSION_ID = /^sess_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -80,10 +81,14 @@ function parseState(value: unknown): DesktopSessionsState {
 
 /** Single-daemon local registry. It stores attribution metadata only, never prompts or credentials. */
 export async function openDesktopSessions(stateDir: string): Promise<DesktopSessions> {
-  await mkdir(stateDir, {recursive: true, mode: 0o700});
+  if (process.platform === "win32") await ensurePrivateStateDirectory(stateDir, true);
+  else await mkdir(stateDir, {recursive: true, mode: 0o700});
   const file = join(stateDir, DESKTOP_SESSIONS_FILE);
   let live: DesktopSessionsState = {activeId: null, sessions: []};
-  try {live = parseState(JSON.parse(await readFile(file, "utf8")));}
+  try {
+    if (process.platform === "win32") await assertPrivateStateFile(file);
+    live = parseState(JSON.parse(await readFile(file, "utf8")));
+  }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("cannot read saved desktop sessions", {cause: error});
   }
@@ -91,7 +96,8 @@ export async function openDesktopSessions(stateDir: string): Promise<DesktopSess
   async function persist(next: DesktopSessionsState) {
     const temporary = join(stateDir, `.desktop-sessions-${randomUUID()}.tmp`);
     try {
-      await writeFile(temporary, JSON.stringify(next, null, 2) + "\n", {mode: 0o600, flag: "wx"});
+      if (process.platform === "win32") await ensurePrivateStateFile(temporary, true);
+      await writeFile(temporary, JSON.stringify(next, null, 2) + "\n", {mode: 0o600, flag: process.platform === "win32" ? "w" : "wx"});
       await rename(temporary, file);
     } finally {await rm(temporary, {force: true});}
   }

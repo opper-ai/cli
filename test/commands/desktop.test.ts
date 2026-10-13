@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopStatusCommand, desktopOpenCommand, desktopStopCommand, readDesktopRuntime, resolveDesktopApiContext, prepareDesktopProxy } from "../../src/commands/desktop.js";
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
+import { ensurePrivateStateDirectory, assertPrivateStateFile } from "../../src/desktop/private-state.js";
 
 let directory: string;
 let stateDir: string;
@@ -72,7 +73,15 @@ async function inference(url: string, token: string) {
   return fetch(`${url}/v3/compat/responses`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ model: "test/model", input: "dummy test" }) });
 }
 
-describe("desktop command lifecycle", () => {
+async function privateDirectory(path: string) {
+  if (process.platform === "win32") await ensurePrivateStateDirectory(path);
+  else expect((await lstat(path)).mode & 0o777).toBe(0o700);
+}
+async function privateFile(path: string) {
+  if (process.platform === "win32") await assertPrivateStateFile(path);
+  else expect((await lstat(path)).mode & 0o777).toBe(0o600);
+}
+describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 120_000 : 5_000, hookTimeout: process.platform === "win32" ? 60_000 : 10_000}, () => {
   it("prepares a reusable loopback route for launching without exposing the inference token", async () => {
     const manifest = await start();
     const prepared = await prepareDesktopProxy({ key: "work", stateDir });
@@ -95,8 +104,8 @@ describe("desktop command lifecycle", () => {
   });
   it("creates private runtime state, switches attribution through real controls, clears and stops", async () => {
     const manifest = await start();
-    expect((await lstat(stateDir)).mode & 0o777).toBe(0o700);
-    expect((await lstat(join(stateDir, "bridge.json"))).mode & 0o777).toBe(0o600);
+    await privateDirectory(stateDir);
+    await privateFile(join(stateDir, "bridge.json"));
     expect(manifest.pid).toBe(process.pid);
     expect((await inference(manifest.url, manifest.token)).status).toBe(200);
     const before = await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}}).then((res) => res.json());
@@ -137,7 +146,7 @@ describe("desktop command lifecycle", () => {
     expect(restarted.sessions).toEqual(initial.sessions);
     const saved = await readFile(join(stateDir, "connection.json"), "utf8");
     expect(saved).not.toContain(slot.apiKey);
-    expect((await lstat(join(stateDir, "connection.json"))).mode & 0o777).toBe(0o600);
+    await privateFile(join(stateDir, "connection.json"));
     expect((await inference(second.url, second.token)).status).toBe(200);
   });
   it("opens the actual dashboard and connects its mutations to saved attribution sessions", async () => {
@@ -202,7 +211,7 @@ describe("desktop command lifecycle", () => {
     expect(first.stdout).toContain("Sessions: http://127.0.0.1:");
     const manifest = await readDesktopRuntime(stateDir);
     expect(manifest.pid).not.toBe(process.pid);
-    expect((await lstat(join(stateDir, "bridge.log"))).mode & 0o777).toBe(0o600);
+    await privateFile(join(stateDir, "bridge.log"));
     const state = await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}}).then((res) => res.json());
     expect(state.paused).toBe(true);
     const second = await execute(process.execPath, args, {env: {...process.env, NO_UPDATE_NOTIFIER: "1"}, timeout: 15_000});
@@ -249,11 +258,14 @@ describe("desktop command lifecycle", () => {
   });
   it("refuses symlinked and non-private state without contacting any endpoint", async () => {
     const manifest = await start();
-    await chmod(join(stateDir, "bridge.json"), 0o644);
+    const file = join(stateDir, "bridge.json");
+    if (process.platform === "win32") await promisify(execFile)("icacls.exe", [file, "/grant", "*S-1-1-0:(R)"]);
+    else await chmod(file, 0o644);
     await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
-    await chmod(join(stateDir, "bridge.json"), 0o600);
+    if (process.platform === "win32") await promisify(execFile)("icacls.exe", [file, "/remove:g", "*S-1-1-0"]);
+    else await chmod(file, 0o600);
     const linked = join(directory, "linked");
-    await symlink(stateDir, linked);
+    await symlink(stateDir, linked, process.platform === "win32" ? "junction" : "dir");
     await expect(readDesktopRuntime(linked)).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
     expect(requests).toHaveLength(0);
     expect(manifest.token).toHaveLength(64);

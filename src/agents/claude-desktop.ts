@@ -10,6 +10,7 @@ import {
   isClaudeDesktopModelId,
 } from "../config/models.js";
 import { run } from "../util/run.js";
+import { windowsDesktopApps } from "../util/windows-desktop.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -77,8 +78,11 @@ function appCandidates(): string[] {
   switch (platform()) {
     case "darwin":
       return darwinAppCandidates();
-    case "win32":
-      return windowsAppCandidates();
+    case "win32": {
+      const legacy = windowsAppCandidates();
+      if (legacy.some((candidate) => existsSync(candidate))) return legacy;
+      return [...legacy, ...windowsDesktopApps("Claude").map((app) => app.executable)];
+    }
     default:
       return [];
   }
@@ -511,6 +515,9 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   await applyOpperProfile(routing.apiKey, routing.model, routing.desktopProxy);
 
   if (isClaudeRunning()) {
+    if (platform() === "win32") {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but Claude Desktop is already running.", "Quit Claude Desktop and re-run the same opper launch command, or reopen it from the Start menu. Existing work stays available until you quit.");
+    }
     quitClaude();
     const exited = await waitForClaudeExit();
     if (!exited) {

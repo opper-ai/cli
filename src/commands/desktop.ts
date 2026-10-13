@@ -15,7 +15,8 @@ import { validateTags } from "../util/session-url.js";
 import { startDesktopBridge } from "../desktop/bridge.js";
 import { openDesktopSessions } from "../desktop/sessions.js";
 import { createDesktopDashboard } from "../desktop/dashboard.js";
-import { openBrowser } from "../util/open-browser.js";
+import { openLocalProxyBrowser } from "../util/open-browser.js";
+import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "../desktop/private-state.js";
 
 export interface DesktopStateOptions { stateDir?: string }
 export interface DesktopStartOptions extends DesktopStateOptions {
@@ -104,6 +105,14 @@ async function requireSlot(key: string): Promise<AuthSlot> {
   return slot;
 }
 async function ensurePrivateDirectory(path: string, create = false): Promise<void> {
+  if (process.platform === "win32") {
+    try { await ensurePrivateStateDirectory(path, create); }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw error("No local proxy state found.", "Start `opper proxy start` first, or choose its --state-dir.");
+      throw error("Local proxy state must be private and owned by the current Windows user, without reparse points.");
+    }
+    return;
+  }
   if (create) await mkdir(path, { recursive: true, mode: 0o700 });
   let stat;
   try { stat = await lstat(path); } catch (cause) {
@@ -125,8 +134,11 @@ async function readPrivateJson(directory: string, name: string): Promise<unknown
   }
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid()) || stat.size > 16_384) {
+    if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o077) !== 0) || (process.getuid && stat.uid !== process.getuid()) || stat.size > 16_384) {
       throw error(`Local proxy ${name} must be a private regular file owned by the current user (mode 0600).`);
+    }
+    if (process.platform === "win32") {
+      try { await assertPrivateStateFile(join(directory, name)); } catch { throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`); }
     }
     try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed local proxy ${name}.`); }
   } finally { await file.close(); }
@@ -168,7 +180,8 @@ async function savedConnection(directory: string): Promise<DesktopConnection | u
 }
 async function writePrivateJson(directory: string, name: string, value: unknown): Promise<void> {
   const temporary = join(directory, `.${name}.${process.pid}.${randomBytes(8).toString("hex")}`);
-  const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  if (process.platform === "win32") await ensurePrivateStateFile(temporary, true);
+  const file = await open(temporary, process.platform === "win32" ? constants.O_WRONLY : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
     await file.writeFile(JSON.stringify(value, null, 2) + "\n");
     await file.close();
@@ -466,10 +479,11 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
     validateBinding(manifest, opts, origin);
     await requestControl(manifest);
   } else {
+    if (process.platform === "win32") await ensurePrivateStateFile(join(directory, "bridge.log"), true);
     const log = await open(join(directory, "bridge.log"), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     try {
       const stat = await log.stat();
-      if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid && stat.uid !== process.getuid())) throw error("Local proxy log must be a private regular file owned by the current user (mode 0600).");
+      if (!stat.isFile() || (process.platform !== "win32" && (stat.mode & 0o077) !== 0) || (process.getuid && stat.uid !== process.getuid())) throw error("Local proxy log must be a private regular file owned by the current user (mode 0600).");
       const entry = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "../index.ts" : "../index.js", import.meta.url));
       const args = [...process.execArgv, entry, "--key", opts.key,
         ...(opts.projectUuid !== undefined ? ["--project-uuid", opts.projectUuid] : []),
@@ -508,7 +522,7 @@ export async function desktopOpenCommand(opts: DesktopOpenOptions): Promise<{ ur
   if (typeof launch?.url !== "string") throw error("Local proxy returned an invalid picker URL.");
   const url = new URL(launch.url);
   if (url.origin !== new URL(manifest.url).origin || url.username || url.password) throw error("Desktop picker must stay on the configured loopback endpoint.");
-  if (opts.open !== false) openBrowser(url.href);
+  if (opts.open !== false) openLocalProxyBrowser(url.href);
   // A one-use local browser ticket, never the inference token or an Opper key.
   console.log(`Sessions: ${url.href}`);
   return { url: url.href };

@@ -762,3 +762,54 @@ describe("claude-desktop adapter — spawn (macOS)", () => {
     }
   });
 });
+
+describe("Claude desktop on Windows with a local proxy", () => {
+  let home: string;
+  let local: string;
+  let executable: string;
+  let running: boolean;
+  const desktopProxy = {baseUrl: "http://127.0.0.1:45752", token: "local-proxy-token", stateDir: "/synthetic/state"};
+  beforeEach(() => {
+    home = makeTempHome(); homedirMock.mockReturnValue(home); platformMock.mockReturnValue("win32");
+    local = join(home, "AppData", "Local"); vi.stubEnv("LOCALAPPDATA", local);
+    const root = join(home, "WindowsApps", "Claude_fixture");
+    executable = join(root, "app", "Claude.exe");
+    mkdirSync(join(root, "app"), {recursive: true}); writeFileSync(executable, "fixture");
+    existsSyncMock.mockReset(); existsSyncMock.mockImplementation((path: string) => {
+      const {existsSync} = require("node:fs") as typeof import("node:fs"); return existsSync(path);
+    });
+    running = false;
+    runMock.mockReset(); runMock.mockImplementation((command: string, args: string[]) => {
+      const script = args.at(-1) ?? "";
+      if (command === "powershell.exe" && script.includes("Get-AppxPackage")) return ok(JSON.stringify([{installLocation: root, executable: "app/Claude.exe", aumid: "Claude_fixture!App"}]));
+      if (command === "powershell.exe" && script.includes("Get-Process")) return ok(running ? "123\n" : "");
+      return ok();
+    });
+  });
+  afterEach(() => {vi.unstubAllEnvs(); rmSync(home, {recursive: true, force: true});});
+  it("detects a registered MSIX app even without legacy LocalAppData executables", async () => {
+    expect(await claudeDesktop.detect()).toMatchObject({installed: true});
+    expect(runMock.mock.calls.some(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Get-AppxPackage"))).toBe(true);
+  });
+  it("writes the Windows profile with only local auth and opens the registered app", async () => {
+    await expect(claudeDesktop.spawn!([], {...ROUTING, desktopProxy, apiKey: "upstream-secret"})).resolves.toBe(0);
+    const profile = join(local, "Claude-3p", "configLibrary", "727f05c8-a429-43cc-b1c6-36d8883d98b8.json");
+    expect(JSON.parse(readFileSyncReal(profile, "utf8"))).toMatchObject({inferenceGatewayBaseUrl: "http://127.0.0.1:45752/v3/compat", inferenceGatewayApiKey: desktopProxy.token});
+    expect(readFileSyncReal(profile, "utf8")).not.toContain("upstream-secret");
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+    const launch = runMock.mock.calls.find(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))?.[1].at(-1);
+    expect(launch).toContain(executable);
+  });
+  it("does not quit a customer's already running Windows app", async () => {
+    running = true;
+    await expect(claudeDesktop.spawn!([], {...ROUTING, desktopProxy})).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT", hint: expect.stringContaining("Quit")});
+    expect(runMock.mock.calls.some(([command, args]) => command === "powershell.exe" && /Start-Process|Stop-Process|CloseMainWindow/.test(args.at(-1) ?? ""))).toBe(false);
+  });
+  it("retains legacy executable discovery and launch", async () => {
+    const legacy = join(local, "AnthropicClaude", "Claude.exe");
+    mkdirSync(join(local, "AnthropicClaude"), {recursive: true}); writeFileSync(legacy, "fixture");
+    await expect(claudeDesktop.spawn!([], {...ROUTING, desktopProxy})).resolves.toBe(0);
+    const launch = runMock.mock.calls.find(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))?.[1].at(-1);
+    expect(launch).toContain(legacy);
+  });
+});

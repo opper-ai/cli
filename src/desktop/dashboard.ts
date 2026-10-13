@@ -27,7 +27,7 @@ const HTML = `<!doctype html>
 <section class="active-card" aria-labelledby="active-heading"><div class="section-label"><span class="signal" id="signal"></span><h2 id="active-heading">Current session</h2></div><h3 id="active-name">Choose a session</h3><p id="active-project">Choose a session before using Claude or Codex.</p><div class="active-bottom"><span id="request-status">Checking sessions…</span><button id="pause" class="quiet" disabled>End session</button></div></section>
 <p class="scope">The selected session applies to new inference in both apps. Finish ongoing work before switching.</p>
 <div class="columns"><section class="saved" aria-labelledby="saved-heading"><div class="section-top"><h2 id="saved-heading">Saved sessions</h2><span id="session-count"></span></div><div class="session-views" role="group" aria-label="Session view"><button id="saved-view" aria-pressed="true">Saved</button><button id="archived-view" aria-pressed="false">Archived</button></div><div id="sessions" class="session-list"></div><p id="empty">Create a session to get started.</p></section>
-<section class="create" aria-labelledby="create-heading"><h2 id="create-heading">New session</h2><p>Give this work a name and project.</p><form id="create-form"><label for="name">Session name</label><input id="name" name="name" placeholder="Website redesign" maxlength="120" required autocomplete="off"><label for="project">Project</label><input id="project" name="project" list="project-options" placeholder="acme" maxlength="256" required autocomplete="off"><datalist id="project-options"></datalist><button class="primary" type="submit">Create and use session <span aria-hidden="true">↗</span></button></form></section></div><p id="feedback" role="status" aria-live="polite"></p><footer>One active session · Your saved sessions stay here</footer></main></body></html>`;
+<section class="create" aria-labelledby="create-heading"><h2 id="create-heading">New session</h2><p>Give this work a name and project.</p><form id="create-form"><label for="name">Session name</label><input id="name" name="name" placeholder="Website redesign" maxlength="128" required autocomplete="off"><label for="project">Project</label><input id="project" name="project" list="project-options" placeholder="acme" maxlength="256" required autocomplete="off"><datalist id="project-options"></datalist><button class="primary" type="submit">Create and use session <span aria-hidden="true">↗</span></button></form></section></div><p id="feedback" role="status" aria-live="polite"></p><footer>One active session · Your saved sessions stay here</footer></main></body></html>`;
 
 const SCRIPT = `"use strict";
 const el = (id) => document.getElementById(id);
@@ -91,7 +91,15 @@ async function mutate(path, payload, message) {
   if (busy) return false; busy = true; if (latest) render(latest);
   try {render(await api(path, payload)); feedback(message); return true;} catch (error) {feedback(error.message, true); return false;} finally {busy = false; if (latest) render(latest);}
 }
-el("create-form").addEventListener("submit", async (event) => {event.preventDefault(); if (await mutate("/api/sessions", {name:el("name").value.trim(), project:el("project").value.trim()}, "Session created and selected.")) {el("create-form").reset(); view = "saved"; render(latest);}});
+el("create-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = el("name").value.trim(); const project = el("project").value.trim();
+  const encoder = new TextEncoder();
+  if (encoder.encode(name).length > 128) {feedback("Session name is too long. Shorten it and try again.", true); el("name").focus(); return;}
+  if (encoder.encode(project).length > 256) {feedback("Project is too long. Shorten it and try again.", true); el("project").focus(); return;}
+  if (!name || !project) {feedback("Enter a session name and project.", true); return;}
+  if (await mutate("/api/sessions", {name, project}, "Session created and selected.")) {el("create-form").reset(); view = "saved"; render(latest);}
+});
 el("pause").addEventListener("click", () => mutate("/api/pause", {}, "Session ended. Select a session when you are ready to continue."));
 el("saved-view").addEventListener("click", () => {view = "saved"; if (latest) render(latest);});
 el("archived-view").addEventListener("click", () => {view = "archived"; if (latest) render(latest);});
@@ -149,7 +157,9 @@ export function createDesktopDashboard(deps: DashboardDependencies) {
     const change = async () => {
       if (path === "/api/sessions") {
         const {name, project} = payload;
-        if (typeof name !== "string" || !name.trim() || name.trim().length > 120 || typeof project !== "string" || !project.trim() || project.trim().length > 256) throw new DashboardError(400, "Enter a session name and project.");
+        if (typeof name !== "string" || !name.trim() || typeof project !== "string" || !project.trim()) throw new DashboardError(400, "Enter a session name and project.");
+        if (Buffer.byteLength(name.trim(), "utf8") > 128) throw new DashboardError(400, "Session name is too long. Shorten it and try again.");
+        if (Buffer.byteLength(project.trim(), "utf8") > 256) throw new DashboardError(400, "Project is too long. Shorten it and try again.");
         await deps.createSession(name.trim(), project.trim());
       } else if (path === "/api/pause") await deps.pauseSession();
       else {

@@ -35,6 +35,21 @@ async function fixture(beforeCreate?: () => Promise<void>, port = 0) {
 }
 
 describe("desktop dashboard over real HTTP", () => {
+  it("checks UTF-8 byte limits before creating Unicode sessions", async () => {
+    const f = await fixture();
+    const name = await f.api("/api/sessions", {name:"日".repeat(50),project:"acme"});
+    expect(name.status).toBe(400);
+    expect(await name.text()).toContain("Session name is too long");
+    const project = await f.api("/api/sessions", {name:"Research",project:"😀".repeat(65)});
+    expect(project.status).toBe(400);
+    expect(await project.text()).toContain("Project is too long");
+    expect(f.state.sessions).toHaveLength(0);
+    expect((await f.api("/api/sessions", {name:"日".repeat(42),project:"😀".repeat(64)})).status).toBe(200);
+    expect(f.state.sessions).toHaveLength(1);
+    const script = await (await fetch(f.origin+"/app.js")).text();
+    expect(script).toContain("new TextEncoder()");
+    expect(script).toContain("Session name is too long");
+  });
   it("consumes a short-lived one-use launch ticket and separates browser auth from inference bearer", async () => {
     const f = await fixture();
     expect(f.opened.status).toBe(303);
