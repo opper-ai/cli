@@ -168,6 +168,7 @@ import { execFile } from "node:child_process";
 const [stateDir, expectedEndpoint] = process.argv.slice(2);
 let file;
 let stage = "state directory";
+let nativeFailure;
 try {
   const directory = lstatSync(stateDir);
   if (!directory.isDirectory() || directory.isSymbolicLink() || (process.platform !== "win32" && (directory.mode & 0o077) !== 0) || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
@@ -179,7 +180,15 @@ try {
     stage = "Windows access controls";
     const executable = win32.join(process.env.SystemRoot || process.env.WINDIR || "C:\\\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const result = await new Promise((resolve, reject) => {
-      const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {encoding: "utf8", timeout: 15000, maxBuffer: 16384, windowsHide: true}, (cause, stdout) => {
+      const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {encoding: "utf8", timeout: 15000, maxBuffer: 16384, windowsHide: true}, (cause, stdout, stderr) => {
+        if (cause) {
+          let output;
+          try { output = JSON.parse(stdout.trim()); } catch {}
+          nativeFailure = {killed: cause.killed === true, signal: ["SIGTERM", "SIGKILL", "SIGINT"].includes(cause.signal) ? cause.signal : null,
+            exitCode: Number.isSafeInteger(cause.code) ? cause.code : null,
+            code: ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(cause.code) ? cause.code : null,
+            resultCode: ["ENOENT", "AGENT_CONFIG_CONFLICT"].includes(output?.code) ? output.code : null, stderrPresent: !!stderr?.trim()};
+        }
         if (cause) reject(cause); else resolve(stdout);
       });
       child.stdin?.on("error", () => {});
@@ -199,6 +208,7 @@ try {
 } catch (cause) {
   const code = ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(cause?.code) ? " (" + cause.code + ")" : "";
   process.stderr.write("Local proxy validation failed at " + stage + code + ".\\n");
+  if (nativeFailure) process.stderr.write("Native validation process: " + JSON.stringify(nativeFailure) + "\\n");
   process.stderr.write("The local Opper proxy is unavailable or its endpoint changed. Start it with opper proxy, or reconfigure and relaunch with opper launch --proxy codex-desktop, preserving your --state-dir and --codex-home options.\\n");
   process.exitCode = 1;
 } finally { if (file !== undefined) closeSync(file); }

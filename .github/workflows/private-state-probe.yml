@@ -1,0 +1,23 @@
+name: Windows checker diagnostic
+on:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: windows-checker-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Compare native checker environments and file handles
+        env:
+          OPPER_NATIVE_DIAGNOSTIC: "1"
+        run: npx --no-install vitest run test/agents/codex-desktop.test.ts -t "diagnoses the actual Windows native checker transport"
