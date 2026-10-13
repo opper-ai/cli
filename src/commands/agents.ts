@@ -3,6 +3,7 @@ import { isLaunchable } from "../agents/types.js";
 import { brand } from "../ui/colors.js";
 import { OpperError } from "../errors.js";
 import { resolveApiContext } from "../api/resolve.js";
+import { prepareDesktopProxy, desktopOpenCommand, validateDesktopRoutingOptions, type DesktopRoutingOptions } from "./desktop.js";
 
 interface Row {
   name: string;
@@ -105,16 +106,29 @@ export async function agentsRemoveCommand(name: string, codexHome?: string): Pro
   console.log(`${adapter.displayName} integration removed.`);
 }
 
-export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string, projectUuid?: string): Promise<void> {
+export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string, projectUuid?: string, opts: DesktopRoutingOptions = {}): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) throw new OpperError("AGENT_NOT_FOUND", `Unknown agent "${name}"`, "Run `opper agents list` to see supported agents.");
   if (codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
+  validateDesktopRoutingOptions(adapter.name, opts);
   const context = await resolveApiContext(key, { projectUuid });
+  const desktop = opts.proxy ? await prepareDesktopProxy({ key,
+    ...(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {}),
+    ...(projectUuid !== undefined ? { projectUuid } : {}),
+  }) : undefined;
   await adapter.configure({ keyName: key, ...context,
+    ...(desktop ? { desktopProxy: desktop.proxy } : {}),
     ...(model ? { model } : {}),
     ...(codexHome !== undefined ? { codexHome } : {}),
   });
   console.log(`${adapter.displayName} configured.`);
+  if (desktop) {
+    await desktopOpenCommand({ key, stateDir: desktop.proxy.stateDir,
+      ...(projectUuid !== undefined ? { projectUuid } : {}),
+      ...(opts.open === false ? { open: false } : {}),
+    });
+    console.log("Configured local proxy routing. Quit and reopen the app, then select a session before sending a message.");
+  }
 }

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, copyFileSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, copyFileSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { readDesktopConfig } from "../../src/setup/codex-desktop-config.js";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
 import { OpperError } from "../../src/errors.js";
+import { ensurePrivateStateDirectory, ensurePrivateStateFile } from "../../src/desktop/private-state.js";
 
 const mocks = vi.hoisted(() => {
   const { existsSync } = require("node:fs") as typeof import("node:fs");
@@ -16,6 +18,7 @@ const mocks = vi.hoisted(() => {
     run: vi.fn(),
     fetchCatalog: vi.fn(),
     apps: new Set<string>(),
+    runtimeLayout: "legacy",
   };
 });
 
@@ -30,6 +33,8 @@ vi.mock("node:fs", async () => ({
     const normalized = path.replaceAll("\\", "/");
     if ([...mocks.apps].some((app) => {
       const normalizedApp = app.replaceAll("\\", "/");
+      if (normalized === `${normalizedApp}/Contents/Resources/codex`) return mocks.runtimeLayout === "legacy";
+      if (normalized === `${normalizedApp}/Contents/Resources/codex-cli/bin/codex`) return mocks.runtimeLayout === "nested";
       return normalized === normalizedApp || normalized.startsWith(`${normalizedApp}/`);
     })) return true;
     if (normalized.startsWith("/Applications/")) return false;
@@ -74,22 +79,49 @@ function configText(): string { return readFileSync(join(codexHome, "config.toml
 function provider(): Record<string, any> {
   return (readDesktopConfig(configText()).model_providers as Record<string, any>)["opper-desktop"];
 }
+function desktopHelperEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") return {PATH: process.env.PATH ?? "", HOME: join(home, "finder-home")};
+  // A Windows desktop launch keeps the OS environment required by PowerShell.
+  // It need not inherit shell credentials or an Opper home override.
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^OPPER_/i.test(key) && !/(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|^CODEX_HOME$)/i.test(key)));
+}
 function configuredHelper() {
   const auth = provider().auth as { command: string; args: string[] };
   expect(isAbsolute(auth.command)).toBe(true);
-  expect(realpathSync(auth.command)).toBe(realpathSync(process.execPath));
+  const state = JSON.parse(readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8"));
+  if (state.bundledRuntime && process.env.OPPER_DISTRIBUTION === "bundle") expect(auth.command).toBe(join(codexHome, "opper-desktop", NODE_NAME));
+  else expect(realpathSync(auth.command)).toBe(realpathSync(process.execPath));
   expect(auth.args.some((arg) => arg === join(codexHome, "opper-desktop", "auth.mjs"))).toBe(true);
   return () => spawnSync(auth.command, auth.args, {
-    encoding: "utf8", timeout: 5_000,
-    // Finder has neither the launch shell's key nor its Opper home override.
-    env: { PATH: process.env.PATH ?? "", HOME: join(home, "finder-home") },
+    encoding: "utf8", timeout: process.platform === "win32" ? 20_000 : 5_000,
+    env: desktopHelperEnvironment(),
   });
+}
+function successfulHelperOutput(helper: ReturnType<typeof configuredHelper>): string {
+  const result = helper();
+  // Never include stdout in diagnostics: it contains the authentication token.
+  const diagnostics = JSON.stringify({status: result.status, signal: result.signal, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    stderr: result.stderr.replaceAll(KEY, "[redacted]").replace(/[a-f0-9]{64}/g, "[redacted]")});
+  expect(result.status, diagnostics).toBe(0);
+  return result.stdout;
 }
 function allText(directory: string): string {
   return readdirSync(directory, { withFileTypes: true }).map((entry) => {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? allText(path) : readFileSync(path, "utf8");
   }).join("\n");
+}
+async function desktopProxy() {
+  const stateDir = join(home, "private bridge state");
+  await ensurePrivateStateDirectory(stateDir, true);
+  const proxy = {baseUrl: "http://127.0.0.1:19437", token: "a".repeat(64), stateDir};
+  const manifest = {version: 1, url: proxy.baseUrl, token: proxy.token, pid: process.pid};
+  const path = join(stateDir, "bridge.json");
+  await ensurePrivateStateFile(path, true);
+  const write = (updates = {}) => writeFileSync(path, JSON.stringify({...manifest, ...updates}), {mode: 0o600});
+  write();
+  return {proxy, path, write};
 }
 
 beforeEach(async () => {
@@ -108,6 +140,7 @@ beforeEach(async () => {
   mocks.platform.mockReturnValue("darwin");
   mocks.apps.clear();
   mocks.apps.add("/Applications/ChatGPT.app");
+  mocks.runtimeLayout = "legacy";
   appRunning = false;
   bundleId = "com.openai.codex";
   runtimeVersion = "0.153.4";
@@ -165,6 +198,17 @@ describe("Codex desktop detection", () => {
   it("accepts the combined ChatGPT app with the Codex bundle and supported runtime", async () => {
     expect(await codexDesktop.detect()).toMatchObject({ installed: true });
     expect(mocks.run.mock.calls.some(([command]) => command === join("/Applications/ChatGPT.app", "Contents", "Resources", "codex"))).toBe(true);
+  });
+
+  it("detects and launches current apps with the nested Codex CLI runtime", async () => {
+    mocks.runtimeLayout = "nested";
+    runtimeVersion = "0.162.0-alpha.17.2";
+    const runtime = join("/Applications/ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex");
+
+    expect(await codexDesktop.detect()).toMatchObject({ installed: true, version: "0.162.0" });
+    await expect(codexDesktop.spawn!([], routing())).resolves.toBe(0);
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"]);
+    expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(true);
   });
 
   it("also finds the separate Codex app", async () => {
@@ -272,6 +316,20 @@ describe("Codex desktop configuration and credentials", () => {
     expect(mocks.realExists(join(codexHome, "opper-desktop", "NODE-LICENSE"))).toBe(false);
     expect(readFileSync(note, "utf8")).toBe("Keep this user file.");
   });
+
+  it("keeps bundled proxy credentials working after the original bundle is pruned", async () => {
+    const {proxy} = await desktopProxy();
+    const bundle = useBundleRuntime();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const helper = configuredHelper();
+    expect(successfulHelperOutput(helper)).toBe(proxy.token);
+    rmSync(bundle, {recursive: true});
+    expect(successfulHelperOutput(helper)).toBe(proxy.token);
+    expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, supports_websockets: false});
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.realExists(join(codexHome, "opper-desktop", NODE_NAME))).toBe(false);
+  }, 60_000);
 
   it.each([NODE_NAME, "NODE-LICENSE"])("rejects an unmanaged bundled %s even in a configured integration", async (file) => {
     await codexDesktop.configure(options());
@@ -536,6 +594,141 @@ describe("Codex desktop launching", () => {
   });
 });
 
+describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
+  it("closes native-checker stdin and reports only safe validation stages", async () => {
+    const {proxy} = await desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const auth = provider().auth as {command: string; args: string[]};
+    const script = readFileSync(auth.args[0]!, "utf8");
+    const shim = join(home, "native-checker-shim.mjs");
+    const generated = join(home, "proxy-helper-native-transport.mjs");
+    const checker = `let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const request = JSON.parse(input); if (request.path !== process.argv[1] || request.kind !== 'file' || request.create !== false) process.exit(2); process.stdout.write(JSON.stringify({ok: process.argv[2] === 'true'})); });`;
+    const invoke = (valid: boolean) => {
+      writeFileSync(shim, `import {execFile as execute} from 'node:child_process';
+export function execFile(executable, args, options, callback) {
+  if (!Buffer.from(args.at(-1), 'base64').toString('utf16le').includes('[Console]::In.ReadToEnd()')) throw new Error('missing native checker');
+  return execute(process.execPath, ['-e', ${JSON.stringify(checker)}, ${JSON.stringify(join(proxy.stateDir, "bridge.json"))}, ${JSON.stringify(String(valid))}], options, callback);
+}`);
+      writeFileSync(generated, `Object.defineProperty(process, 'platform', {value: 'win32'});\n` + script.replace('from "node:child_process"', `from ${JSON.stringify(pathToFileURL(shim).href)}`));
+      return spawnSync(auth.command, [generated, ...auth.args.slice(1)], {encoding: "utf8", timeout: 10_000});
+    };
+    expect(successfulHelperOutput(() => invoke(true))).toBe(proxy.token);
+    const rejected = invoke(false);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stdout).toBe("");
+    expect(rejected.stderr).toContain("validation failed at Windows access controls.");
+    expect(rejected.stderr).not.toContain(proxy.token);
+    expect(rejected.stderr).not.toContain(KEY);
+  });
+
+  it("discovers models with the real credential while persisting only local routing and a token reader", async () => {
+    const {proxy, write} = await desktopProxy();
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await codexDesktop.spawn!([], routing({desktopProxy: proxy, projectUuid}));
+    expect(mocks.fetchCatalog).toHaveBeenCalledWith({apiKey: KEY, baseUrl: API_ROOT, projectUuid}, MODEL);
+    expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, wire_api: "responses", supports_websockets: false});
+    expect(provider().http_headers).toBeUndefined();
+    expect(allText(codexHome)).not.toContain(KEY);
+    expect(allText(codexHome)).not.toContain(proxy.token);
+    const helper = configuredHelper();
+    expect(successfulHelperOutput(helper)).toBe(proxy.token);
+    const renewed = "b".repeat(64);
+    write({token: renewed});
+    expect(successfulHelperOutput(helper)).toBe(renewed);
+  });
+
+  it("supports direct to proxy to direct transitions and removal restores personal settings", async () => {
+    const {proxy} = await desktopProxy();
+    await codexDesktop.configure(options());
+    expect(successfulHelperOutput(configuredHelper())).toBe(KEY);
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    expect(provider().base_url).toBe(`${proxy.baseUrl}/v3/compat`);
+    expect(successfulHelperOutput(configuredHelper())).toBe(proxy.token);
+    await codexDesktop.configure(options());
+    expect(provider().base_url).toBe(`${API_ROOT}/v3/compat`);
+    expect(provider().supports_websockets).toBeUndefined();
+    expect(configuredHelper()().stdout).toBe(KEY);
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.realExists(join(codexHome, "opper-desktop"))).toBe(false);
+  });
+
+  it("removes a proxy integration without changing saved bridge state or personal defaults", async () => {
+    const {proxy, path} = await desktopProxy();
+    const savedRuntime = readFileSync(path, "utf8");
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    await codexDesktop.unconfigure();
+    expect(configText()).toBe(ORIGINAL);
+    expect(readFileSync(path, "utf8")).toBe(savedRuntime);
+    expect(mocks.realExists(join(codexHome, "opper-desktop"))).toBe(false);
+  });
+
+  it.each([
+    {url: "http://127.0.0.1:19438"},
+    {url: "https://attacker.example", token: "private-token-never-print"},
+    {token: "private-token-never-print"},
+    {pid: 2147483647},
+    {version: 2},
+  ])("refuses invalid or stale bridge runtime state %j without exposing credentials", async (updates) => {
+    const {proxy, write} = await desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const helper = configuredHelper();
+    write(updates);
+    const result = helper();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).not.toContain(KEY);
+    expect(result.stderr).not.toContain("private-token-never-print");
+    // This must reject the supplied manifest after a successful native ACL
+    // check, rather than passing because the checker itself timed out.
+    expect(result.stderr).not.toContain("validation failed at Windows access controls");
+  });
+
+  it("refuses public or symlinked runtime files and missing bridge state", async () => {
+    const {proxy, path} = await desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const helper = configuredHelper();
+    if (process.platform === "win32") {
+      const icacls = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+      const acl = (target: string, args: string[]) => expect(spawnSync(icacls, [target, ...args], {encoding: "utf8", timeout: 10_000}).status).toBe(0);
+      acl(path, ["/grant", "*S-1-1-0:(R)"]);
+      expect(helper().status).toBe(1);
+      acl(path, ["/remove:g", "*S-1-1-0"]);
+      acl(proxy.stateDir, ["/grant", "*S-1-1-0:(OI)(CI)(RX)"]);
+      expect(helper().status).toBe(1);
+      acl(proxy.stateDir, ["/remove:g", "*S-1-1-0"]);
+    } else {
+      chmodSync(path, 0o644);
+      expect(helper().status).toBe(1);
+      chmodSync(path, 0o600);
+      chmodSync(proxy.stateDir, 0o755);
+      expect(helper().status).toBe(1);
+      chmodSync(proxy.stateDir, 0o700);
+    }
+    const target = join(home, "linked-runtime.json");
+    writeFileSync(target, readFileSync(path), {mode: 0o600});
+    rmSync(path); symlinkSync(target, path);
+    expect(helper().status).toBe(1);
+    rmSync(path);
+    expect(helper().status).toBe(1);
+  });
+
+  it("preserves proxy selection in a custom-home restart hint", async () => {
+    const {proxy} = await desktopProxy();
+    appRunning = true;
+    await expect(codexDesktop.spawn!([], routing({desktopProxy: proxy}))).rejects.toMatchObject({
+      code: "AGENT_CONFIG_CONFLICT",
+      hint: expect.stringContaining(`'--proxy' '--state-dir' '${proxy.stateDir}'`),
+    });
+  });
+
+  it.each(["https://api.opper.ai", "http://localhost:19437", "http://127.0.0.1:19437/path", "http://user:password@127.0.0.1:19437"])('rejects a non-loopback-root proxy URL "%s" before changing settings', async (baseUrl) => {
+    const {proxy} = await desktopProxy();
+    await expect(codexDesktop.configure(options({desktopProxy: {...proxy, baseUrl}}))).rejects.toMatchObject({code: "INVALID_ARGUMENT"});
+    expect(configText()).toBe(ORIGINAL);
+  });
+});
+
 describe("Codex desktop custom-home guidance", () => {
   it("makes custom-home configure explicit without changing the default home", async () => {
     const defaultHome = join(home, ".codex");
@@ -620,5 +813,90 @@ describe("explicit Codex home", () => {
     await expect(codexDesktop.configure(options({ codexHome: " " }))).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
     expect(configText()).toBe(ORIGINAL);
     expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex desktop on Windows", {timeout: 60_000}, () => {
+  let appRoot: string;
+  let executable: string;
+  let runtime: string;
+  let running: boolean;
+  beforeEach(() => {
+    mocks.platform.mockReturnValue("win32");
+    appRoot = join(home, "WindowsApps", "OpenAI.Codex_fixture", "app");
+    executable = join(appRoot, "Codex.exe");
+    runtime = join(appRoot, "resources", "codex-cli", "vendor", "x86_64-pc-windows-msvc", "codex", "codex.exe");
+    mkdirSync(dirname(runtime), {recursive: true});
+    writeFileSync(executable, "fixture"); writeFileSync(runtime, "fixture");
+    running = false;
+    mocks.run.mockImplementation((command: string, args: string[]) => {
+      const script = args.at(-1) ?? "";
+      if (command === "powershell.exe" && script.includes("Get-AppxPackage")) return ok(JSON.stringify([{installLocation: dirname(appRoot), executable: "app/Codex.exe", aumid: "OpenAI.Codex_fixture!App"}]));
+      if (command === runtime && args.includes("--version")) return ok("codex-cli 0.162.0\n");
+      if (command === "powershell.exe" && script.includes("Get-Process")) return ok(running ? "123\n" : "");
+      return ok();
+    });
+  });
+
+  it("discovers the registered MSIX app and its supported bundled runtime", async () => {
+    expect(await codexDesktop.detect()).toMatchObject({installed: true, version: "0.162.0"});
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"], {timeout: 5_000});
+    expect(mocks.run.mock.calls.some(([command]) => /plutil|pgrep/.test(command))).toBe(false);
+  });
+  it("configures the proxy and launches Windows with the selected Codex home", async () => {
+    const {proxy} = await desktopProxy();
+    await expect(codexDesktop.spawn!([], routing({desktopProxy: proxy}))).resolves.toBe(0);
+    expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, supports_websockets: false});
+    expect(allText(codexHome)).not.toContain(KEY);
+    const launch = mocks.run.mock.calls.find(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))?.[1].at(-1);
+    expect(launch).toContain(executable);
+    expect(launch).toContain(codexHome);
+    expect(launch).toContain("CODEX_HOME");
+    for (const [command, , options] of mocks.run.mock.calls) {
+      if (command === "powershell.exe") expect(options).toMatchObject({timeout: 5_000});
+    }
+    expect(mocks.run.mock.calls.some(([command]) => command === "open")).toBe(false);
+  });
+  it("leaves a running Windows app available and reports restart guidance", async () => {
+    running = true;
+    await expect(codexDesktop.spawn!([], routing())).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT", hint: expect.stringContaining("PowerShell")});
+    expect(await codexDesktop.isConfigured()).toBe(true);
+    expect(mocks.run.mock.calls.some(([command, args]) => command === "powershell.exe" && /Start-Process|Stop-Process|CloseMainWindow/.test(args.at(-1) ?? ""))).toBe(false);
+  });
+  it("passes an explicit isolated profile to the Windows launch", async () => {
+    running = true;
+    const profile = join(home, "Isolated desktop profile");
+    vi.stubEnv("CODEX_ELECTRON_USER_DATA_PATH", profile);
+    await expect(codexDesktop.spawn!([], routing())).resolves.toBe(0);
+    const launch = mocks.run.mock.calls.find(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))?.[1].at(-1);
+    expect(launch).toContain("CODEX_ELECTRON_USER_DATA_PATH");
+    expect(launch).toContain("--user-data-dir=");
+    expect(launch).toContain(profile);
+  });
+  it("rejects an outdated Windows bundled runtime before modifying config", async () => {
+    const run = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[]) => command === runtime ? ok("codex-cli 0.153.3\n") : run(command, args));
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({code: "AGENT_NOT_FOUND", message: expect.stringContaining("0.153.3")});
+    expect(configText()).toBe(ORIGINAL);
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+  it("discovers a bundled runtime after its resource subdirectory moves", async () => {
+    rmSync(runtime);
+    runtime = join(appRoot, "resources", "runtime-v2", "tools", "codex.exe");
+    mkdirSync(dirname(runtime), {recursive: true}); writeFileSync(runtime, "fixture");
+    expect(await codexDesktop.detect()).toMatchObject({installed: true, version: "0.162.0"});
+    expect(mocks.run).toHaveBeenCalledWith(runtime, ["--version"], {timeout: 5_000});
+  });
+  it("refuses Windows process-inspection failures without launching another app", async () => {
+    const run = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[]) => command === "powershell.exe" && args.at(-1)?.includes("Get-Process")
+      ? {code: 1, stdout: "", stderr: "inspection failed"}
+      : run(command, args));
+    await expect(codexDesktop.spawn!([], routing())).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
+    expect(mocks.run.mock.calls.some(([command, args]) => command === "powershell.exe" && args.at(-1)?.includes("Start-Process"))).toBe(false);
+  });
+  it("does not trust a manifest executable escaping the registered package", async () => {
+    mocks.run.mockReturnValue(ok(JSON.stringify([{installLocation: dirname(appRoot), executable: "../outside.exe", aumid: "OpenAI.Codex_fixture!App"}])));
+    expect(await codexDesktop.detect()).toMatchObject({installed: false});
   });
 });

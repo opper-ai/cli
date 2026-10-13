@@ -10,6 +10,7 @@ import { resolveApiContext, validateProjectUuid, type ApiContext } from "../api/
 import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
 import { newSessionId, buildSessionBaseUrl } from "../util/session-url.js";
+import { prepareDesktopProxy, desktopOpenCommand, validateDesktopRoutingOptions } from "./desktop.js";
 
 const TRACES_URL = "https://platform.opper.ai/traces";
 
@@ -23,6 +24,9 @@ export interface LaunchOptions {
   configScope?: SpawnOptions["configScope"];
   codexHome?: string;
   tags?: Record<string, string>;
+  proxy?: boolean;
+  stateDir?: string;
+  open?: boolean;
 }
 
 export async function launchCommand(opts: LaunchOptions): Promise<number> {
@@ -38,6 +42,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   if (opts.codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
+  validateDesktopRoutingOptions(adapter.name, opts);
   if (!isLaunchable(adapter)) {
     throw new OpperError(
       "AGENT_NOT_FOUND",
@@ -94,12 +99,17 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   }
 
   const apiContext = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
+  const desktop = opts.proxy ? await prepareDesktopProxy({ key: opts.key,
+    ...(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {}),
+    ...(opts.projectUuid !== undefined ? { projectUuid: opts.projectUuid } : {}),
+  }) : undefined;
   const host = apiContext.baseUrl;
   // Keep the summary on the same credential and host even if settings change during the session.
   const sessionId = newSessionId();
   const baseUrl = buildSessionBaseUrl(host, sessionId, opts.tags ?? {});
 
   const routing: OpperRouting = {
+    ...(desktop ? { desktopProxy: desktop.proxy } : {}),
     keyName: opts.key,
     apiBaseUrl: apiContext.baseUrl,
     baseUrl,
@@ -131,6 +141,15 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   };
   try {
     code = await adapter.spawn(opts.passthrough ?? [], routing, spawnOpts);
+    if (desktop && code === 0) {
+      // Create the one-use ticket after model discovery/app setup, so it cannot expire during setup.
+      await desktopOpenCommand({ key: opts.key, stateDir: desktop.proxy.stateDir,
+        ...(opts.open === false ? { open: false } : {}),
+        ...(opts.projectUuid !== undefined ? { projectUuid: opts.projectUuid } : {}),
+      });
+      console.log("Desktop inference uses the local proxy. Select a session in the browser before sending a message.");
+      console.log(`To use Opper directly again, run \`opper launch ${adapter.name}\` with the same key and app configuration directory; quit and reopen the app when prompted.`);
+    }
   } finally {
     for (const [sig, h] of noopHandlers) process.off(sig, h);
   }

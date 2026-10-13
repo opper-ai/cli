@@ -18,7 +18,7 @@ export interface RunResult {
 export function run(
   command: string,
   args: string[],
-  options: { inherit?: boolean } & Pick<SpawnSyncOptions, "cwd" | "env" | "shell"> = {},
+  options: { inherit?: boolean } & Pick<SpawnSyncOptions, "cwd" | "env" | "shell" | "timeout"> = {},
 ): RunResult {
   const { inherit, ...rest } = options;
   const result = spawnSync(command, args, {

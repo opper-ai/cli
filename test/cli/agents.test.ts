@@ -40,6 +40,21 @@ describe("agent command options", () => {
     });
   });
 
+  it.each(["codex-desktop", "claude-desktop"])("parses opt-in --proxy before %s without forwarding proxy flags", async (agent) => {
+    await program().parseAsync(["launch", "--proxy", "--state-dir", "/tmp/Opper Proxy", agent], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({ agent, key: "default", proxy: true, stateDir: "/tmp/Opper Proxy", passthrough: [] });
+  });
+
+  it("preserves native proxy flags after the explicit separator", async () => {
+    await program().parseAsync(["launch", "codex", "--", "--proxy", "http://native.example"], { from: "user" });
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({ agent: "codex", key: "default", passthrough: ["--proxy", "http://native.example"] });
+  });
+
+  it.each(["codex-desktop", "claude-desktop"])("parses configure --proxy for %s with optional local state and manual picker", async (agent) => {
+    await program().parseAsync(["agents", "configure", "--proxy", "--state-dir", "/tmp/Opper Proxy", "--no-open", agent], { from: "user" });
+    expect(commands.configure).toHaveBeenCalledExactlyOnceWith(agent, "default", undefined, undefined, undefined, { proxy: true, stateDir: "/tmp/Opper Proxy", open: false });
+  });
+
   it("leaves native --home untouched for other launched agents", async () => {
     await program().parseAsync(["launch", "codex", "--home", "/tmp/Native Home"], { from: "user" });
     expect(commands.launch).toHaveBeenCalledExactlyOnceWith({

@@ -173,9 +173,9 @@ opper agents remove claude-desktop   # works for any registered adapter
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
-### Codex / ChatGPT desktop on macOS
+### Codex / ChatGPT desktop on macOS and Windows
 
-Install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
+On macOS, install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). On Windows, install the [Codex app](https://openai.com/codex/) from the Microsoft Store; the CLI discovers its registered MSIX package and bundled runtime. The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
 
 ```bash
 # Configure and open the app with the selected stored key and model
@@ -211,6 +211,126 @@ opper agents remove codex-desktop --codex-home "$HOME/.codex-opper-test"
 A separate Codex home isolates Codex settings and task data. It does not by itself start a second desktop app instance or isolate the app's Electron profile.
 
 Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use `--codex-home <path>` to keep a dotfile-managed configuration intact. Restart the app after removal.
+
+### Local inference proxy and sessions (prototype)
+
+`opper proxy` opens a local session picker in your browser. Create a named
+session with a project label, or select a saved session to continue it. One
+session is active at a time, across every desktop app configured to use the
+local bridge. Selecting a saved session keeps its attribution ID.
+
+Running `opper` with no arguments also offers a **Proxy** submenu: start or
+open the session picker, inspect status, end the active session, or stop the
+proxy. Starting from the menu runs the service in the background and returns
+you to the menu. These controls use the default local state directory.
+
+Archive sessions you no longer need in the main list. The Archived view lets you
+restore them with the same attribution ID. Archiving the current session pauses
+new inference until you select another session; restoring a session does not
+select it automatically. Archiving only changes the local list, so Opper usage
+and traces remain available.
+
+Names, project tags, session IDs and archive state are stored in
+`~/.opper/desktop-bridge/desktop-sessions.json` (or
+`$OPPER_HOME/desktop-bridge/desktop-sessions.json`). A custom `--state-dir` keeps
+its own `desktop-sessions.json`. The file is private to your user and contains
+no prompts or API keys.
+
+On Windows, the proxy creates private state with Windows ACLs for the current
+user and verifies ownership, access rules and reparse points before reading
+credentials. Existing unsafe state is rejected rather than made private
+automatically. The default path is `%USERPROFILE%\.opper\desktop-bridge\`.
+
+The bridge starts when needed and continues running after the browser page or
+launching terminal closes. Running `opper proxy` again opens the same picker.
+Session names and tags are saved locally; inference uses the existing tagged
+Opper session endpoints. This does not switch your actual Opper project or its
+access policies. Finish or stop ongoing agent work before switching sessions;
+an in-flight request keeps its original tags, but later steps use the active
+session. Ending the session blocks new inference until another session is
+selected.
+
+Local proxy routing is optional. Normal desktop configuration and launch use
+Opper directly; choose `--proxy` to use the session picker instead:
+
+```sh
+opper launch --proxy codex-desktop
+opper launch --proxy claude-desktop
+
+# Configure without launching the desktop app:
+opper agents configure --proxy codex-desktop
+opper agents configure --proxy claude-desktop
+```
+
+These commands start or reuse the local background bridge, save the app's
+provider configuration, and open the picker. Configuration alone does not launch
+the app. Quit and reopen the app when changing routing mode; selecting a session
+afterward does not require restarting it. The saved routing continues to apply
+to future app launches. Existing Codex tasks may retain their previous provider.
+
+Run the same command without `--proxy` to restore direct Opper routing, preserving
+the same key, model, explicit Opper project and Codex home options. Use
+`opper agents remove <agent>` to remove the integration. Direct routing does not
+require the local bridge. Switching an app back does not stop the bridge, since
+another app may still be using it; use `opper proxy stop` when it is no longer
+needed.
+
+`--state-dir <path>` selects a separate bridge; `--no-open` prints its picker link
+instead of opening a browser. Both require `--proxy`. Proxy sessions are selected
+in the picker, so `--proxy` cannot be combined with per-launch `--tag` flags.
+Proxy mode requires a stored CLI credential slot, not `OPPER_API_KEY`.
+
+For a Windows trial, sign in and opt the installed app into the proxy from
+PowerShell (unset any `OPPER_API_KEY` first):
+
+```powershell
+opper login
+opper launch --proxy codex-desktop
+# Or:
+opper launch --proxy claude-desktop
+```
+
+If the app is already running, quit it and rerun the launch command. Create a
+new local Codex chat after changing its provider. Choose a session in the
+browser, send a message, switch sessions and send another message in the same
+chat. `opper proxy status` shows the selected project label and attribution ID;
+check Opper usage records to confirm attribution. Running `opper` and choosing
+**Proxy** reopens the picker and offers status, end and stop controls. To return
+to direct routing, run the launch command without `--proxy` and reopen the app.
+
+For an isolated macOS Codex trial from this checkout, build the CLI and start the bridge:
+
+```sh
+npm run build
+node dist/index.js proxy start --state-dir /private/tmp/opper-desktop-trial
+```
+
+In another terminal, prepare a fresh test profile and open its session picker:
+
+```sh
+node scripts/desktop-tags-demo.mjs --state-dir /private/tmp/opper-desktop-trial --output /private/tmp/opper-codex-trial
+node dist/index.js proxy --state-dir /private/tmp/opper-desktop-trial
+zsh /private/tmp/opper-codex-trial/open.zsh
+```
+
+The test profile uses a separate Codex home and Electron profile. It leaves the
+normal desktop instance running. These directories must be fresh. The local
+helper reads the bridge's local credential; the real Opper API key stays in the
+selected CLI slot. Use `--key <slot>` when starting the bridge to choose one.
+
+For operator debugging, `proxy status`, `proxy tag --tag project=acme`, and
+`proxy clear` use the same `--state-dir`. `proxy stop` stops the bridge;
+desktop inference is unavailable while it is stopped. `proxy start` stays in
+the foreground for development; Ctrl-C stops that instance. The current browser
+UI is local HTTP, and inference forwarding supports HTTP/SSE, not WebSockets.
+This prototype assumes trusted local processes and OS users. HTTP does not
+authenticate the local listener: if the bridge stops or crashes, another local
+user could bind its port and receive a configured desktop app's next prompt and
+local credential. Use it only on trusted single-user machines; authenticated
+local transport still needs verified certificate support in both desktop apps.
+Native Windows proxy lifecycle and access controls are exercised in Windows CI.
+Actual Windows desktop launch and inference, and live Claude Desktop inference,
+still need verification on machines with those apps installed.
 
 ## Routing through a session without the CLI
 

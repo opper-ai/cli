@@ -14,6 +14,7 @@ import { skillsMenu } from "./menu/skills.js";
 import { agentsMenu } from "./menu/agents.js";
 import { platformMenu } from "./menu/platform.js";
 import { accountMenu } from "./menu/account.js";
+import { proxyMenu } from "./menu/proxy.js";
 import { getSlot } from "../auth/config.js";
 import { detectLegacyOpperCli } from "../util/legacy-cli.js";
 
@@ -59,6 +60,11 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
       value: "agents",
       label: "Agents",
       hint: "Manage launchable agents and editor integrations",
+    });
+    options.push({
+      value: "proxy",
+      label: "Proxy",
+      hint: "Desktop inference and project sessions",
     });
     options.push({
       value: "skills",
@@ -112,6 +118,9 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
           break;
         case "agents":
           await agentsMenu(opts);
+          break;
+        case "proxy":
+          await proxyMenu(opts);
           break;
         case "skills":
           await skillsMenu();

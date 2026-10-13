@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
+import { select, log } from "@clack/prompts";
 
 const answers: Array<() => unknown> = [];
 
@@ -67,6 +68,17 @@ const launchMock = vi.fn();
 const setupMock = vi.fn();
 const skillsListMock = vi.fn();
 const editorsListMock = vi.fn();
+const desktopOpenMock = vi.fn();
+const desktopStatusMock = vi.fn();
+const desktopClearMock = vi.fn();
+const desktopStopMock = vi.fn();
+
+vi.mock("../../src/commands/desktop.js", () => ({
+  desktopOpenCommand: desktopOpenMock,
+  desktopStatusCommand: desktopStatusMock,
+  desktopClearCommand: desktopClearMock,
+  desktopStopCommand: desktopStopMock,
+}));
 
 vi.mock("../../src/commands/login.js", () => ({ loginCommand: loginMock }));
 vi.mock("../../src/commands/logout.js", () => ({ logoutCommand: logoutMock }));
@@ -101,9 +113,60 @@ describe("menuCommand", () => {
     setupMock.mockReset();
     skillsListMock.mockReset();
     editorsListMock.mockReset();
+    desktopOpenMock.mockReset();
+    desktopStatusMock.mockReset();
+    desktopClearMock.mockReset();
+    desktopStopMock.mockReset();
+    vi.mocked(select).mockClear();
+    vi.mocked(log.error).mockClear();
     // Default to "already signed in" so the new menu sign-in prompt doesn't
     // consume answers in tests that aren't specifically about auth.
     await setSlot("default", { apiKey: "op_test", source: "manual" });
+  });
+
+  it("shows the Proxy submenu and returns to the main menu on Back", async () => {
+    answers.push(() => "proxy", () => "back", () => "quit");
+    await menuCommand({key: "default"});
+    const calls = vi.mocked(select).mock.calls;
+    expect(calls[0]?.[0].options).toContainEqual(expect.objectContaining({value: "proxy", label: "Proxy"}));
+    expect(calls[1]?.[0].message).toBe("Proxy");
+    expect(calls[1]?.[0].options.map((option) => option.value)).toEqual(["open", "status", "clear", "stop", "back"]);
+    expect(calls[2]?.[0].message).toBe("What would you like to do?");
+    expect(desktopOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("Proxy opens the detached picker with the selected slot and explicit project", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await setSlot("work", {apiKey: "op_test_work", source: "manual"});
+    answers.push(() => "proxy", () => "open", () => "back", () => "quit");
+    await menuCommand({key: "work", projectUuid});
+    expect(desktopOpenMock).toHaveBeenCalledWith({key: "work", projectUuid});
+    expect(desktopOpenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("Proxy dispatches status, end session and stop against default bridge state", async () => {
+    answers.push(() => "proxy", () => "status", () => "clear", () => "stop", () => "back", () => "quit");
+    await menuCommand({key: "default"});
+    expect(desktopStatusMock).toHaveBeenCalledWith({});
+    expect(desktopClearMock).toHaveBeenCalledWith({});
+    expect(desktopStopMock).toHaveBeenCalledWith({});
+    expect(desktopOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("Proxy reports an action error and keeps the submenu available", async () => {
+    desktopOpenMock.mockRejectedValueOnce(new Error("proxy could not start"));
+    answers.push(() => "proxy", () => "open", () => "status", () => "back", () => "quit");
+    await expect(menuCommand({key: "default"})).resolves.toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith("proxy could not start");
+    expect(desktopStatusMock).toHaveBeenCalledWith({});
+    expect(vi.mocked(select).mock.calls.filter(([prompt]) => prompt.message === "Proxy")).toHaveLength(3);
+  });
+
+  it("cancel from Proxy returns to the main menu", async () => {
+    answers.push(() => "proxy", () => SENTINEL_BAIL, () => "quit");
+    await menuCommand({key: "default"});
+    expect(vi.mocked(select).mock.calls[2]?.[0].message).toBe("What would you like to do?");
+    expect(desktopOpenMock).not.toHaveBeenCalled();
   });
 
   it("launches the chosen adapter and returns to menu (loops to quit)", async () => {

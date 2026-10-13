@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { OpperError } from "../errors.js";
@@ -10,6 +11,7 @@ import {
   isClaudeDesktopModelId,
 } from "../config/models.js";
 import { run } from "../util/run.js";
+import { windowsDesktopApps } from "../util/windows-desktop.js";
 import type {
   AgentAdapter,
   ConfigureOptions,
@@ -77,8 +79,11 @@ function appCandidates(): string[] {
   switch (platform()) {
     case "darwin":
       return darwinAppCandidates();
-    case "win32":
-      return windowsAppCandidates();
+    case "win32": {
+      const legacy = windowsAppCandidates();
+      if (legacy.some((candidate) => existsSync(candidate))) return legacy;
+      return [...legacy, ...windowsDesktopApps("Claude").map((app) => app.executable)];
+    }
     default:
       return [];
   }
@@ -94,6 +99,7 @@ interface ThirdPartyPaths {
   desktopConfig: string;
   meta: string;
   profile: string;
+  ownership: string;
 }
 
 interface ConfigTargets {
@@ -152,6 +158,7 @@ function targetPaths(): ConfigTargets {
       desktopConfig: join(root, "claude_desktop_config.json"),
       meta: join(root, "configLibrary", "_meta.json"),
       profile: join(root, "configLibrary", `${OPPER_PROFILE_ID}.json`),
+      ownership: join(root, ".opper-gateway-state.json"),
     })),
   };
 }
@@ -197,16 +204,44 @@ async function deploymentModeIsThirdParty(path: string): Promise<boolean> {
   return cfg?.deploymentMode === "3p";
 }
 
+function isLocalGatewayUrl(value: string): boolean {
+  const match = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})\/v3\/compat\/?$/.exec(value);
+  return !!match && Number(match[1]) <= 65535;
+}
+
+function gatewayFingerprint(profile: JsonObject): string {
+  const fields = ["inferenceProvider", "inferenceGatewayBaseUrl", "inferenceGatewayApiKey", "inferenceGatewayAuthScheme", "disableDeploymentModeChooser", "inferenceModels"];
+  return createHash("sha256").update(JSON.stringify(fields.map((field) => profile[field]))).digest("hex");
+}
+
+async function profileHasManagedGateway(target: ThirdPartyPaths, profile: JsonObject): Promise<boolean> {
+  if (profile.inferenceProvider !== "gateway") return false;
+  const ownership = await readJsonOrNull(target.ownership);
+  if (ownership) return ownership.version === 1 && ownership.fingerprint === gatewayFingerprint(profile);
+  // Older direct integrations predate the ownership record. A loopback URL
+  // alone never proves ownership of a customer's local gateway.
+  if (existsSync(target.ownership)) return false;
+  const url = typeof profile.inferenceGatewayBaseUrl === "string"
+    ? profile.inferenceGatewayBaseUrl.replace(/\/+$/, "")
+    : "";
+  return url === OPPER_COMPAT_URL.replace(/\/+$/, "");
+}
+
+function gatewayCredentials(apiKey: string, proxy?: ConfigureOptions["desktopProxy"]): {url: string; key: string} {
+  if (!proxy) return {url: OPPER_COMPAT_URL, key: apiKey};
+  const url = `${proxy.baseUrl.replace(/\/+$/, "")}/v3/compat`;
+  if (!isLocalGatewayUrl(url) || typeof proxy.token !== "string" || !proxy.token.trim() || /[\r\n]/.test(proxy.token)) {
+    throw new OpperError("INVALID_ARGUMENT", "Claude Desktop proxy requires a loopback HTTP endpoint and local authentication token.");
+  }
+  return {url, key: proxy.token};
+}
+
 async function profileIsOpperGateway(target: ThirdPartyPaths): Promise<boolean> {
   const meta = await readJsonOrNull(target.meta);
   if (meta?.appliedId !== OPPER_PROFILE_ID) return false;
   const profile = await readJsonOrNull(target.profile);
   if (!profile) return false;
-  if (profile.inferenceProvider !== "gateway") return false;
-  const url = typeof profile.inferenceGatewayBaseUrl === "string"
-    ? profile.inferenceGatewayBaseUrl.replace(/\/+$/, "")
-    : "";
-  if (url !== OPPER_COMPAT_URL.replace(/\/+$/, "")) return false;
+  if (!(await profileHasManagedGateway(target, profile))) return false;
   const key = typeof profile.inferenceGatewayApiKey === "string"
     ? profile.inferenceGatewayApiKey.trim()
     : "";
@@ -244,13 +279,14 @@ async function writeMetaWithOpperEntry(path: string): Promise<void> {
 }
 
 async function writeGatewayProfile(
-  path: string,
+  target: ThirdPartyPaths,
   apiKey: string,
   primaryModel: string,
+  baseUrl: string,
 ): Promise<void> {
-  const cfg = await readJsonAllowMissing(path);
+  const cfg = await readJsonAllowMissing(target.profile);
   cfg.inferenceProvider = "gateway";
-  cfg.inferenceGatewayBaseUrl = OPPER_COMPAT_URL;
+  cfg.inferenceGatewayBaseUrl = baseUrl;
   cfg.inferenceGatewayApiKey = apiKey;
   cfg.inferenceGatewayAuthScheme = "bearer";
   cfg.disableDeploymentModeChooser = true;
@@ -261,7 +297,8 @@ async function writeGatewayProfile(
     ...CLAUDE_DESKTOP_MODEL_IDS.filter((name) => name !== primaryModel),
   ];
   cfg.inferenceModels = names.map((name) => ({ name }));
-  await writeJson(path, cfg);
+  await writeJson(target.profile, cfg);
+  await writeJson(target.ownership, {version: 1, fingerprint: gatewayFingerprint(cfg)});
 }
 
 async function detect(): Promise<DetectResult> {
@@ -286,7 +323,8 @@ async function isConfigured(): Promise<boolean> {
   return true;
 }
 
-async function applyOpperProfile(apiKey: string, primaryModel: string): Promise<void> {
+async function applyOpperProfile(apiKey: string, primaryModel: string, proxy?: ConfigureOptions["desktopProxy"]): Promise<void> {
+  const gateway = gatewayCredentials(apiKey, proxy);
   const targets = targetPaths();
   for (const path of targets.normalConfigs) {
     await writeDeploymentMode(path, "3p");
@@ -294,20 +332,20 @@ async function applyOpperProfile(apiKey: string, primaryModel: string): Promise<
   for (const target of targets.thirdPartyProfiles) {
     await writeDeploymentMode(target.desktopConfig, "3p");
     await writeMetaWithOpperEntry(target.meta);
-    await writeGatewayProfile(target.profile, apiKey, primaryModel);
+    await writeGatewayProfile(target, gateway.key, primaryModel, gateway.url);
   }
 }
 
 async function configure(opts: ConfigureOptions): Promise<void> {
-  if (opts.projectUuid) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
-  if (!opts.apiKey) {
+  if (opts.projectUuid && !opts.desktopProxy) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
+  if (!opts.apiKey && !opts.desktopProxy) {
     throw new OpperError(
       "AUTH_REQUIRED",
       "Claude Desktop configuration needs an Opper API key.",
       "Run `opper login` first, or set OPPER_API_KEY.",
     );
   }
-  await applyOpperProfile(opts.apiKey, DEFAULT_MODELS.opus);
+  await applyOpperProfile(opts.apiKey ?? "", DEFAULT_MODELS.opus, opts.desktopProxy);
 }
 
 async function clearOpperEntryFromMeta(path: string): Promise<void> {
@@ -352,13 +390,21 @@ async function maybeFlipToFirstParty(path: string): Promise<void> {
 
 async function unconfigure(): Promise<void> {
   const targets = targetPaths();
-  for (const path of targets.normalConfigs) {
-    await maybeFlipToFirstParty(path);
-  }
+  let activeOpperProfile = false;
   for (const target of targets.thirdPartyProfiles) {
-    await maybeFlipToFirstParty(target.desktopConfig);
+    const profile = await readJsonOrNull(target.profile);
+    if (!profile || !(await profileHasManagedGateway(target, profile))) continue;
+    const meta = await readJsonOrNull(target.meta);
+    if (meta?.appliedId === OPPER_PROFILE_ID) {
+      activeOpperProfile = true;
+      await maybeFlipToFirstParty(target.desktopConfig);
+    }
     await clearOpperEntryFromMeta(target.meta);
     await blankGatewayProfile(target.profile);
+    await rm(target.ownership, {force: true});
+  }
+  if (activeOpperProfile) {
+    for (const path of targets.normalConfigs) await maybeFlipToFirstParty(path);
   }
 }
 
@@ -379,11 +425,13 @@ function isClaudeRunning(): boolean {
     case "win32": {
       const result = run("powershell.exe", [
         "-NoProfile",
+        "-NonInteractive",
         "-Command",
         "(Get-Process claude -ErrorAction SilentlyContinue | " +
           "Where-Object { $_.MainWindowHandle -ne 0 } | " +
           "Select-Object -First 1).Id",
-      ]);
+      ], {timeout: 5_000});
+      if (result.code !== 0) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unable to check whether Claude Desktop is running.", "Open Claude Desktop manually after checking your Windows processes.");
       return result.code === 0 && result.stdout.trim().length > 0;
     }
     default:
@@ -411,7 +459,7 @@ function quitClaude(): void {
         "Get-Process claude -ErrorAction SilentlyContinue | " +
           "Where-Object { $_.MainWindowHandle -ne 0 } | " +
           "ForEach-Object { [void]$_.CloseMainWindow() }",
-      ]);
+      ], {timeout: 5_000});
       return;
   }
 }
@@ -452,7 +500,7 @@ function openClaude(): void {
         "-NoProfile",
         "-Command",
         `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
-      ]);
+      ], {timeout: 5_000});
       if (result.code !== 0) {
         throw new OpperError(
           "AGENT_NOT_FOUND",
@@ -467,7 +515,7 @@ function openClaude(): void {
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  if (routing.projectUuid) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
+  if (routing.projectUuid && !routing.desktopProxy) throw new OpperError("INVALID_ARGUMENT", "Claude Desktop does not support an explicit Opper project header.", "Use organization inference without --project-uuid, or launch Claude Code for a project target.");
   if (args.length > 0) {
     throw new OpperError(
       "AGENT_CONFIG_CONFLICT",
@@ -481,9 +529,12 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
       `Choose one of: ${CLAUDE_DESKTOP_MODEL_IDS.join(", ")}.`,
     );
   }
-  await applyOpperProfile(routing.apiKey, routing.model);
+  await applyOpperProfile(routing.apiKey, routing.model, routing.desktopProxy);
 
   if (isClaudeRunning()) {
+    if (platform() === "win32") {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but Claude Desktop is already running.", "Quit Claude Desktop and re-run the same opper launch command, or reopen it from the Start menu. Existing work stays available until you quit.");
+    }
     quitClaude();
     const exited = await waitForClaudeExit();
     if (!exited) {
@@ -500,6 +551,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
 
 export const claudeDesktop: AgentAdapter = {
   name: "claude-desktop",
+  launchesInBackground: true,
   displayName: "Claude Desktop",
   docsUrl: "https://claude.ai/download",
   supportsModel: isClaudeDesktopModelId,

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,9 +8,11 @@ import { DEFAULT_MODELS } from "../config/models.js";
 import { OPPER_HOST } from "../config/endpoints.js";
 import { OpperError } from "../errors.js";
 import { run } from "../util/run.js";
+import { windowsDesktopApps, powerShellLiteral } from "../util/windows-desktop.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
 import { applyDesktopConfig, removeDesktopConfig, readDesktopConfig, DESKTOP_PROVIDER, type DesktopConfigState } from "../setup/codex-desktop-config.js";
 import type { AgentAdapter, ConfigureOptions, OpperRouting, SpawnOptions, UnconfigureOptions } from "./types.js";
+import { POWERSHELL_PRIVATE_STATE_SCRIPT, ensurePrivateStateDirectory } from "../desktop/private-state.js";
 
 const MINIMUM_RUNTIME = [0, 153, 4];
 function codexHome(explicit?: string): string {
@@ -29,12 +31,56 @@ function isSupportedRuntime(version: string): boolean {
   const comparison = parts.findIndex((n, i) => n !== MINIMUM_RUNTIME[i]);
   return comparison === -1 || parts[comparison]! > MINIMUM_RUNTIME[comparison]!;
 }
-function findApp(): { app: string; runtime: string; version: string } | null {
+interface DesktopApp { app: string; runtime: string; version: string; executable?: string; aumid?: string }
+function windowsRuntime(executable: string): string | undefined {
+  const resources = join(dirname(executable), "resources");
+  const candidates = [join(resources, "codex.exe"), join(resources, "codex-cli", "bin", "codex.exe")];
+  for (const target of ["x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc"]) {
+    candidates.push(join(resources, "codex-cli", "vendor", target, "codex", "codex.exe"));
+  }
+  const known = candidates.find((candidate) => existsSync(candidate));
+  if (known) return known;
+  // Packaging layouts can change without moving the registered app executable.
+  // Stay inside its resource directory and bound the discovery work.
+  let visited = 0;
+  function find(directory: string, depth: number): string | undefined {
+    if (depth > 6 || visited > 2000) return undefined;
+    let entries;
+    try { entries = readdirSync(directory, {withFileTypes: true}); } catch { return undefined; }
+    for (const entry of entries) {
+      if (++visited > 2000) return undefined;
+      const path = join(directory, entry.name);
+      if (entry.isFile() && entry.name.toLowerCase() === "codex.exe") return path;
+      if (entry.isDirectory()) { const found = find(path, depth + 1); if (found) return found; }
+    }
+    return undefined;
+  }
+  return find(resources, 0);
+}
+function findWindowsApp(): DesktopApp | null {
+  let outdated: DesktopApp | null = null;
+  for (const app of windowsDesktopApps("OpenAI.Codex")) {
+    const runtime = windowsRuntime(app.executable);
+    if (!runtime) continue;
+    const result = run(runtime, ["--version"], {timeout: 5_000});
+    const version = result.stdout.match(/codex-cli\s+(\d+\.\d+\.\d+)/)?.[1];
+    if (result.code !== 0 || !version) continue;
+    const found: DesktopApp = {app: app.installLocation, runtime, version, executable: app.executable, aumid: app.aumid};
+    if (isSupportedRuntime(version)) return found;
+    outdated ??= found;
+  }
+  return outdated;
+}
+function findApp(): DesktopApp | null {
+  if (platform() === "win32") return findWindowsApp();
   if (platform() !== "darwin") return null;
   let outdatedApp: { app: string; runtime: string; version: string } | null = null;
   for (const app of appCandidates()) {
-    const runtime = join(app, "Contents", "Resources", "codex");
-    if (!existsSync(runtime)) continue;
+    const runtime = [
+      join(app, "Contents", "Resources", "codex"),
+      join(app, "Contents", "Resources", "codex-cli", "bin", "codex"),
+    ].find((candidate) => existsSync(candidate));
+    if (!runtime) continue;
     const bundle = run("/usr/bin/plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", join(app, "Contents", "Info.plist")]);
     if (bundle.code !== 0 || bundle.stdout.trim() !== "com.openai.codex") continue;
     const version = run(runtime, ["--version"]);
@@ -50,7 +96,7 @@ function findApp(): { app: string; runtime: string; version: string } | null {
 }
 function requireApp() {
   const app = findApp();
-  if (!app) throw new OpperError("AGENT_NOT_FOUND", "The Codex/ChatGPT desktop app for macOS is not installed.", "Install the app with local Codex support from https://chatgpt.com/download.");
+  if (!app) throw new OpperError("AGENT_NOT_FOUND", "The Codex/ChatGPT desktop app with a supported bundled local runtime was not found.", "Install the app with local Codex support from https://chatgpt.com/download.");
   if (!isSupportedRuntime(app.version)) {
     throw new OpperError("AGENT_NOT_FOUND", `The app bundles Codex ${app.version}; Opper desktop requires 0.153.4 or later.`, "Update the desktop app and try again.");
   }
@@ -115,6 +161,68 @@ try {
 }
 `;
 
+// Read only the local bridge's credential; the upstream key remains with the bridge.
+const PROXY_AUTH_HELPER = `import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
+import { join, win32 } from "node:path";
+import { execFile } from "node:child_process";
+const [stateDir, expectedEndpoint] = process.argv.slice(2);
+let file;
+let stage = "state directory";
+let nativeFailure;
+try {
+  const directory = lstatSync(stateDir);
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (process.platform !== "win32" && (directory.mode & 0o077) !== 0) || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
+  stage = "state file";
+  file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
+  const info = fstatSync(file);
+  if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0) || (process.getuid && info.uid !== process.getuid()) || info.size > 16384) throw new Error("invalid file");
+  if (process.platform === "win32") {
+    stage = "Windows access controls";
+    const executable = win32.join(process.env.SystemRoot || process.env.WINDIR || "C:\\\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const result = await new Promise((resolve, reject) => {
+      const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {encoding: "utf8", timeout: 15000, maxBuffer: 16384, windowsHide: true}, (cause, stdout, stderr) => {
+        if (cause) {
+          let output;
+          try { output = JSON.parse(stdout.trim()); } catch {}
+          nativeFailure = {killed: cause.killed === true, signal: ["SIGTERM", "SIGKILL", "SIGINT"].includes(cause.signal) ? cause.signal : null,
+            exitCode: Number.isSafeInteger(cause.code) ? cause.code : null,
+            code: ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT", "ERR_CHILD_PROCESS_STDIO_MAXBUFFER"].includes(cause.code) ? cause.code : null,
+            resultCode: ["ENOENT", "AGENT_CONFIG_CONFLICT"].includes(output?.code) ? output.code : null, stderrPresent: !!stderr?.trim()};
+        }
+        if (cause) reject(cause); else resolve(stdout);
+      });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(JSON.stringify({path: join(stateDir, "bridge.json"), kind: "file", create: false}));
+    });
+    if (JSON.parse(result.trim()).ok !== true) throw new Error("invalid Windows access controls");
+  }
+  stage = "runtime manifest";
+  const bridge = JSON.parse(readFileSync(file, "utf8"));
+  if (bridge.version !== 1 || typeof bridge.url !== "string" || typeof bridge.token !== "string" || !/^[a-f0-9]{64}$/.test(bridge.token) || !Number.isSafeInteger(bridge.pid) || bridge.pid <= 0) throw new Error("invalid runtime");
+  const endpoint = new URL(bridge.url);
+  stage = "endpoint";
+  if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.origin !== expectedEndpoint) throw new Error("changed endpoint");
+  stage = "proxy process";
+  process.kill(bridge.pid, 0);
+  process.stdout.write(bridge.token);
+} catch (cause) {
+  const code = ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(cause?.code) ? " (" + cause.code + ")" : "";
+  process.stderr.write("Local proxy validation failed at " + stage + code + ".\\n");
+  if (nativeFailure) process.stderr.write("Native validation process: " + JSON.stringify(nativeFailure) + "\\n");
+  process.stderr.write("The local Opper proxy is unavailable or its endpoint changed. Start it with opper proxy, or reconfigure and relaunch with opper launch --proxy codex-desktop, preserving your --state-dir and --codex-home options.\\n");
+  process.exitCode = 1;
+} finally { if (file !== undefined) closeSync(file); }
+`;
+
+function proxySettings(proxy: NonNullable<ConfigureOptions["desktopProxy"]>) {
+  let endpoint: URL;
+  try {endpoint = new URL(proxy.baseUrl);} catch {throw new OpperError("INVALID_ARGUMENT", "Desktop proxy must use an HTTP endpoint on 127.0.0.1 with an explicit port.");}
+  if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || !proxy.stateDir?.trim() || !/^[a-f0-9]{64}$/.test(proxy.token)) {
+    throw new OpperError("INVALID_ARGUMENT", "Desktop proxy requires a local HTTP root endpoint, private state directory and local credential.");
+  }
+  return {baseUrl: endpoint.origin, stateDir: resolve(proxy.stateDir)};
+}
+
 interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; bundledRuntime?: boolean; }
 async function readState(path: string): Promise<StoredState | undefined> {
   const raw = await readOptional(path);
@@ -136,7 +244,7 @@ async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { await rm(p.lock, { recursive: true }); }
 }
 
-interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; }
+interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; proxyStateDir?: string; }
 
 async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Codex Desktop requires a stored Opper credential so Finder launches can refresh it.", "Store the key in its own CLI slot and unset OPPER_API_KEY before configuring or launching Codex Desktop.");
@@ -148,6 +256,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${keyName}"`, "Run `opper login` first.");
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
+  const proxy = opts.desktopProxy ? proxySettings(opts.desktopProxy) : undefined;
   const model = opts.model ?? DEFAULT_MODELS.opus;
   const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model);
   await locked(home, async () => {
@@ -160,14 +269,18 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
       throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged Node runtime files already exist in the Opper desktop configuration directory.");
     }
     const provider = {
-      name: "Opper", base_url: `${baseUrl}/v3/compat`, wire_api: "responses",
-      ...(opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
-      auth: { command: bundled ? p.runtime : await nodeLauncher(), args: [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
+      name: "Opper", base_url: `${proxy?.baseUrl ?? baseUrl}/v3/compat`, wire_api: "responses",
+      ...(proxy ? {supports_websockets: false} : {}),
+      ...(!proxy && opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
+      auth: { command: bundled ? p.runtime : await nodeLauncher(), args: proxy ? [p.auth, proxy.stateDir, proxy.baseUrl] : [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
-    await mkdir(p.directory, { recursive: true, mode: 0o700 });
-    await chmod(p.directory, 0o700);
+    if (process.platform === "win32") await ensurePrivateStateDirectory(p.directory, true);
+    else {
+      await mkdir(p.directory, { recursive: true, mode: 0o700 });
+      await chmod(p.directory, 0o700);
+    }
     const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state, ...((bundled || previous?.bundledRuntime) ? { bundledRuntime: true } : {}) };
     const backups = new Map<string, { contents: Buffer; mode: number } | null>();
     for (const file of [p.auth, p.catalog, p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
@@ -181,7 +294,7 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
         await atomicWrite(p.runtime, await readFile(process.execPath), 0o700);
         await atomicWrite(p.runtimeLicense, await readFile(join(dirname(process.execPath), "NODE-LICENSE")));
       }
-      await atomicWrite(p.auth, AUTH_HELPER);
+      await atomicWrite(p.auth, proxy ? PROXY_AUTH_HELPER : AUTH_HELPER);
       await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
       await atomicWrite(p.state, JSON.stringify(state, null, 2) + "\n");
       if (await readOptional(p.config) !== existing) throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during setup. Retry to preserve those edits.");
@@ -194,26 +307,36 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
       throw e;
     }
   });
-  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid };
+  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid, ...(proxy ? {proxyStateDir: proxy.stateDir} : {}) };
 }
 
 function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
 function shellQuote(value: string): string { return "'" + value.replace(/'/g, "'\\''") + "'"; }
 function launchCommand(settings: ConfiguredDesktop): string {
+  if (platform() === "win32") {
+    const environment = [`Remove-Item Env:OPPER_API_KEY -ErrorAction SilentlyContinue`, `$env:OPPER_HOME=${powerShellLiteral(settings.credentialHome)}`, `$env:OPPER_BASE_URL=${powerShellLiteral(settings.baseUrl)}`];
+    if (process.env.CODEX_ELECTRON_USER_DATA_PATH) environment.push(`$env:CODEX_ELECTRON_USER_DATA_PATH=${powerShellLiteral(resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH))}`);
+    const args = ["--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home];
+    if (settings.projectUuid) args.push("--project-uuid", settings.projectUuid);
+    if (settings.proxyStateDir) args.push("--proxy", "--state-dir", settings.proxyStateDir);
+    return [...environment, `& opper.cmd ${args.map(powerShellLiteral).join(" ")}`].join("; ");
+  }
   const args = ["env", "-u", "OPPER_API_KEY", `OPPER_HOME=${settings.credentialHome}`, `OPPER_BASE_URL=${settings.baseUrl}`];
   if (process.env.CODEX_ELECTRON_USER_DATA_PATH) args.push(`CODEX_ELECTRON_USER_DATA_PATH=${resolve(process.env.CODEX_ELECTRON_USER_DATA_PATH)}`);
   args.push("opper", "--key", settings.keyName, "launch", "codex-desktop", "--model", settings.model, "--codex-home", settings.home);
   if (settings.projectUuid) args.push("--project-uuid", settings.projectUuid);
+  if (settings.proxyStateDir) args.push("--proxy", "--state-dir", settings.proxyStateDir);
   return args.map(shellQuote).join(" ");
 }
 function reopenHint(settings: ConfiguredDesktop): string {
+  if (platform() === "win32") return `Quit the app, then run this PowerShell command to use the configured Codex home:\n${launchCommand(settings)}\nOrdinary Start menu launches use %USERPROFILE%\\.codex. Existing tasks keep their provider.`;
   return customHome(settings)
     ? `Quit the app, then use the same Codex home with this command:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex, not this custom home. Existing tasks keep their provider.`
     : "Quit and reopen the app to use Opper for new local Codex tasks. Existing tasks keep their provider.";
 }
 async function configure(opts: ConfigureOptions): Promise<void> {
   const settings = await setup(opts);
-  if (customHome(settings)) console.log(`Configured only ${settings.home}. To use the same Codex home, run:\n${launchCommand(settings)}\nOrdinary Finder launches use ~/.codex. The command above runs opper launch codex-desktop with your selected key and model.`);
+  if (customHome(settings)) console.log(`Configured only ${settings.home}. To use the same Codex home, run:\n${launchCommand(settings)}\n${platform() === "win32" ? "Ordinary Start menu launches use %USERPROFILE%\\.codex." : "Ordinary Finder launches use ~/.codex."} The command above runs opper launch codex-desktop with your selected key and model.`);
 }
 
 async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
@@ -253,8 +376,28 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   if (args.length) throw new OpperError("INVALID_ARGUMENT", "codex-desktop does not accept passthrough arguments.");
   const app = requireApp();
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
-  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
+  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
+  if (platform() === "win32") {
+    const processState = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id"], {timeout: 5_000});
+    if (processState.code !== 0) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the app's running state could not be checked.", reopenHint(settings));
+    if (processState.stdout.trim() && !userData) throw new OpperError("AGENT_CONFIG_CONFLICT", "Opper is configured, but the Codex/ChatGPT app is already running.", reopenHint(settings));
+    if (!app.executable) throw new OpperError("AGENT_NOT_FOUND", "The registered Codex desktop executable is unavailable.", reopenHint(settings));
+    const environment = [`$ErrorActionPreference = 'Stop'`, `$env:CODEX_HOME=${powerShellLiteral(settings.home)}`];
+    let argumentsList = "";
+    if (userData) {
+      const profile = resolve(userData);
+      environment.push(`$env:CODEX_ELECTRON_USER_DATA_PATH=${powerShellLiteral(profile)}`);
+      // Start-Process joins ArgumentList into a Windows command line: keep the whole
+      // profile argument quoted so spaces in the directory survive that conversion.
+      argumentsList = ` -ArgumentList ${powerShellLiteral(`"--user-data-dir=${profile}"`)}`;
+    }
+    const script = [...environment, `Start-Process -FilePath ${powerShellLiteral(app.executable)}${argumentsList}`].join("; ");
+    const opened = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {timeout: 5_000});
+    if (opened.code !== 0) throw new OpperError("AGENT_NOT_FOUND", "Opper is configured, but the Codex/ChatGPT app could not be opened.", reopenHint(settings));
+    console.log("Opened Codex/ChatGPT with Opper for new local Codex tasks.");
+    return 0;
+  }
   const executable = run("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", join(app.app, "Contents", "Info.plist")]);
   const binary = join(app.app, "Contents", "MacOS", executable.stdout.trim() || "ChatGPT");
   const processes = run("pgrep", ["-f", `^${binary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([[:space:]]|$)`]);
