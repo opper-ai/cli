@@ -206,6 +206,11 @@ session with a project label, or select a saved session to continue it. One
 session is active at a time, across every desktop app configured to use the
 local bridge. Selecting a saved session keeps its attribution ID.
 
+Running `opper` with no arguments also offers a **Proxy** submenu: start or
+open the session picker, inspect status, end the active session, or stop the
+proxy. Starting from the menu runs the service in the background and returns
+you to the menu. These controls use the default local state directory.
+
 Archive sessions you no longer need in the main list. The Archived view lets you
 restore them with the same attribution ID. Archiving the current session pauses
 new inference until you select another session; restoring a session does not

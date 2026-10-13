@@ -136,7 +136,7 @@ try {
   process.kill(bridge.pid, 0);
   process.stdout.write(bridge.token);
 } catch {
-  process.stderr.write("The local Opper desktop bridge is unavailable or its endpoint changed. Start the bridge and relaunch Codex desktop with opper --proxy.\\n");
+  process.stderr.write("The local Opper proxy is unavailable or its endpoint changed. Start it with opper proxy, or reconfigure and relaunch with opper launch --proxy codex-desktop, preserving your --state-dir and --codex-home options.\\n");
   process.exitCode = 1;
 } finally { if (file !== undefined) closeSync(file); }
 `;
