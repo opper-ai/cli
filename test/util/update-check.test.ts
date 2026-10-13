@@ -13,7 +13,20 @@ import { join } from "node:path";
 import {
   isNewer,
   checkForUpdate,
+  updateInstruction,
 } from "../../src/util/update-check.js";
+
+describe("updateInstruction", () => {
+  it("tells an npm install to npm install", () => {
+    expect(updateInstruction("@opperai/cli", undefined)).toContain("npm i -g @opperai/cli");
+  });
+
+  it("points a release bundle at the tool that installed it, never at npm", () => {
+    const text = updateInstruction("@opperai/cli", "bundle");
+    expect(text).toContain("mise up");
+    expect(text).not.toContain("npm i -g");
+  });
+});
 
 describe("isNewer", () => {
   it("returns true when latest patch is greater", () => {

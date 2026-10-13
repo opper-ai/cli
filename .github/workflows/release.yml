@@ -17,7 +17,12 @@
 # Publishing uses npm OIDC trusted publishing (hence `id-token: write` and the
 # absence of an NPM_TOKEN). That config pins org, repo AND this workflow's
 # filename, so renaming this file breaks publishing.
-name: Release to NPM
+#
+# After npm, the `bundles` job attaches self-contained tarballs (the CLI plus a
+# Node runtime per platform, see scripts/build-bundles.mjs) to the GitHub
+# release, so `mise use -g github:opper-ai/cli` and Omarchy's mise stub can
+# install the CLI from the release without npm.
+name: Release
 
 on:
   push:
@@ -104,3 +109,35 @@ jobs:
           else
             gh release create "$TAG" --title "$TAG" --generate-notes
           fi
+
+  bundles:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the bundles
+        run: node scripts/build-bundles.mjs
+
+      - name: Smoke-test the Linux bundle
+        run: scripts/smoke-bundle.sh dist-bundles/opper-linux-x64.tar.gz
+
+      # --clobber makes a re-run replace half-uploaded assets instead of failing.
+      - name: Attach the bundles to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" dist-bundles/*.tar.gz dist-bundles/SHA256SUMS --clobber

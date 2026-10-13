@@ -1,0 +1,63 @@
+# Builds the standalone bundles (scripts/build-bundles.mjs) without releasing
+# them, so a change to the bundle script, the launcher or the dependency tree
+# is exercised before a tag turns it into release assets. The release workflow
+# runs the same script and the same smoke test, then uploads.
+name: Bundles
+
+on:
+  pull_request:
+    paths:
+      - scripts/build-bundles.mjs
+      - scripts/smoke-bundle.sh
+      - .github/workflows/bundles.yml
+      - .github/workflows/release.yml
+      - package.json
+      - package-lock.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bundles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/build-bundles.mjs
+      - name: Smoke-test the Linux bundle
+        run: scripts/smoke-bundle.sh dist-bundles/opper-linux-x64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles
+          path: |
+            dist-bundles/*.tar.gz
+            dist-bundles/SHA256SUMS
+          retention-days: 7
+
+  # The macOS bundle runs on a Mac runner; Node's darwin binaries cannot run on
+  # the Linux builder, so the Linux job can only check that they were packed.
+  smoke-macos:
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v4
+        with:
+          name: bundles
+          path: dist-bundles
+      - run: scripts/smoke-bundle.sh dist-bundles/opper-darwin-arm64.tar.gz

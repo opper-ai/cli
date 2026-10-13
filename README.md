@@ -15,6 +15,17 @@ npx @opperai/cli login
 
 The package installs an `opper` binary on PATH. Once installed, every command is just `opper <…>`.
 
+### Without Node
+
+Every [GitHub release](https://github.com/opper-ai/cli/releases) also carries self-contained bundles, `opper-<os>-<arch>.tar.gz` for Linux and macOS on x64 and arm64, each with its own Node runtime. Unpack one anywhere and run `bin/opper`, or let [mise](https://mise.jdx.dev/) track releases for you:
+
+```bash
+mise use -g github:opper-ai/cli
+opper --help
+```
+
+That is also how Omarchy installs `opper`. A bundle updates with whatever installed it (`mise up`), not with `npm i -g`.
+
 > **Heads up:** if you previously installed the legacy Go CLI (`brew install opper-ai/oppercli/opper`), uninstall it first — both ship the `opper` binary and PATH order decides which one runs:
 >
 > ```bash

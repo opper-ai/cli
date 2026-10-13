@@ -92,13 +92,26 @@ async function fetchLatest(name: string): Promise<string> {
   }
 }
 
+/**
+ * How to get the newer version. The npm package and the GitHub release
+ * bundles ship from the same tag, so the version check stays on the npm
+ * registry, but a bundle (OPPER_DISTRIBUTION=bundle, set by its launcher) was
+ * installed by something else, typically mise, and `npm i -g` would put a
+ * second copy beside it.
+ */
+export function updateInstruction(name: string, distribution = process.env.OPPER_DISTRIBUTION): string {
+  if (distribution === "bundle") {
+    return `Update with the tool that installed opper, such as ${brand.accent("mise up")} (or ${brand.accent("omarchy update")} on Omarchy)`;
+  }
+  return `Run ${brand.accent(`npm i -g ${name}`)} to update`;
+}
+
 function printNotice(name: string, current: string, latest: string): void {
-  const cmd = `npm i -g ${name}`;
   process.stderr.write("\n");
   process.stderr.write(
     `  ${brand.bold("Update available")} ${brand.dim(current)} → ${brand.accent(latest)}\n`,
   );
-  process.stderr.write(`  Run ${brand.accent(cmd)} to update\n`);
+  process.stderr.write(`  ${updateInstruction(name)}\n`);
   process.stderr.write("\n");
 }
 
