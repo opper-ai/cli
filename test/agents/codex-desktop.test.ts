@@ -79,6 +79,13 @@ function configText(): string { return readFileSync(join(codexHome, "config.toml
 function provider(): Record<string, any> {
   return (readDesktopConfig(configText()).model_providers as Record<string, any>)["opper-desktop"];
 }
+function desktopHelperEnvironment(): NodeJS.ProcessEnv {
+  if (process.platform !== "win32") return {PATH: process.env.PATH ?? "", HOME: join(home, "finder-home")};
+  // A Windows desktop launch keeps the OS environment required by PowerShell.
+  // It need not inherit shell credentials or an Opper home override.
+  return Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^OPPER_/i.test(key) && !/(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|^CODEX_HOME$)/i.test(key)));
+}
 function configuredHelper() {
   const auth = provider().auth as { command: string; args: string[] };
   expect(isAbsolute(auth.command)).toBe(true);
@@ -86,12 +93,9 @@ function configuredHelper() {
   if (state.bundledRuntime && process.env.OPPER_DISTRIBUTION === "bundle") expect(auth.command).toBe(join(codexHome, "opper-desktop", NODE_NAME));
   else expect(realpathSync(auth.command)).toBe(realpathSync(process.execPath));
   expect(auth.args.some((arg) => arg === join(codexHome, "opper-desktop", "auth.mjs"))).toBe(true);
-  const operatingSystemEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    /^(?:SystemRoot|WINDIR|SystemDrive|TEMP|TMP|USERPROFILE|LOCALAPPDATA|APPDATA)$/i.test(key)));
   return () => spawnSync(auth.command, auth.args, {
     encoding: "utf8", timeout: process.platform === "win32" ? 20_000 : 5_000,
-    // Finder has neither the launch shell's key nor its Opper home override.
-    env: { ...operatingSystemEnv, PATH: process.env.PATH ?? "", HOME: join(home, "finder-home") },
+    env: desktopHelperEnvironment(),
   });
 }
 function successfulHelperOutput(helper: ReturnType<typeof configuredHelper>): string {
@@ -607,12 +611,11 @@ describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
     const probe = join(home, "windows-native-diagnostic.mjs");
     const cleanEnv = {...process.env};
     for (const key of Object.keys(cleanEnv)) if (/^OPPER_/i.test(key)) delete cleanEnv[key];
-    const minimalEnv = Object.fromEntries(Object.entries(cleanEnv).filter(([key]) => /^(?:PATH|SystemRoot|WINDIR|SystemDrive|TEMP|TMP|USERPROFILE|LOCALAPPDATA|APPDATA)$/i.test(key)));
     const results = [];
     for (const [name, environment, keepOpen] of [
       ["normal-environment-open-file", cleanEnv, true],
       ["normal-environment-no-open-file", cleanEnv, false],
-      ["minimal-environment-open-file", {...minimalEnv, HOME: join(home, "finder-home")}, true],
+      ["desktop-environment-without-credentials-open-file", desktopHelperEnvironment(), true],
     ] as const) {
       writeFileSync(probe, keepOpen ? diagnosticScript : diagnosticScript.replace('stage = "Windows access controls";', 'stage = "Windows access controls"; closeSync(file); file = undefined;').replace('stage = "runtime manifest";', 'stage = "runtime manifest"; if (file === undefined) file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);'));
       const started = Date.now();
