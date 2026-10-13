@@ -323,6 +323,11 @@ For operator debugging, `proxy status`, `proxy tag --tag project=acme`, and
 desktop inference is unavailable while it is stopped. `proxy start` stays in
 the foreground for development; Ctrl-C stops that instance. The current browser
 UI is local HTTP, and inference forwarding supports HTTP/SSE, not WebSockets.
+This prototype assumes trusted local processes and OS users. HTTP does not
+authenticate the local listener: if the bridge stops or crashes, another local
+user could bind its port and receive a configured desktop app's next prompt and
+local credential. Use it only on trusted single-user machines; authenticated
+local transport still needs verified certificate support in both desktop apps.
 Native Windows proxy lifecycle and access controls are exercised in Windows CI.
 Actual Windows desktop launch and inference, and live Claude Desktop inference,
 still need verification on machines with those apps installed.
