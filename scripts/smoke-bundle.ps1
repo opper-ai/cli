@@ -7,7 +7,8 @@ $PSNativeCommandUseErrorActionPreference = $false
 $repo = Split-Path $PSScriptRoot -Parent
 $expected = (Get-Content (Join-Path $repo 'package.json') -Raw | ConvertFrom-Json).version
 $archive = (Resolve-Path $Tarball).Path
-$tar = (Get-Command tar.exe -CommandType Application).Source
+$tar = Join-Path $env:SystemRoot 'System32/tar.exe'
+if (!(Test-Path $tar -PathType Leaf)) { throw 'Windows system tar.exe is required to extract the ZIP bundle' }
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("opper bundle smoke " + [guid]::NewGuid())
 $savedEnvironment = @{}
 foreach ($entry in Get-ChildItem Env:) { $savedEnvironment[$entry.Name] = $entry.Value }
@@ -37,8 +38,8 @@ try {
   if (!(Test-Path $launcher -PathType Leaf) -or !(Test-Path (Join-Path $root 'lib/node.exe') -PathType Leaf)) {
     throw 'Bundle layout is wrong'
   }
-  $home = Join-Path $work 'home'
-  New-Item -ItemType Directory -Path $home | Out-Null
+  $smokeHome = Join-Path $work 'home'
+  New-Item -ItemType Directory -Path $smokeHome | Out-Null
 
   # Keep the Windows process essentials; discard user keys, login state,
   # NODE_OPTIONS, and agent home overrides before running the actual bundle.
@@ -52,16 +53,16 @@ try {
     COMSPEC = Join-Path $systemRoot 'System32/cmd.exe'
     PATH = (Join-Path $root 'bin') + ';' + (Join-Path $systemRoot 'System32')
     PATHEXT = '.COM;.EXE;.BAT;.CMD'
-    HOME = $home
-    USERPROFILE = $home
-    APPDATA = Join-Path $home 'AppData/Roaming'
-    LOCALAPPDATA = Join-Path $home 'AppData/Local'
-    OPPER_HOME = Join-Path $home '.opper'
-    OPPER_EDITOR_HOME = $home
-    CODEX_HOME = Join-Path $home '.codex'
-    HERMES_HOME = Join-Path $home '.hermes'
-    XDG_CONFIG_HOME = Join-Path $home '.config'
-    XDG_CACHE_HOME = Join-Path $home '.cache'
+    HOME = $smokeHome
+    USERPROFILE = $smokeHome
+    APPDATA = Join-Path $smokeHome 'AppData/Roaming'
+    LOCALAPPDATA = Join-Path $smokeHome 'AppData/Local'
+    OPPER_HOME = Join-Path $smokeHome '.opper'
+    OPPER_EDITOR_HOME = $smokeHome
+    CODEX_HOME = Join-Path $smokeHome '.codex'
+    HERMES_HOME = Join-Path $smokeHome '.hermes'
+    XDG_CONFIG_HOME = Join-Path $smokeHome '.config'
+    XDG_CACHE_HOME = Join-Path $smokeHome '.cache'
     TEMP = $work
     TMP = $work
     CI = '1'
@@ -99,3 +100,7 @@ finally {
   }
   if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 }
+
+# The last native command intentionally exited 2 in the negative test. Report
+# success after cleanup so GitHub's pwsh wrapper does not reuse that exit code.
+exit 0
