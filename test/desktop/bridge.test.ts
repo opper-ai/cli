@@ -28,6 +28,70 @@ function call(url: string, path = "/v3/compat/responses", opts: RequestInit = {}
 }
 
 describe("desktop bridge with real HTTP", () => {
+  it("preserves Claude beta queries, provider headers, bytes and SSE attribution across a switch", async () => {
+    const received: Array<{url: string; headers: IncomingMessage["headers"]; payload: string}> = [];
+    const events: Array<{path: string}> = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {release = resolve;});
+    const origin = await upstream(async (req, res) => {
+      received.push({url: req.url!, headers: req.headers, payload: (await body(req)).toString()});
+      const first = received.length === 1;
+      res.writeHead(200, {"Content-Type": "text/event-stream", "request-id": "claude-request", "anthropic-ratelimit-requests-remaining": "7"});
+      res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+      if (first) await gate;
+      res.end("event: message_stop\ndata: {}\n\n");
+    });
+    const proxy = await bridge(origin, {initialTags: {project: "A"}, onRequest: (event) => events.push(event)});
+    const firstId = proxy.status().sessionId;
+    const payload = '{ "model": "claude-sonnet-5", "stream": true }\n';
+    const query = "?beta=true&option=%2F&option=two&empty=&encoded=%23";
+    const response = await call(proxy.url, `/v3/compat/v1/messages${query}`, {body: payload, headers: {Authorization: "Bearer local-secret", "Content-Type": "application/json", "anthropic-beta": "feature-2026-01-01", "anthropic-version": "2023-06-01"}});
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("request-id")).toBe("claude-request");
+    expect(response.headers.get("anthropic-ratelimit-requests-remaining")).toBe("7");
+    const reader = response.body!.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_start");
+    const second = proxy.setTags({project: "B"});
+    expect(await (await call(proxy.url, "/v3/compat/v1/messages?beta=true")).text()).toContain("message_stop");
+    release();
+    let ending = "";
+    while (true) {const part = await reader.read(); if (part.done) break; ending += new TextDecoder().decode(part.value);}
+    expect(ending).toContain("message_stop");
+    expect(received.map((item) => item.url)).toEqual([`/v3/session/${firstId}/project:A/v1/messages${query}`, `/v3/session/${second.sessionId}/project:B/v1/messages?beta=true`]);
+    expect(received[0]!.payload).toBe(payload);
+    expect(received[0]!.headers).toMatchObject({authorization: "Bearer upstream-secret", "anthropic-beta": "feature-2026-01-01", "anthropic-version": "2023-06-01"});
+    expect(events.map((event) => event.path)).toEqual(["/v3/compat/v1/messages", "/v3/compat/v1/messages"]);
+  });
+
+  it("preserves model pagination queries while rejecting raw encoded paths and queried control routes", async () => {
+    const forwarded: string[] = [];
+    const origin = await upstream(async (req, res) => {forwarded.push(req.url!); await body(req); res.end('{"data":[]}');});
+    const proxy = await bridge(origin);
+    const modelPath = "/v3/compat/v1/models?limit=2&after=a%2Fb";
+    expect(await (await call(proxy.url, modelPath, {method: "GET", body: null})).text()).toBe('{"data":[]}');
+    const rawModelPath = "/v3/compat/models?literal=a'b&after=a%2fb";
+    const rawModel = await new Promise<IncomingMessage>((resolve, reject) => {
+      const client = request(new URL(proxy.url), {path: rawModelPath, method: "GET", headers: {Authorization: "Bearer local-secret"}}, resolve);
+      client.on("error", reject); client.end();
+    });
+    expect((await body(rawModel)).toString()).toBe('{"data":[]}');
+    expect(forwarded).toEqual([modelPath, rawModelPath]);
+    const before = proxy.status();
+    const rawStatus = (target: string, method = "POST", token = "local-secret") => new Promise<number>((resolve, reject) => {
+      const url = new URL(proxy.url);
+      const client = request({hostname: url.hostname, port: url.port, path: target, method, headers: {Authorization: `Bearer ${token}`}}, (response) => {response.resume(); resolve(response.statusCode!);});
+      client.on("error", reject); client.end(method === "POST" ? "{}" : undefined);
+    });
+    for (const target of ["/v3/compat/v1/%6dessages?beta=true", "/v3/compat/v1/messages/../messages?beta=true", "/v3/compat/%2e%2e/v1/messages?beta=true", "/v3/compat/v1%2Fmessages?beta=true", "/v3/compat/v1\\messages?beta=true", "//attacker.example/v3/compat/v1/messages?beta=true", "http://attacker.example/v3/compat/v1/messages?beta=true", "/v3/compat/v1/messages#fragment", "/v3/compat/v1/messages?beta=true#fragment", "/unknown?beta=true", "/opper/context?ignored=true"]) {
+      expect(await rawStatus(target)).toBe(404);
+    }
+    expect(await rawStatus("/opper/status?ignored=true", "GET")).toBe(404);
+    expect(await rawStatus("/v3/compat/v1/messages?beta=true", "POST", "invalid")).toBe(401);
+    expect(proxy.status()).toEqual(before);
+    expect(forwarded).toEqual([modelPath, rawModelPath]);
+  });
+
   it("switches A to B to clear, preserves bytes, and replaces client attribution/auth headers", async () => {
     const seen: Array<{path: string; headers: IncomingMessage["headers"]; payload: string}> = [];
     const origin = await upstream(async (req, res) => {

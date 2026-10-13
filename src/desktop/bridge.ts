@@ -122,9 +122,14 @@ export async function startDesktopBridge(opts: DesktopBridgeOptions): Promise<De
     try {if (opts.handleLocalRequest?.(req, res)) return;}
     catch {json(res, 500, {error: "local request handler failed"}); req.resume(); return;}
     if (!authorized(req, opts.token)) { json(res, 401, {error: "invalid local authentication"}); req.resume(); return; }
-    // No URL resolution of a client-supplied path: only these exact routes can reach upstream.
-    const path = req.url ?? "";
-    const controlMethod = path === "/opper/status" ? "GET" : path === "/opper/context" ? "POST" : undefined;
+    // Match the raw pathname without URL normalization, decoding, or resolving a supplied authority.
+    // Query strings are provider parameters and cannot change the configured upstream destination.
+    const rawTarget = req.url ?? "";
+    if (rawTarget.includes("#")) {json(res, 404, {error: "unsupported bridge route"}); req.resume(); return;}
+    const queryOffset = rawTarget.indexOf("?");
+    const path = queryOffset < 0 ? rawTarget : rawTarget.slice(0, queryOffset);
+    const query = queryOffset < 0 ? "" : rawTarget.slice(queryOffset);
+    const controlMethod = query ? undefined : path === "/opper/status" ? "GET" : path === "/opper/context" ? "POST" : undefined;
     const inference = INFERENCE_PATHS.has(path);
     const models = MODEL_PATHS.has(path);
     const method = controlMethod ?? (inference ? "POST" : models ? "GET" : undefined);
@@ -162,7 +167,7 @@ export async function startDesktopBridge(opts: DesktopBridgeOptions): Promise<De
       const headers = copyHeaders(req.headers, true);
       headers.authorization = `Bearer ${credential}`;
       if (opts.projectUuid) headers["x-opper-project"] = opts.projectUuid;
-      upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(target, {method, headers}, (provider) => {
+      upstream = (target.protocol === "https:" ? httpsRequest : httpRequest)(target, {method, headers, path: target.pathname + query}, (provider) => {
         const providerStatus = provider.statusCode ?? 502;
         if (providerStatus >= 300 && providerStatus < 400) {
           provider.destroy();
