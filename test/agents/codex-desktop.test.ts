@@ -3,6 +3,7 @@ import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { readDesktopConfig } from "../../src/setup/codex-desktop-config.js";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
 import { OpperError } from "../../src/errors.js";
@@ -473,6 +474,32 @@ describe("Codex desktop launching", () => {
 });
 
 describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
+  it("closes native-checker stdin and reports only safe validation stages", async () => {
+    const {proxy} = await desktopProxy();
+    await codexDesktop.configure(options({desktopProxy: proxy}));
+    const auth = provider().auth as {command: string; args: string[]};
+    const script = readFileSync(auth.args[0]!, "utf8");
+    const shim = join(home, "native-checker-shim.mjs");
+    const generated = join(home, "proxy-helper-native-transport.mjs");
+    const checker = `let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { const request = JSON.parse(input); if (request.path !== process.argv[1] || request.kind !== 'file' || request.create !== false) process.exit(2); process.stdout.write(JSON.stringify({ok: process.argv[2] === 'true'})); });`;
+    const invoke = (valid: boolean) => {
+      writeFileSync(shim, `import {execFile as execute} from 'node:child_process';
+export function execFile(executable, args, options, callback) {
+  if (!Buffer.from(args.at(-1), 'base64').toString('utf16le').includes('[Console]::In.ReadToEnd()')) throw new Error('missing native checker');
+  return execute(process.execPath, ['-e', ${JSON.stringify(checker)}, ${JSON.stringify(join(proxy.stateDir, "bridge.json"))}, ${JSON.stringify(String(valid))}], options, callback);
+}`);
+      writeFileSync(generated, `Object.defineProperty(process, 'platform', {value: 'win32'});\n` + script.replace('from "node:child_process"', `from ${JSON.stringify(pathToFileURL(shim).href)}`));
+      return spawnSync(auth.command, [generated, ...auth.args.slice(1)], {encoding: "utf8", timeout: 10_000});
+    };
+    expect(successfulHelperOutput(() => invoke(true))).toBe(proxy.token);
+    const rejected = invoke(false);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stdout).toBe("");
+    expect(rejected.stderr).toContain("validation failed at Windows access controls.");
+    expect(rejected.stderr).not.toContain(proxy.token);
+    expect(rejected.stderr).not.toContain(KEY);
+  });
+
   it("discovers models with the real credential while persisting only local routing and a token reader", async () => {
     const {proxy, write} = await desktopProxy();
     const projectUuid = "11111111-1111-4111-8111-111111111111";
@@ -531,6 +558,9 @@ describe("Codex desktop opt-in local proxy", {timeout: 60_000}, () => {
     expect(result.stdout).toBe("");
     expect(result.stderr).not.toContain(KEY);
     expect(result.stderr).not.toContain("private-token-never-print");
+    // This must reject the supplied manifest after a successful native ACL
+    // check, rather than passing because the checker itself timed out.
+    expect(result.stderr).not.toContain("validation failed at Windows access controls");
   });
 
   it("refuses public or symlinked runtime files and missing bridge state", async () => {

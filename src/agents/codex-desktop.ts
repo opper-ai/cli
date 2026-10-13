@@ -164,27 +164,41 @@ try {
 // Read only the local bridge's credential; the upstream key remains with the bridge.
 const PROXY_AUTH_HELPER = `import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join, win32 } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 const [stateDir, expectedEndpoint] = process.argv.slice(2);
 let file;
+let stage = "state directory";
 try {
   const directory = lstatSync(stateDir);
   if (!directory.isDirectory() || directory.isSymbolicLink() || (process.platform !== "win32" && (directory.mode & 0o077) !== 0) || (process.getuid && directory.uid !== process.getuid())) throw new Error("invalid directory");
+  stage = "state file";
   file = openSync(join(stateDir, "bridge.json"), constants.O_RDONLY | constants.O_NOFOLLOW);
   const info = fstatSync(file);
   if (!info.isFile() || (process.platform !== "win32" && (info.mode & 0o077) !== 0) || (process.getuid && info.uid !== process.getuid()) || info.size > 16384) throw new Error("invalid file");
   if (process.platform === "win32") {
+    stage = "Windows access controls";
     const executable = win32.join(process.env.SystemRoot || process.env.WINDIR || "C:\\\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const result = execFileSync(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {input: JSON.stringify({path: join(stateDir, "bridge.json"), kind: "file", create: false}), encoding: "utf8", timeout: 15000, windowsHide: true, stdio: ["pipe", "pipe", "pipe"]});
-    if (JSON.parse(result).ok !== true) throw new Error("invalid Windows access controls");
+    const result = await new Promise((resolve, reject) => {
+      const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", ${JSON.stringify(Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64"))}], {encoding: "utf8", timeout: 15000, maxBuffer: 16384, windowsHide: true}, (cause, stdout) => {
+        if (cause) reject(cause); else resolve(stdout);
+      });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(JSON.stringify({path: join(stateDir, "bridge.json"), kind: "file", create: false}));
+    });
+    if (JSON.parse(result.trim()).ok !== true) throw new Error("invalid Windows access controls");
   }
+  stage = "runtime manifest";
   const bridge = JSON.parse(readFileSync(file, "utf8"));
   if (bridge.version !== 1 || typeof bridge.url !== "string" || typeof bridge.token !== "string" || !/^[a-f0-9]{64}$/.test(bridge.token) || !Number.isSafeInteger(bridge.pid) || bridge.pid <= 0) throw new Error("invalid runtime");
   const endpoint = new URL(bridge.url);
+  stage = "endpoint";
   if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || !endpoint.port || endpoint.username || endpoint.password || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.origin !== expectedEndpoint) throw new Error("changed endpoint");
+  stage = "proxy process";
   process.kill(bridge.pid, 0);
   process.stdout.write(bridge.token);
-} catch {
+} catch (cause) {
+  const code = ["ENOENT", "EACCES", "EPERM", "ETIMEDOUT"].includes(cause?.code) ? " (" + cause.code + ")" : "";
+  process.stderr.write("Local proxy validation failed at " + stage + code + ".\\n");
   process.stderr.write("The local Opper proxy is unavailable or its endpoint changed. Start it with opper proxy, or reconfigure and relaunch with opper launch --proxy codex-desktop, preserving your --state-dir and --codex-home options.\\n");
   process.exitCode = 1;
 } finally { if (file !== undefined) closeSync(file); }
