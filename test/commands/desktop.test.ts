@@ -63,7 +63,7 @@ async function start(tags: Record<string, string> = { project: "acme" }) {
     if (failure) throw failure;
     try {
       const manifest = await readDesktopRuntime(stateDir);
-      if (manifest.pid === process.pid) return manifest;
+      if (manifest.pid === process.pid && (await fetch(`${manifest.url}/opper/status`, {headers: {authorization: `Bearer ${manifest.token}`}})).ok) return manifest;
     } catch { /* Startup can be between replacing its stale manifest and publishing readiness. */ }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -205,6 +205,10 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     expect((await inference(manifest.url, manifest.token)).status).toBe(200);
   });
   it("starts a detached service using the actual CLI, reuses it, and stops only that service", async () => {
+    // A crashed bridge's PID can have been reused by this unrelated test process.
+    await ensurePrivateStateDirectory(stateDir, true);
+    if (process.platform === "win32") await ensurePrivateStateFile(join(stateDir, "bridge.json"), true);
+    await writeFile(join(stateDir, "bridge.json"), JSON.stringify({ version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid }), { mode: 0o600 });
     const execute = promisify(execFile);
     const entry = fileURLToPath(new URL("../../src/index.ts", import.meta.url));
     const args = ["--import", "tsx", entry, "--key", "work", "proxy", "--state-dir", stateDir, "--no-open"];
@@ -299,12 +303,50 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     expect((await inference(manifest.url, manifest.token)).status).toBeGreaterThanOrEqual(400);
     expect(requests).toHaveLength(0);
   });
-  it("refuses an alive manifest PID even if its runtime lock is absent", async () => {
+  it("recovers an unreachable stale manifest whose PID now belongs to another live process", async () => {
     await ensurePrivateStateDirectory(stateDir, true);
     if (process.platform === "win32") await ensurePrivateStateFile(join(stateDir, "bridge.json"), true);
     const previous = { version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid };
     await writeFile(join(stateDir, "bridge.json"), JSON.stringify(previous), { mode: 0o600 });
-    await expect(desktopStartCommand({ key: "work", stateDir, signal: AbortSignal.abort() })).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
-    expect(JSON.parse(await readFile(join(stateDir, "bridge.json"), "utf8"))).toEqual(previous);
+    const manifest = await start();
+    expect(manifest.token).not.toBe(previous.token);
+    expect((await inference(manifest.url, manifest.token)).status).toBe(200);
+    expect(() => process.kill(previous.pid, 0)).not.toThrow();
+  });
+  it.each(["healthy", "unauthorized", "malformed", "invalid-json", "redirect"])("preserves a responding %s endpoint and manifest without a lifetime lock", async (kind) => {
+    const token = "a".repeat(64);
+    const endpoint = createServer((req, res) => {
+      expect(req.headers.authorization).toBe(`Bearer ${token}`);
+      res.writeHead(kind === "unauthorized" ? 401 : kind === "redirect" ? 302 : 200, {"content-type": "application/json", ...(kind === "redirect" ? {location: `${origin}/do-not-forward-local-auth`} : {})});
+      res.end(kind === "healthy" ? JSON.stringify({paused: true, activeRequests: 0, requests: 0}) : kind === "malformed" ? '{"unrelated":true}' : kind === "invalid-json" ? 'invalid JSON' : '{}');
+    });
+    await new Promise<void>((resolve) => endpoint.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = endpoint.address();
+      if (!address || typeof address === "string") throw new Error("Expected listening server");
+      await ensurePrivateStateDirectory(stateDir, true);
+      if (process.platform === "win32") await ensurePrivateStateFile(join(stateDir, "bridge.json"), true);
+      const previous = JSON.stringify({version: 1, url: `http://127.0.0.1:${address.port}`, token, keyName: "work", origin, pid: 2147483647});
+      await writeFile(join(stateDir, "bridge.json"), previous, {mode: 0o600});
+      await expect(desktopStartCommand({key: "work", stateDir, signal: AbortSignal.abort()})).rejects.toMatchObject({code: kind === "healthy" ? "AGENT_CONFIG_CONFLICT" : "API_ERROR"});
+      expect(await readFile(join(stateDir, "bridge.json"), "utf8")).toBe(previous);
+      if (kind === "healthy") {
+        expect((await prepareDesktopProxy({key: "work", stateDir})).proxy).toMatchObject({baseUrl: `http://127.0.0.1:${address.port}`, token});
+      } else {
+        await expect(desktopOpenCommand({key: "work", stateDir, open: false})).rejects.toMatchObject({code: "API_ERROR"});
+        expect(await readFile(join(stateDir, "bridge.json"), "utf8")).toBe(previous);
+      }
+      expect(requests).toHaveLength(0);
+    } finally { await new Promise<void>((resolve) => endpoint.close(() => resolve())); }
+  });
+  it("does not replace an unreachable manifest while its lifetime lock is active", async () => {
+    const manifest = await start();
+    const original = await readFile(join(stateDir, "bridge.json"), "utf8");
+    await writeFile(join(stateDir, "bridge.json"), JSON.stringify({...manifest, url: "http://127.0.0.1:1"}), {mode: 0o600});
+    try {
+      await expect(desktopOpenCommand({key: "work", stateDir, open: false})).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT"});
+      expect(JSON.parse(await readFile(join(stateDir, "bridge.json"), "utf8")).url).toBe("http://127.0.0.1:1");
+      await expect(lstat(join(stateDir, "bridge.log"))).rejects.toMatchObject({code: "ENOENT"});
+    } finally { await writeFile(join(stateDir, "bridge.json"), original, {mode: 0o600}); }
   });
 });

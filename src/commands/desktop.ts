@@ -193,12 +193,6 @@ async function writePrivateJson(directory: string, name: string, value: unknown)
 export function readDesktopRuntime(stateDir?: string): Promise<DesktopManifest> {
   return readDesktopManifest(stateDir !== undefined ? { stateDir } : {});
 }
-function pidAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code !== "ESRCH";
-  }
-}
-
 async function startupCredential(opts: { key: string; projectUuid?: string | undefined }): Promise<{origin: string; identity: string; fingerprint: string; slot: AuthSlot}> {
   if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   if (process.env.OPPER_API_KEY) throw new OpperError("INVALID_ARGUMENT", "Local proxy requires a stored credential slot; unset OPPER_API_KEY.");
@@ -274,10 +268,13 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
   let stop: (() => void) | undefined;
   let removeSignals: (() => void) | undefined;
   try {
+    const connection = await savedConnection(directory);
+    if (connection) validateBinding(connection, opts, origin, fingerprint);
     try {
       const previous = await readDesktopManifest({ stateDir: directory });
-      if (pidAlive(previous.pid)) {
-        throw error("A process recorded in this bridge's manifest is still alive.", "Stop that bridge, or use a different --state-dir; active state will not be replaced.");
+      validateBinding(previous, opts, origin);
+      if (await bridgeResponds(previous)) {
+        throw error("This local proxy endpoint is still active.", "Stop that bridge, or use a different --state-dir; active state will not be replaced.");
       }
       await unlink(path);
     } catch (cause) {
@@ -292,8 +289,6 @@ export async function desktopStartCommand(opts: DesktopStartOptions): Promise<vo
       process.off("SIGINT", onStop); process.off("SIGTERM", onStop);
       opts.signal?.removeEventListener("abort", onStop);
     };
-    const connection = await savedConnection(directory);
-    if (connection) validateBinding(connection, opts, origin, fingerprint);
     const persistedPort = connection ? Number(new URL(connection.url).port) : undefined;
     if (persistedPort && opts.port && persistedPort !== opts.port) {
       throw error("The requested port differs from this bridge's saved desktop endpoint.", "Reuse its saved port, or use a separate --state-dir for a new endpoint.");
@@ -400,14 +395,33 @@ async function requestControl(manifest: DesktopManifest, route = "status", body?
       method: route === "status" ? "GET" : "POST",
       headers: { authorization: `Bearer ${manifest.token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      redirect: "error",
+      // Do not follow redirects or mistake a responding redirect for a dead listener.
+      redirect: "manual",
       signal: AbortSignal.timeout(5_000),
     });
   } catch {
     throw new OpperError("NETWORK_ERROR", "Cannot reach the local proxy.", "Check its foreground process. If it crashed, restart it with the same --state-dir after ten seconds.");
   }
   if (!response.ok) throw new OpperError("API_ERROR", `Local proxy control failed (HTTP ${response.status}).`);
-  return { value: await response.json(), url: manifest.url };
+  let value: unknown;
+  try { value = await response.json(); } catch { throw new OpperError("API_ERROR", "Local proxy returned an invalid control response."); }
+  if (route === "status") {
+    const status = value as {paused?: unknown; activeRequests?: unknown; requests?: unknown} | null;
+    if (!status || typeof status !== "object" || Array.isArray(status) || typeof status.paused !== "boolean" ||
+        !Number.isSafeInteger(status.activeRequests) || Number(status.activeRequests) < 0 ||
+        !Number.isSafeInteger(status.requests) || Number(status.requests) < 0) {
+      throw new OpperError("API_ERROR", "Local proxy returned an invalid status response.");
+    }
+  }
+  return { value, url: manifest.url };
+}
+/** A reused PID is not proof of a live bridge. Only an unreachable endpoint is recoverable. */
+async function bridgeResponds(manifest: DesktopManifest): Promise<boolean> {
+  try { await requestControl(manifest); return true; } catch (cause) {
+    if (cause instanceof OpperError && cause.code === "NETWORK_ERROR") return false;
+    // Authentication errors and malformed responses must not authorize replacement.
+    throw cause;
+  }
 }
 function printStatus(result: { value: unknown; url: string }): void {
   // Only allow known safe fields in output, even if another local service answers.
@@ -475,10 +489,14 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
   try { manifest = await readDesktopManifest({stateDir: directory}); } catch (cause) {
     if (!(cause instanceof OpperError && cause.message === "No running local proxy manifest found.")) throw cause;
   }
-  if (manifest && pidAlive(manifest.pid)) {
-    validateBinding(manifest, opts, origin);
-    await requestControl(manifest);
-  } else {
+  if (manifest) validateBinding(manifest, opts, origin);
+  if (manifest && await bridgeResponds(manifest)) return manifest;
+  // A starting or temporarily unreachable bridge still owns its lifetime lock.
+  // The detached child's own lock acquisition handles a race after this check.
+  if (await lockfile.check(directory, {realpath: false, stale: 10_000})) {
+    throw error("This local proxy state directory is already in use.", "Wait for the running bridge to become ready. After a crash, wait ten seconds and retry.");
+  }
+  {
     if (process.platform === "win32") await ensurePrivateStateFile(join(directory, "bridge.log"), true);
     const log = await open(join(directory, "bridge.log"), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     try {
@@ -498,13 +516,12 @@ async function ensureDesktopBridge(opts: DesktopOpenOptions): Promise<DesktopMan
         if (spawnFailure) throw new OpperError("NETWORK_ERROR", "Could not start the local proxy process.");
         try {
           const candidate = await readDesktopManifest({stateDir: directory});
-          if (pidAlive(candidate.pid)) {
-            validateBinding(candidate, opts, origin);
-            await requestControl(candidate);
+          validateBinding(candidate, opts, origin);
+          if (await bridgeResponds(candidate)) {
             manifest = candidate; break;
           }
         } catch (cause) {
-          if (cause instanceof OpperError && cause.code === "AGENT_CONFIG_CONFLICT" && cause.message !== "No running local proxy manifest found.") throw cause;
+          if (cause instanceof OpperError && (cause.code === "API_ERROR" || (cause.code === "AGENT_CONFIG_CONFLICT" && cause.message !== "No running local proxy manifest found."))) throw cause;
         }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
