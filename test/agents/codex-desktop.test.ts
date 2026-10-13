@@ -55,6 +55,10 @@ const MODEL = "claude-sonnet-5";
 const KEY = "fixture-prod-key-not-a-real-credential";
 const ORIGINAL_EXEC_PATH = process.execPath;
 const NODE_NAME = process.platform === "win32" ? "node.exe" : "node";
+// Windows fixtures run native ACL checks and copy/restore the full Node binary.
+// Budget those integration steps without changing any subprocess deadline.
+const NATIVE_FIXTURE_TIMEOUT = process.platform === "win32" ? 30_000 : undefined;
+const NATIVE_FIXTURE_OPTIONS = NATIVE_FIXTURE_TIMEOUT === undefined ? {} : {timeout: NATIVE_FIXTURE_TIMEOUT};
 const ORIGINAL = '# personal defaults\nmodel = "gpt-5.5" # chosen model\nmodel_provider = "openai"\n\n[features]\nmulti_agent = true\n\n[projects."/personal/project"]\ntrust_level = "trusted"\n\n[mcp_servers.notes]\ncommand = "notes"\n';
 
 let home: string;
@@ -158,15 +162,15 @@ beforeEach(async () => {
   ], selected));
   await setSlot("default", { apiKey: "fixture-other-key", baseUrl: "https://api.opper.ai" });
   await setSlot("prod", { apiKey: KEY, baseUrl: API_ROOT });
-});
+}, NATIVE_FIXTURE_TIMEOUT);
 
 afterEach(() => {
   process.execPath = ORIGINAL_EXEC_PATH;
   vi.unstubAllEnvs();
   rmSync(home, { recursive: true, force: true });
-});
+}, NATIVE_FIXTURE_TIMEOUT);
 
-describe("Codex desktop detection", () => {
+describe("Codex desktop detection", NATIVE_FIXTURE_OPTIONS, () => {
   it("rejects an environment key instead of borrowing a stored credential for Finder launches", async () => {
     vi.stubEnv("OPPER_API_KEY", "independent-env-key");
     await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "AUTH_REQUIRED", message: expect.stringContaining("stored Opper credential") });
@@ -278,7 +282,7 @@ describe("Codex desktop detection", () => {
   });
 });
 
-describe("Codex desktop configuration and credentials", () => {
+describe("Codex desktop configuration and credentials", NATIVE_FIXTURE_OPTIONS, () => {
   function useBundleRuntime(license = true) {
     const bundle = join(home, "mise version", "lib");
     mkdirSync(bundle, { recursive: true });
@@ -546,7 +550,7 @@ describe("Codex desktop configuration and credentials", () => {
   });
 });
 
-describe("Codex desktop launching", () => {
+describe("Codex desktop launching", NATIVE_FIXTURE_OPTIONS, () => {
   it("uses a persistent gateway endpoint and opens the detected application", async () => {
     await expect(codexDesktop.spawn!([], routing())).resolves.toBe(0);
     expect(provider().base_url).toBe(`${API_ROOT}/v3/compat`);
@@ -729,7 +733,7 @@ export function execFile(executable, args, options, callback) {
   });
 });
 
-describe("Codex desktop custom-home guidance", () => {
+describe("Codex desktop custom-home guidance", NATIVE_FIXTURE_OPTIONS, () => {
   it("makes custom-home configure explicit without changing the default home", async () => {
     const defaultHome = join(home, ".codex");
     mkdirSync(defaultHome);
@@ -771,7 +775,7 @@ describe("Codex desktop custom-home guidance", () => {
   });
 });
 
-describe("explicit Codex home", () => {
+describe("explicit Codex home", NATIVE_FIXTURE_OPTIONS, () => {
   it("configures and removes only the explicit directory despite CODEX_HOME", async () => {
     const selected = join(home, "custom home's settings");
     mkdirSync(selected);

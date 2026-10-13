@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopStatusCommand, desktopOpenCommand, desktopStopCommand, readDesktopRuntime, resolveDesktopApiContext, prepareDesktopProxy } from "../../src/commands/desktop.js";
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
 import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "../../src/desktop/private-state.js";
+import * as privateState from "../../src/desktop/private-state.js";
 
 let directory: string;
 let stateDir: string;
@@ -298,6 +299,31 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     // Restore exact manifest so normal shutdown can prove its ownership.
     await writeFile(join(stateDir, "bridge.json"), JSON.stringify(manifest), { mode: 0o600 });
     expect(requests).toHaveLength(0);
+  });
+  it.each(["ENOENT", "AGENT_CONFIG_CONFLICT"])("distinguishes disappearing Windows manifest state from invalid ACLs (%s)", async (code) => {
+    await mkdir(stateDir, {mode: 0o700});
+    const path = join(stateDir, "bridge.json");
+    const original = JSON.stringify({version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid});
+    await writeFile(path, original, {mode: 0o600});
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", {value: "win32", configurable: true});
+      vi.spyOn(privateState, "ensurePrivateStateDirectory").mockResolvedValue();
+      const checker = vi.spyOn(privateState, "assertPrivateStateFile").mockImplementation(async (checked) => {
+        expect(checked).toBe(path);
+        // readPrivateJson has already opened the old file; startup removes its pathname.
+        if (code === "ENOENT") await rm(path);
+        throw Object.assign(new Error("synthetic native checker failure"), {code});
+      });
+      await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({
+        code: "AGENT_CONFIG_CONFLICT",
+        message: code === "ENOENT" ? "No running local proxy manifest found." : "Cannot safely read local proxy bridge.json: its Windows access controls are not private.",
+      });
+      expect(checker).toHaveBeenCalledOnce();
+      if (code === "ENOENT") await expect(lstat(path)).rejects.toMatchObject({code: "ENOENT"});
+      else expect(await readFile(path, "utf8")).toBe(original);
+      expect(requests).toHaveLength(0);
+    } finally {Object.defineProperty(process, "platform", platformDescriptor);}
   });
   it("restarts safely after a crashed process, replacing only its stale manifest", async () => {
     await ensurePrivateStateDirectory(stateDir, true);
