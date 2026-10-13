@@ -1,6 +1,6 @@
 {
   "name": "@opperai/cli",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "description": "The official Opper CLI — authenticate, route agent inference, and manage the Opper platform",
   "type": "module",
   "bin": {
@@ -19,7 +19,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && node --test test/scripts/build-bundles.test.mjs",
     "test:smoke": "node test/integration/package-smoke.mjs",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
