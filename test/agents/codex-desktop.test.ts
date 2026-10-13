@@ -309,8 +309,10 @@ describe("Codex desktop configuration and credentials", () => {
     appendFileSync(join(bundle, NODE_NAME), "\n# fixture runtime upgrade\n");
     writeFileSync(join(bundle, "NODE-LICENSE"), `${firstLicense}Updated release notices.\n`);
     await codexDesktop.configure(options({ model: "claude-opus-5" }));
-    expect(readFileSync(auth.command)).not.toEqual(firstRuntime);
-    expect(readFileSync(auth.command)).toEqual(readFileSync(join(bundle, NODE_NAME)));
+    // Compare bytes natively: deep equality enumerates Windows' ~80 MB Node
+    // executable and can exhaust the test worker's JavaScript heap.
+    expect(readFileSync(auth.command).equals(firstRuntime)).toBe(false);
+    expect(readFileSync(auth.command).equals(readFileSync(join(bundle, NODE_NAME)))).toBe(true);
     expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toContain("Updated release notices.");
     expect(readDesktopConfig(configText()).model).toBe("claude-opus-5");
     const runtime = readFileSync(auth.command);
@@ -322,7 +324,7 @@ describe("Codex desktop configuration and credentials", () => {
     writeFileSync(join(bundle, NODE_NAME), "broken replacement runtime");
     rmSync(join(bundle, "NODE-LICENSE"));
     await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "ENOENT" });
-    expect(readFileSync(auth.command)).toEqual(runtime);
+    expect(readFileSync(auth.command).equals(runtime)).toBe(true);
     expect(lstatSync(auth.command).mode & 0o777).toBe(mode);
     expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toBe(license);
     expect(configText()).toBe(config);
