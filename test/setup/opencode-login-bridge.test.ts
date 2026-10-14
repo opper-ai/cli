@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   installOpenCodeLoginBridge,
   removeOpenCodeLoginBridge,
@@ -18,12 +19,34 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   if (previous === undefined) delete process.env.OPPER_EDITOR_HOME;
   else process.env.OPPER_EDITOR_HOME = previous;
   await rm(home, { recursive: true, force: true });
 });
 
 describe("OpenCode login bridge setup", () => {
+  it("refreshes an old managed copy and loads central labels from the installed plugin", async () => {
+    const path = openCodeLoginBridgePath();
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, "// Managed by @opperai/cli.\nexport const OpperLoginPlugin = async () => ({});\n");
+    await installOpenCodeLoginBridge("work");
+    const source = await readFile(path, "utf8");
+    expect(source).toContain('const DEFAULT_SLOT = "work";');
+    expect(source).toContain("Variable pricing");
+    vi.stubEnv("OPPER_API_KEY", "synthetic");
+    vi.stubEnv("OPPER_BASE_URL", "https://example.invalid");
+    vi.stubEnv("OPPER_PROJECT_UUID", "");
+    vi.stubEnv("OPPER_CLI_LAUNCH_OPENCODE", "0");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ data: [{
+      id: "dynamic/team", opper: { kind: "dynamic_route", display_name: "Work Smart v2", pricing: { kind: "variable" } },
+    }] })));
+    const installed = await import(pathToFileURL(path).href);
+    const config: Record<string, any> = {};
+    await (await installed.OpperLoginPlugin()).config(config);
+    expect(config.provider.opper.models["dynamic/team"].name).toBe("Work Smart v2 (route) · Variable pricing");
+  });
   it("installs one managed global plugin without writing an API key or provider config", async () => {
     const result = await installOpenCodeLoginBridge();
     const file = await readFile(result.path, "utf8");

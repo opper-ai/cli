@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { OpperApi, type OpperApiConfig } from "../api/client.js";
 import { OpperError } from "../errors.js";
-import { displayName } from "./opencode-models.js";
+import { compatDisplayName, displayName } from "./opencode-models.js";
 
 const compatModelSchema = z.object({
   id: z.string().min(1),
@@ -10,6 +10,8 @@ const compatModelSchema = z.object({
   context_length: z.number().optional(),
   opper: z.object({
     kind: z.enum(["model", "pool", "dynamic_route"]).optional(),
+    display_name: z.string().optional(),
+    pricing: z.object({ kind: z.literal("variable") }).optional(),
     type: z.string().optional(),
     members: z.array(z.string().min(1)).optional(),
     capabilities: z.array(z.string()).optional(),
@@ -131,7 +133,7 @@ export function toCodexModelCatalog(
         : FALLBACK_CONTEXT;
       return {
         slug: entry.id,
-        display_name: entry.display_name || entry.name || displayName(entry.id),
+        display_name: compatDisplayName(entry, entry.display_name || entry.name || displayName(entry.id)),
         description: `Via Opper · ${entry.id}`,
         ...reasoningFor(entry, metadata),
         shell_type: "shell_command",
