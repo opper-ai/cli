@@ -124,7 +124,7 @@ describe("toOpenCodeModels", () => {
     const route: CompatModel = { id: "dynamic/test-custom-route", opper: { kind: "dynamic_route" } };
     const m = toOpenCodeModels([route])["dynamic/test-custom-route"];
     expect(m).toBeDefined();
-    expect(m!.cost).toEqual({ input: 0, output: 0 });
+    expect(m).not.toHaveProperty("cost");
     expect(m!.tool_call).toBe(true);
     expect(m!.limit.context).toBe(128_000);
   });

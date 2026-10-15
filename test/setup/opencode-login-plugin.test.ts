@@ -47,9 +47,12 @@ describe("central display metadata refresh", () => {
     } };
     const data = [route, concrete, pool];
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ data })));
-    const config = await run({ provider: { other: { name: "Keep" } } });
+    const config = await run({ provider: { other: { name: "Keep" }, opper: { models: {
+      [route.id]: { name: "Stale route", cost: { input: 0, output: 0 } },
+    } } } });
     expect(config.provider.opper.models).toEqual(toOpenCodeModels(data as any));
     expect(config.provider.opper.models[route.id].name).toBe("Nitor Work Smart - Regular (route) · Variable pricing");
+    expect(config.provider.opper.models[route.id]).not.toHaveProperty("cost");
     route.opper.display_name = "Nitor Work Smart - Better";
     await run(config);
     expect(config.provider.opper.models[route.id].name).toBe("Nitor Work Smart - Better (route) · Variable pricing");

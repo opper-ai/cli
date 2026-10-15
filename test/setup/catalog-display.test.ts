@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { toOpenCodeModels, type CompatModel } from "../../src/setup/opencode-models.js";
+import { preserveOpenCodeVariants, toOpenCodeModels, type CompatModel } from "../../src/setup/opencode-models.js";
 import { fetchCodexModelCatalog, toCodexModelCatalog } from "../../src/setup/codex-models.js";
 import { fetchPiModels } from "../../src/setup/pi-models.js";
 
@@ -15,11 +15,24 @@ describe("central catalog display metadata", () => {
   it("keeps exact human names separate from route IDs and never invents route prices", () => {
     const route = entry("dynamic/team-regular", "dynamic_route", "Nitor Work Smart - Regular");
     expect(toOpenCodeModels([route])).toMatchObject({ [route.id]: {
-      name: "Nitor Work Smart - Regular (route) · Variable pricing", cost: { input: 0, output: 0 },
+      name: "Nitor Work Smart - Regular (route) · Variable pricing",
     } });
+    expect(toOpenCodeModels([route])[route.id]).not.toHaveProperty("cost");
     expect(toCodexModelCatalog([route], route.id).models[0]).toMatchObject({
       slug: route.id, display_name: "Nitor Work Smart - Regular (route) · Variable pricing",
     });
+  });
+
+  it("removes stale route zero rates on metadata refresh while preserving ordinary numeric rates", () => {
+    const route = entry("dynamic/team-regular", "dynamic_route", "Work Smart v2");
+    const concrete = entry("vendor/regular", "model", "Work Smart v2");
+    const fresh = toOpenCodeModels([route, concrete]);
+    const refreshed = preserveOpenCodeVariants(fresh, {
+      [route.id]: { name: "Old route", cost: { input: 0, output: 0 }, options: { textVerbosity: "low" } },
+    });
+    expect(refreshed[route.id]).not.toHaveProperty("cost");
+    expect(refreshed[route.id]).toMatchObject({ options: { textVerbosity: "low" } });
+    expect(refreshed[concrete.id]).toMatchObject({ cost: { input: 1, output: 2 } });
   });
 
   it.each([undefined, "", "   "])("falls back for legacy or blank route labels: %j", (name) => {

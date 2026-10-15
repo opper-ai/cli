@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { effectiveOpenCodeConfig } from "../../dist/agents/opencode.js";
 
 const run = promisify(execFile);
 const binary = process.env.OPENCODE_BIN || "opencode";
@@ -50,19 +51,39 @@ try {
   const options = { cwd: directory, env, timeout: 45000, maxBuffer: 8_000_000 };
   const configPath = join(directory, ".config", "opencode", "opencode.json");
   await mkdir(dirname(configPath), { recursive: true });
-  await writeFile(configPath, JSON.stringify({ provider: { other: { name: "Keep", npm: "@ai-sdk/openai-compatible", models: {} } } }));
+  await writeFile(configPath, JSON.stringify({ provider: {
+    other: { name: "Keep", npm: "@ai-sdk/openai-compatible", models: {} },
+    opper: { name: "Opper", models: { [routeID]: { name: "Stale route", cost: { input: 0, output: 0 } } } },
+  } }));
   const setup = () => run(process.execPath, [cli, "--no-telemetry", "editors", "opencode", "--overwrite"], options);
-  const debug = async (pure = false) => JSON.parse((await run(binary, ["debug", "config", "--print-logs", ...(pure ? ["--pure"] : [])], options)).stdout);
+  const debug = async (pure = false) => {
+    const args = major >= 2 ? ["api", "--standalone", "config.get", "--param", `directory=${directory}`]
+      : ["debug", "config", "--print-logs", ...(pure ? ["--pure"] : [])];
+    return effectiveOpenCodeConfig((await run(binary, args, options)).stdout);
+  };
   const verify = async (expected, pure) => {
     const config = await debug(pure);
-    assert.equal(config.provider.opper.models[routeID].name, expected);
-    assert.deepEqual(config.provider.opper.models[routeID].cost, { input: 0, output: 0 });
-    assert.equal(config.provider.other.name, "Keep");
-    const models = await run(binary, ["models", "opper", "--verbose", ...(pure ? ["--pure"] : []), "--print-logs"], options);
+    const providers = config.provider ?? config.providers;
+    assert.equal(providers.opper.models[routeID].name, expected);
+    assert.ok(!Object.hasOwn(providers.opper.models[routeID], "cost"));
+    assert.equal(providers.other.name, "Keep");
+    const args = major >= 2 ? ["api", "--standalone", "model.list", "--print-logs"]
+      : ["models", "opper", "--verbose", ...(pure ? ["--pure"] : []), "--print-logs"];
+    const models = await run(binary, args, options);
     assert.ok(models.stdout.includes(routeID) && models.stdout.includes(expected));
     assert.ok(models.stderr.includes(configPath), "the isolated config must be loaded");
+    if (major >= 2) {
+      const rows = JSON.parse(models.stdout).data;
+      const route = rows.find((model) => model.providerID === "opper" && model.id === routeID);
+      assert.ok(route && route.enabled, "route stays selectable");
+      assert.deepEqual(route.cost, [], "OpenCode 2 must retain unknown route pricing, not zero/free rates");
+      const regular = rows.find((model) => model.providerID === "opper" && model.id === "vendor/regular");
+      assert.equal(regular.cost[0].input, 1);
+      assert.equal(regular.cost[0].output, 2);
+    }
   };
   const version = (await run(binary, ["--version"], options)).stdout.trim();
+  const major = Number(/\d+/.exec(version)?.[0]);
   console.log(`OpenCode ${version}`);
   await setup();
   await verify("Nitor Work Smart - Regular (route) · Variable pricing", true);
@@ -70,6 +91,16 @@ try {
   await setup();
   await verify("Nitor Work Smart - Better (route) · Variable pricing", true);
 
+  if (major >= 2) {
+    withdrawn = true;
+    await setup();
+    assert.ok(!(await debug()).providers.opper.models[routeID]);
+    failed = true;
+    const before = await readFile(configPath, "utf8");
+    await assert.rejects(setup());
+    assert.equal(await readFile(configPath, "utf8"), before);
+    console.log("OpenCode 2 generated editor refresh: stale zero rates removed, unknown cost [], route selectable, ordinary prices unchanged, rename/withdrawal/failure passed. No inference calls. The 1.x login plugin is not exercised on 2.x.");
+  } else {
   const pluginPath = join(dirname(configPath), "plugins", "opper-login.js");
   // OpenCode waits for its config directory's SDK dependency install before
   // loading local plugins. Provision that public dependency in the disposable
@@ -99,8 +130,9 @@ try {
   const before = await readFile(configPath, "utf8");
   await assert.rejects(setup());
   assert.equal(await readFile(configPath, "utf8"), before, "failed editor refresh preserves config");
-  assert.ok(requests.length > 0 && requests.every((request) => request.method === "GET" && request.path === "/v3/compat/models"));
   console.log("Generated config and refreshed installed plugin: friendly/renamed/blank labels, withdrawal, failure and isolation passed. No inference calls.");
+  }
+  assert.ok(requests.length > 0 && requests.every((request) => request.method === "GET" && request.path === "/v3/compat/models"));
 } finally {
   await new Promise((resolve) => server.close(resolve));
   await rm(directory, { recursive: true, force: true });

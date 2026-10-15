@@ -51,7 +51,7 @@ export interface OpenCodeModel {
   options?: Record<string, unknown>;
   variants?: Record<string, Record<string, unknown>>;
   attachment: boolean;
-  cost: {
+  cost?: {
     input: number;
     output: number;
     cache_read?: number;
@@ -279,10 +279,10 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
 /**
  * A `dynamic/<name>` route as OpenCode needs to see it.
  *
- * `cost` is required by OpenCode's schema but genuinely unknowable here — the
- * graph picks the model per request, so the real rate is only known after the
- * fact. The numeric compatibility placeholder under-counts session costs; the
- * visible "Variable pricing" qualifier prevents treating it as a free rate.
+ * The graph picks the model per request, so omit a fixed rate. OpenCode 2
+ * preserves this as an empty cost array (unknown); a zero rate would advertise
+ * the route as Free. OpenCode 1 accepts omission but still defaults its session
+ * accounting to zero. The visible qualifier explains that usage is variable.
  * Opper's own usage reporting stays the source of truth. `tool_call` is true
  * for the same reason the VS Code extension defaults it on: most routes land on tool-capable
  * models, and a route excluded from agent mode is a route nobody can use.
@@ -294,7 +294,6 @@ function routeEntry(e: CompatModel): OpenCodeModel {
     reasoning: false,
     ...reasoningOptions(e),
     attachment: false,
-    cost: { input: 0, output: 0 },
     // The gateway DOES report bounds for a route whose candidates it can all
     // resolve — the floor every branch can honour. Use them; the constants are
     // only for the case where one candidate is opaque server-side.

@@ -125,7 +125,7 @@ function modelsFromCatalog(entries) {
     if (route) {
       models[entry.id] = {
         name: label(entry), tool_call: true, reasoning: false, ...reasoningOptions(entry), attachment: false,
-        cost: { input: 0, output: 0 }, limit: { context, output },
+        limit: { context, output },
         modalities: { input: ["text"], output: ["text"] },
       };
       continue;

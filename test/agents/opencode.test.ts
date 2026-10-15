@@ -90,6 +90,22 @@ function seedOpencodeConfig(sandbox: string): void {
 }
 
 describe("opencode adapter", () => {
+  it("removes stale inline route rates without changing regular model price overrides", async () => {
+    resolveOpenCodeModelsMock.mockResolvedValueOnce({
+      "dynamic/team": { name: "Team (route) · Variable pricing", variants: {} },
+      "vendor/regular": { name: "Regular", cost: { input: 1, output: 2 }, variants: {} },
+    });
+    vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { models: {
+      "dynamic/team": { cost: { input: 0, output: 0 }, options: { textVerbosity: "low" } },
+      "vendor/regular": { cost: { input: 3, output: 4 } },
+    } } } }));
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], ROUTING);
+    const config = JSON.parse(spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT);
+    expect(config.provider.opper.models["dynamic/team"]).not.toHaveProperty("cost");
+    expect(config.provider.opper.models["dynamic/team"].options.textVerbosity).toBe("low");
+    expect(config.provider.opper.models["vendor/regular"].cost).toEqual({ input: 3, output: 4 });
+  });
   it("strips inline model/variant auth and routing overrides before launching", async () => {
     resolveOpenCodeModelsMock.mockResolvedValueOnce({ allowed: { variants: { high: { reasoningEffort: "high" } } } });
     const stale = { apiKey: "stale", baseURL: "https://stale.example", headers: { Authorization: "Bearer stale", "X-Opper-Project": "stale", "X-Team": "keep" } };
