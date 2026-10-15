@@ -2,6 +2,9 @@ import { spawnSync } from "../util/spawn.js";
 import { which } from "../util/which.js";
 import { OpperError } from "../errors.js";
 import { npmInstallGlobal } from "./npm-install.js";
+import { OpperApi } from "../api/client.js";
+import { brand } from "../ui/colors.js";
+import type { CompatModel } from "../setup/opencode-models.js";
 import type {
   AgentAdapter,
   DetectResult,
@@ -44,6 +47,27 @@ async function unconfigure(): Promise<void> {
   // No persistent Opper bits to remove.
 }
 
+/**
+ * Claude Code assumes a 200k window for any model it doesn't know, and only
+ * reads CLAUDE_CODE_MAX_CONTEXT_TOKENS for those models. There is one value
+ * per process, so it is taken from the launched model: a later `/model`
+ * switch to another non-Claude model keeps it. Claude models are skipped
+ * (Claude Code knows their windows), as is a value the user set themselves.
+ * A failed catalog lookup leaves Claude Code's 200k default in place.
+ */
+export async function contextWindowEnv(routing: OpperRouting): Promise<Record<string, string>> {
+  if (process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || /claude/i.test(routing.model)) return {};
+  try {
+    const api = new OpperApi({ baseUrl: routing.apiBaseUrl, apiKey: routing.apiKey, projectUuid: routing.projectUuid });
+    const res = await api.get<{ data?: CompatModel[] }>("/v3/compat/models");
+    const context = res.data?.find((m) => m.id === routing.model)?.context_length;
+    if (!Number.isSafeInteger(context) || !context || context <= 0) return {};
+    return { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(context) };
+  } catch {
+    return {};
+  }
+}
+
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   // ANTHROPIC_MODEL pins the initial active selection; opt in to fetching
   // the picker models from the same authenticated Opper session endpoint.
@@ -65,6 +89,16 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     // noisily and can leak the gateway token outside Opper.
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   };
+  const contextEnv = await contextWindowEnv(routing);
+  Object.assign(env, contextEnv);
+  if (contextEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
+    // The window holds for every non-Claude model this session switches to
+    // with /model, so point at the switch that keeps it correct.
+    console.log(brand.dim(
+      `Context window: ${Number(contextEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toLocaleString("en-US")} tokens for ${routing.model}. ` +
+      `To switch to another non-Claude model and keep this conversation: opper launch claude --model <id> -- --continue`,
+    ));
+  }
   const result = spawnSync("claude", args, { stdio: "inherit", env });
   return result.status ?? -1;
 }
