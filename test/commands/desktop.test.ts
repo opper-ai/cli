@@ -319,9 +319,41 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
         code: "AGENT_CONFIG_CONFLICT",
         message: code === "ENOENT" ? "No running local proxy manifest found." : "Cannot safely read local proxy bridge.json: its Windows access controls are not private.",
       });
-      expect(checker).toHaveBeenCalledOnce();
+      // Persistent ACL failures are rechecked once with the handle closed, then fail closed.
+      expect(checker).toHaveBeenCalledTimes(code === "ENOENT" ? 1 : 2);
       if (code === "ENOENT") await expect(lstat(path)).rejects.toMatchObject({code: "ENOENT"});
       else expect(await readFile(path, "utf8")).toBe(original);
+      expect(requests).toHaveLength(0);
+    } finally {Object.defineProperty(process, "platform", platformDescriptor);}
+  });
+  it.each(["removed", "replaced"])("rechecks a Windows manifest that was delete-pending while open (%s)", async (outcome) => {
+    await mkdir(stateDir, {mode: 0o700});
+    const path = join(stateDir, "bridge.json");
+    const stale = {version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid};
+    const fresh = {...stale, url: "http://127.0.0.1:2", token: "b".repeat(64), pid: process.pid + 1};
+    await writeFile(path, JSON.stringify(stale), {mode: 0o600});
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", {value: "win32", configurable: true});
+      vi.spyOn(privateState, "ensurePrivateStateDirectory").mockResolvedValue();
+      let calls = 0;
+      const checker = vi.spyOn(privateState, "assertPrivateStateFile").mockImplementation(async () => {
+        if (calls++ === 0) {
+          // Startup deleted the stale manifest while this reader held it open: its pathname
+          // denies access until the handle closes, then it is gone or replaced.
+          if (outcome === "removed") await rm(path);
+          else await writeFile(path, JSON.stringify(fresh), {mode: 0o600});
+          throw Object.assign(new Error("synthetic delete-pending access denial"), {code: "AGENT_CONFIG_CONFLICT"});
+        }
+        await lstat(path);
+      });
+      if (outcome === "removed") {
+        await expect(readDesktopRuntime(stateDir)).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT", message: "No running local proxy manifest found."});
+        expect(checker).toHaveBeenCalledOnce();
+      } else {
+        expect(await readDesktopRuntime(stateDir)).toMatchObject({token: fresh.token, pid: fresh.pid});
+        expect(checker).toHaveBeenCalledTimes(2);
+      }
       expect(requests).toHaveLength(0);
     } finally {Object.defineProperty(process, "platform", platformDescriptor);}
   });

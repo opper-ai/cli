@@ -125,7 +125,12 @@ async function ensurePrivateDirectory(path: string, create = false): Promise<voi
   }
 }
 
+const RECHECK = Symbol("recheck");
 async function readPrivateJson(directory: string, name: string): Promise<unknown | undefined> {
+  const value = await readPrivateJsonOnce(directory, name, false);
+  return value === RECHECK ? readPrivateJsonOnce(directory, name, true) : value;
+}
+async function readPrivateJsonOnce(directory: string, name: string, final: boolean): Promise<unknown | undefined | typeof RECHECK> {
   await ensurePrivateDirectory(directory);
   let file;
   try { file = await open(join(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW); } catch (cause) {
@@ -142,6 +147,9 @@ async function readPrivateJson(directory: string, name: string): Promise<unknown
         // Startup can remove its stale manifest after this reader opened it.
         // Never consume the old handle when pathname validation reports it missing.
         if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        // A file deleted while this handle is open stays delete-pending, and its pathname
+        // denies access, until the handle closes. Close it and check the pathname once more.
+        if (!final) return RECHECK;
         throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`);
       }
     }
@@ -183,6 +191,16 @@ async function savedConnection(directory: string): Promise<DesktopConnection | u
   if (typeof connection.identityFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(connection.identityFingerprint)) throw error("Malformed local proxy connection identity.");
   return connection;
 }
+/** Windows refuses to replace a target that another process briefly holds open or delete-pending. */
+async function renameReplacing(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(from, to); return; } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || attempt >= 20 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
 async function writePrivateJson(directory: string, name: string, value: unknown): Promise<void> {
   const temporary = join(directory, `.${name}.${process.pid}.${randomBytes(8).toString("hex")}`);
   if (process.platform === "win32") await ensurePrivateStateFile(temporary, true);
@@ -190,7 +208,7 @@ async function writePrivateJson(directory: string, name: string, value: unknown)
   try {
     await file.writeFile(JSON.stringify(value, null, 2) + "\n");
     await file.close();
-    await rename(temporary, join(directory, name));
+    await renameReplacing(temporary, join(directory, name));
   } catch (cause) {
     await file.close(); await unlink(temporary).catch(() => {}); throw cause;
   }
