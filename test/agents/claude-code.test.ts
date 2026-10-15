@@ -148,3 +148,51 @@ describe("claude-code adapter", () => {
     expect(spawnSyncMock.mock.calls[0]![2].env.ANTHROPIC_CUSTOM_HEADERS).toBe("X-Team: team");
   });
 });
+
+describe("claude-code context window", () => {
+  const GLM = { ...ROUTING, apiBaseUrl: "https://api.opper.ai", model: "sference/zai-org/GLM-5.3" };
+  const catalog = (data: unknown[]) => vi.fn(async () => new Response(JSON.stringify({ data }), { headers: { "Content-Type": "application/json" } }));
+
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    vi.stubEnv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("passes the catalog window of a launched non-Claude model to Claude Code", async () => {
+    const fetchMock = catalog([{ id: "sference/zai-org/GLM-5.3", context_length: 1048576 }]);
+    vi.stubGlobal("fetch", fetchMock);
+    await claudeCode.spawn([], GLM);
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe("https://api.opper.ai/v3/compat/models");
+    expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1048576");
+  });
+
+  it("leaves Claude models to Claude Code's own windows", async () => {
+    const fetchMock = catalog([]);
+    vi.stubGlobal("fetch", fetchMock);
+    await claudeCode.spawn([], { ...GLM, model: "claude-sonnet-5" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("");
+  });
+
+  it("keeps a window the user set", async () => {
+    vi.stubEnv("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "300000");
+    vi.stubGlobal("fetch", catalog([{ id: GLM.model, context_length: 1048576 }]));
+    await claudeCode.spawn([], GLM);
+    expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("300000");
+  });
+
+  it("launches with Claude Code's default when the catalog lookup fails or misses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    await claudeCode.spawn([], GLM);
+    vi.stubGlobal("fetch", catalog([{ id: "other/model", context_length: 1 }]));
+    await claudeCode.spawn([], GLM);
+    expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("");
+    expect(spawnSyncMock.mock.calls[1]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("");
+  });
+});
