@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { effectiveOpenCodeConfig } from "../../dist/agents/opencode.js";
 
 const run = promisify(execFile);
@@ -92,6 +93,32 @@ try {
   await verify("Nitor Work Smart - Better (route) · Variable pricing", true);
 
   if (major >= 2) {
+    // Exercise the real launch adapter, not just editor setup: stale inline
+    // model settings have higher precedence than its refreshed catalog file.
+    const driver = join(directory, "launch-label-check.mjs");
+    const adapterURL = pathToFileURL(join(process.cwd(), "dist", "agents", "opencode.js")).href;
+    const routing = { apiBaseUrl: env.OPPER_BASE_URL, baseUrl: `${env.OPPER_BASE_URL}/v3/compat`,
+      apiKey: "synthetic", model: routeID, compatShape: "openai" };
+    await writeFile(driver, `import { opencode } from ${JSON.stringify(adapterURL)};\nprocess.exitCode = await opencode.spawn(["api", "model.list"], ${JSON.stringify(routing)});\n`);
+    const launchEnv = { ...env,
+      PATH: binary.includes("/") ? `${dirname(binary)}:${env.PATH}` : env.PATH,
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { opper: { models: { [routeID]: {
+        name: "Stale inline route", cost: { input: 0, output: 0 }, family: "keep-family", options: { temperature: 0.2 },
+      } } } } }),
+    };
+    for (const [name, expected] of [
+      ["Nitor Work Smart - Premium", "Nitor Work Smart - Premium (route) · Variable pricing"],
+      ["   ", "Team Regular (route) · Variable pricing"],
+    ]) {
+      displayName = name;
+      const launched = await run(process.execPath, [driver], { ...options, env: launchEnv });
+      const route = JSON.parse(launched.stdout).data.find((model) => model.providerID === "opper" && model.id === routeID);
+      assert.equal(route.name, expected);
+      assert.equal(route.family, "keep-family");
+      assert.equal(route.body.temperature, 0.2);
+      assert.deepEqual(route.cost, []);
+      assert.ok(route.enabled);
+    }
     withdrawn = true;
     await setup();
     assert.ok(!(await debug()).providers.opper.models[routeID]);
@@ -99,7 +126,7 @@ try {
     const before = await readFile(configPath, "utf8");
     await assert.rejects(setup());
     assert.equal(await readFile(configPath, "utf8"), before);
-    console.log("OpenCode 2 generated editor refresh: stale zero rates removed, unknown cost [], route selectable, ordinary prices unchanged, rename/withdrawal/failure passed. No inference calls. The 1.x login plugin is not exercised on 2.x.");
+    console.log("OpenCode 2 editor/launch refresh: stale inline names and zero rates replaced, rename/blank fallback, unrelated settings preserved, unknown cost [], route selectable, ordinary prices unchanged, withdrawal/failure passed. No inference calls. The 1.x login plugin is not exercised on 2.x.");
   } else {
   const pluginPath = join(dirname(configPath), "plugins", "opper-login.js");
   // OpenCode waits for its config directory's SDK dependency install before

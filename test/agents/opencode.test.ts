@@ -90,6 +90,31 @@ function seedOpencodeConfig(sandbox: string): void {
 }
 
 describe("opencode adapter", () => {
+  it.each([
+    ["Nitor Work Smart - Premium", "Nitor Work Smart - Premium (route) · Variable pricing"],
+    ["   ", "Team (route) · Variable pricing"],
+  ])("refreshes a stale inline route label from catalog display metadata %j", async (display_name, expected) => {
+    const { toOpenCodeModels } = await import("../../src/setup/opencode-models.js");
+    resolveOpenCodeModelsMock.mockResolvedValueOnce(toOpenCodeModels([{
+      id: "dynamic/team", opper: { kind: "dynamic_route", display_name },
+    }]));
+    vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: {
+      other: { name: "Keep provider" },
+      opper: { models: {
+        "dynamic/team": { name: "Stale route label", cost: { input: 0, output: 0 },
+          family: "keep-family", options: { textVerbosity: "low" }, variants: { personal: { temperature: 0.4 } } },
+      } },
+    } }));
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await opencode.spawn!([], ROUTING);
+    const config = JSON.parse(spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT);
+    expect(config.provider.opper.models["dynamic/team"]).toMatchObject({
+      name: expected, family: "keep-family", options: { textVerbosity: "low" },
+      variants: { personal: { temperature: 0.4 } },
+    });
+    expect(config.provider.opper.models["dynamic/team"]).not.toHaveProperty("cost");
+    expect(config.provider.other.name).toBe("Keep provider");
+  });
   it("removes stale inline route rates without changing regular model price overrides", async () => {
     resolveOpenCodeModelsMock.mockResolvedValueOnce({
       "dynamic/team": { name: "Team (route) · Variable pricing", variants: {} },

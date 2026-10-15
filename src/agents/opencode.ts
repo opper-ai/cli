@@ -175,7 +175,7 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
     // Old generated route rates were zero placeholders. Do not let an inline
     // copy reintroduce a false Free badge after refreshing the catalog file.
     if (id.startsWith("dynamic/") && policy.cost === undefined) delete saved.cost;
-    return [id, { ...saved, variants: policy.variants, options: policy.options ?? {} }];
+    return [id, { ...saved, name: policy.name, variants: policy.variants, options: policy.options ?? {} }];
   })) : undefined;
   return JSON.stringify({
     ...config,
