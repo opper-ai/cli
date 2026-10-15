@@ -171,7 +171,11 @@ function runtimeConfig(models: Record<string, OpenCodeModel>, routing: OpperRout
   const refreshed = inlineModels ? preserveOpenCodeVariants(models, inlineModels) : {};
   const inline = inlineModels ? Object.fromEntries(Object.keys(inlineModels).filter((id) => id in models).map((id) => {
     const policy = object(refreshed[id]);
-    return [id, { ...compatibleOpenCodeSettings(object(inlineModels[id])), variants: policy.variants, options: policy.options ?? {} }];
+    const saved = compatibleOpenCodeSettings(object(inlineModels[id]));
+    // Old generated route rates were zero placeholders. Do not let an inline
+    // copy reintroduce a false Free badge after refreshing the catalog file.
+    if (id.startsWith("dynamic/") && policy.cost === undefined) delete saved.cost;
+    return [id, { ...saved, name: policy.name, variants: policy.variants, options: policy.options ?? {} }];
   })) : undefined;
   return JSON.stringify({
     ...config,

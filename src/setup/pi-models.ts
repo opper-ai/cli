@@ -1,6 +1,6 @@
 import { OpperApi, type OpperApiConfig } from "../api/client.js";
 import { OpperError } from "../errors.js";
-import { pickerDisplayName, type CompatModel } from "./opencode-models.js";
+import { compatPickerDisplayName, type CompatModel } from "./opencode-models.js";
 
 export interface PiModel {
   id: string; name: string; contextWindow: number; maxTokens: number;
@@ -47,7 +47,7 @@ export async function fetchPiModels(context: OpperApiConfig, options: {legacyMax
     const output = entry.opper?.max_output_tokens;
     if (!entry.id || (entry.opper?.type && entry.opper.type !== "llm") || !caps.includes("tools") ||
         !Number.isSafeInteger(context) || !Number.isSafeInteger(output) || !context || !output || output <= 0 || context <= output) return [];
-    return [{ id: entry.id, name: pickerDisplayName(entry.id), contextWindow: context, maxTokens: output,
+    return [{ id: entry.id, name: compatPickerDisplayName(entry), contextWindow: context, maxTokens: output,
       input: caps.includes("vision") ? ["text", "image"] : ["text"], ...piReasoning(entry, options.legacyMaxLevel ?? false),
       cost: { input: piPrice(entry.pricing?.prompt), output: piPrice(entry.pricing?.completion),
         cacheRead: piPrice(entry.pricing?.input_cache_read), cacheWrite: piPrice(entry.pricing?.input_cache_write) } }];

@@ -34,6 +34,8 @@ export interface CompatModel {
   };
   opper?: {
     kind?: "model" | "pool" | "dynamic_route";
+    display_name?: string;
+    pricing?: { kind: "variable" };
     type?: string;
     capabilities?: string[];
     max_output_tokens?: number;
@@ -49,7 +51,7 @@ export interface OpenCodeModel {
   options?: Record<string, unknown>;
   variants?: Record<string, Record<string, unknown>>;
   attachment: boolean;
-  cost: {
+  cost?: {
     input: number;
     output: number;
     cache_read?: number;
@@ -164,8 +166,8 @@ function price(raw: string | undefined): number | undefined {
 /**
  * A human label for a catalogue id.
  *
- * `/v3/compat/models` carries no display name, so it is derived: drop the
- * provider/maker prefix, then title-case the remainder. `dynamic/<name>` keeps
+ * Legacy catalogues carry no display name: drop the provider/maker prefix,
+ * then title-case the remainder. `dynamic/<name>` keeps
  * its prefix as a badge — a route and a model with the same name are different
  * things, and the picker is the only place a user sees which one they picked.
  */
@@ -179,6 +181,36 @@ export function displayName(id: string): string {
 export function pickerDisplayName(id: string): string {
   if (id.startsWith("dynamic/")) return displayName(id);
   return id.includes("/") ? `${displayName(id)} · ${id}` : `${displayName(id)} (pool)`;
+}
+
+type CompatDisplayMetadata = {
+  id: string;
+  opper?: {
+    kind?: string | undefined;
+    display_name?: string | undefined;
+    pricing?: { kind: string } | undefined;
+  } | undefined;
+};
+
+/** Prefer central spelling; route rates cannot be represented as a fixed price. */
+export function compatDisplayName(entry: CompatDisplayMetadata, fallback = displayName(entry.id)): string {
+  const configured = typeof entry.opper?.display_name === "string" ? entry.opper.display_name.trim() : "";
+  const route = entry.opper?.kind === "dynamic_route" || entry.id.startsWith("dynamic/");
+  const name = configured ? `${configured}${route ? " (route)" : ""}` : fallback;
+  // Legacy routes need the same warning even before the server adds metadata.
+  return route || entry.opper?.pricing?.kind === "variable" ? `${name} · Variable pricing` : name;
+}
+
+/** Keep deployment IDs and pool badges alongside centrally configured names. */
+export function compatPickerDisplayName(entry: CompatModel): string {
+  const configured = typeof entry.opper?.display_name === "string" ? entry.opper.display_name.trim() : "";
+  if (entry.opper?.kind === "dynamic_route" || entry.id.startsWith("dynamic/")) {
+    return compatDisplayName(entry, pickerDisplayName(entry.id));
+  }
+  const name = configured
+    ? entry.id.includes("/") ? `${configured} · ${entry.id}` : `${configured} (pool)`
+    : pickerDisplayName(entry.id);
+  return entry.opper?.pricing?.kind === "variable" ? `${name} · Variable pricing` : name;
 }
 
 function prettify(s: string): string {
@@ -202,10 +234,8 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
     const type = e.opper?.type ?? "llm";
     if (type !== "llm" && e.opper?.kind !== "dynamic_route") continue;
 
-    // A dynamic route is a routing graph, not a model: the gateway reports no
-    // price, context or capabilities for it because the graph only decides
-    // per request. Skipping it on those grounds would drop the one thing a
-    // static list could never carry, so it is admitted on route defaults.
+    // A dynamic route selects its answering model per request. Keep it usable
+    // without a fixed price; reported bounds still take precedence over defaults.
     if (e.opper?.kind === "dynamic_route") {
       out[e.id] = routeEntry(e);
       continue;
@@ -223,7 +253,7 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
     if (caps.includes("pdf")) inputModalities.push("pdf");
 
     out[e.id] = {
-      name: pickerDisplayName(e.id),
+      name: compatPickerDisplayName(e),
       // Agent mode is unusable without tool calling, and OpenCode trusts this
       // flag rather than probing — a wrong `true` fails mid-session.
       tool_call: caps.includes("tools"),
@@ -249,22 +279,21 @@ export function toOpenCodeModels(entries: CompatModel[]): Record<string, OpenCod
 /**
  * A `dynamic/<name>` route as OpenCode needs to see it.
  *
- * `cost` is required by OpenCode's schema but genuinely unknowable here — the
- * graph picks the model per request, so the real rate is only known after the
- * fact. Zero is the honest placeholder for "we cannot price this in advance";
- * it makes OpenCode's running session cost under-count routes, and Opper's own
- * usage reporting stays the source of truth. `tool_call` is true for the same
- * reason the VS Code extension defaults it on: most routes land on tool-capable
+ * The graph picks the model per request, so omit a fixed rate. OpenCode 2
+ * preserves this as an empty cost array (unknown); a zero rate would advertise
+ * the route as Free. OpenCode 1 accepts omission but still defaults its session
+ * accounting to zero. The visible qualifier explains that usage is variable.
+ * Opper's own usage reporting stays the source of truth. `tool_call` is true
+ * for the same reason the VS Code extension defaults it on: most routes land on tool-capable
  * models, and a route excluded from agent mode is a route nobody can use.
  */
 function routeEntry(e: CompatModel): OpenCodeModel {
   return {
-    name: pickerDisplayName(e.id),
+    name: compatPickerDisplayName(e),
     tool_call: true,
     reasoning: false,
     ...reasoningOptions(e),
     attachment: false,
-    cost: { input: 0, output: 0 },
     // The gateway DOES report bounds for a route whose candidates it can all
     // resolve — the floor every branch can honour. Use them; the constants are
     // only for the case where one candidate is opaque server-side.

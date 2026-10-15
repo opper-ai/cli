@@ -15,13 +15,19 @@ function expired(value) {
   return !Number.isFinite(time) || time <= Date.now();
 }
 
-function label(id) {
-  const route = id.startsWith("dynamic/");
+// Keep label policy in sync with compatPickerDisplayName; parity is tested.
+function label(entry) {
+  const id = entry.id;
+  const route = entry.opper?.kind === "dynamic_route" || id.startsWith("dynamic/");
+  const configured = typeof entry.opper?.display_name === "string" ? entry.opper.display_name.trim() : "";
   const name = route ? id.slice(8) : id.slice(id.lastIndexOf("/") + 1);
   const text = name.split(/[-_]/).map((word) =>
     /^[0-9]/.test(word) || word.length <= 2 ? word : word[0].toUpperCase() + word.slice(1),
   ).join(" ");
-  return route ? `${text} (route)` : id.includes("/") ? `${text} · ${id}` : `${text} (pool)`;
+  const display = configured || text;
+  if (route) return `${display} (route) · Variable pricing`;
+  const qualified = id.includes("/") ? `${display} · ${id}` : `${display} (pool)`;
+  return entry.opper?.pricing?.kind === "variable" ? `${qualified} · Variable pricing` : qualified;
 }
 
 function price(value) {
@@ -118,8 +124,8 @@ function modelsFromCatalog(entries) {
     const output = entry.opper?.max_output_tokens || FALLBACK_OUTPUT;
     if (route) {
       models[entry.id] = {
-        name: label(entry.id), tool_call: true, reasoning: false, ...reasoningOptions(entry), attachment: false,
-        cost: { input: 0, output: 0 }, limit: { context, output },
+        name: label(entry), tool_call: true, reasoning: false, ...reasoningOptions(entry), attachment: false,
+        limit: { context, output },
         modalities: { input: ["text"], output: ["text"] },
       };
       continue;
@@ -134,7 +140,7 @@ function modelsFromCatalog(entries) {
     if (caps.includes("vision")) inputModes.push("image");
     if (caps.includes("pdf")) inputModes.push("pdf");
     models[entry.id] = {
-      name: label(entry.id),
+      name: label(entry),
       tool_call: caps.includes("tools"),
       reasoning: caps.includes("reasoning") || caps.includes("thinking"),
       ...reasoningOptions(entry),

@@ -34,6 +34,46 @@ async function run(config: Record<string, any>) {
   return config;
 }
 
+describe("central display metadata refresh", () => {
+  it("matches CLI labels, refreshes a rename and removes a withdrawn route", async () => {
+    process.env.OPPER_API_KEY = "synthetic";
+    const { toOpenCodeModels } = await import("../../src/setup/opencode-models.js");
+    const route = { id: "dynamic/team", opper: { kind: "dynamic_route", display_name: "Nitor Work Smart - Regular", pricing: { kind: "variable" } } };
+    const concrete = { ...catalog(["vendor/regular"]).data[0], opper: {
+      kind: "model", type: "llm", capabilities: ["tools"], display_name: "Work Smart v2",
+    } };
+    const pool = { ...catalog(["regular"]).data[0], opper: {
+      kind: "pool", type: "llm", capabilities: ["tools"], display_name: "Work Smart v2",
+    } };
+    const data = [route, concrete, pool];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ data })));
+    const config = await run({ provider: { other: { name: "Keep" }, opper: { models: {
+      [route.id]: { name: "Stale route", cost: { input: 0, output: 0 } },
+    } } } });
+    expect(config.provider.opper.models).toEqual(toOpenCodeModels(data as any));
+    expect(config.provider.opper.models[route.id].name).toBe("Nitor Work Smart - Regular (route) · Variable pricing");
+    expect(config.provider.opper.models[route.id]).not.toHaveProperty("cost");
+    route.opper.display_name = "Nitor Work Smart - Better";
+    await run(config);
+    expect(config.provider.opper.models[route.id].name).toBe("Nitor Work Smart - Better (route) · Variable pricing");
+    data.shift();
+    await run(config);
+    expect(config.provider.opper.models).not.toHaveProperty(route.id);
+    expect(config.provider.opper.whitelist).not.toContain(route.id);
+    expect(config.provider.other).toEqual({ name: "Keep" });
+  });
+
+  it.each([undefined, "", "   "])("matches legacy/blank route label fallback: %j", async (display_name) => {
+    process.env.OPPER_API_KEY = "synthetic";
+    const data = [{ id: "dynamic/team", opper: { kind: "dynamic_route", display_name } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ data })));
+    const { toOpenCodeModels } = await import("../../src/setup/opencode-models.js");
+    const config = await run({});
+    expect(config.provider.opper.models).toEqual(toOpenCodeModels(data as any));
+    expect(config.provider.opper.models["dynamic/team"].name).toBe("Team (route) · Variable pricing");
+  });
+});
+
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "opper-opencode-plugin-"));
   oldHome = process.env.OPPER_EDITOR_HOME;
