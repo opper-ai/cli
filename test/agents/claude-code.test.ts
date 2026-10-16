@@ -30,6 +30,7 @@ describe("claude-code adapter", () => {
     spawnSyncMock.mockReset();
     vi.stubEnv("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", undefined);
     vi.stubEnv("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", undefined);
+    vi.stubEnv("ENABLE_TOOL_SEARCH", undefined);
   });
 
   afterEach(() => {
@@ -129,6 +130,20 @@ describe("claude-code adapter", () => {
     expect(init.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
     expect(process.env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("0");
     expect(process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("0");
+  });
+
+  it("turns on tool search through Opper unless the user set it", async () => {
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    await claudeCode.spawn!([], ROUTING);
+    expect((spawnSyncMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env.ENABLE_TOOL_SEARCH).toBe("true");
+    expect(process.env.ENABLE_TOOL_SEARCH).toBeUndefined();
+
+    for (const chosen of ["false", "auto:5"]) {
+      spawnSyncMock.mockClear();
+      vi.stubEnv("ENABLE_TOOL_SEARCH", chosen);
+      await claudeCode.spawn!([], ROUTING);
+      expect((spawnSyncMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env.ENABLE_TOOL_SEARCH).toBe(chosen);
+    }
   });
 
   it("spawn propagates non-zero exit codes", async () => {
