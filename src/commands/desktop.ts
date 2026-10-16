@@ -150,7 +150,7 @@ async function readPrivateJsonOnce(directory: string, name: string, final: boole
         // A file deleted while this handle is open stays delete-pending, and its pathname
         // denies access, until the handle closes. Close it and check the pathname once more.
         if (!final) return RECHECK;
-        throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`);
+        throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`, cause instanceof OpperError ? cause.hint : undefined);
       }
     }
     try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed local proxy ${name}.`); }
