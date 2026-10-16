@@ -109,7 +109,7 @@ async function ensurePrivateDirectory(path: string, create = false): Promise<voi
     try { await ensurePrivateStateDirectory(path, create); }
     catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw error("No local proxy state found.", "Start `opper proxy start` first, or choose its --state-dir.");
-      throw error("Local proxy state must be private and owned by the current Windows user, without reparse points.");
+      throw error("Local proxy state must be private and owned by the current Windows user, without reparse points.", cause instanceof OpperError ? cause.hint : undefined);
     }
     return;
   }

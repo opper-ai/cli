@@ -10,6 +10,7 @@ import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopSta
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
 import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "../../src/desktop/private-state.js";
 import * as privateState from "../../src/desktop/private-state.js";
+import { OpperError } from "../../src/errors.js";
 
 let directory: string;
 let stateDir: string;
@@ -84,6 +85,18 @@ async function privateFile(path: string) {
   else expect((await lstat(path)).mode & 0o777).toBe(0o600);
 }
 describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 120_000 : 5_000, hookTimeout: process.platform === "win32" ? 60_000 : 10_000}, () => {
+  it("preserves safe Windows checker diagnostics without starting the proxy", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const hint = "The Windows security checker timed out or was terminated (15-second deadline).";
+    vi.spyOn(privateState, "ensurePrivateStateDirectory").mockRejectedValueOnce(new OpperError("AGENT_CONFIG_CONFLICT", "Private state rejected.", hint));
+    try {
+      Object.defineProperty(process, "platform", {value: "win32", configurable: true});
+      await expect(desktopStartCommand({key: "work", stateDir, port: 0, signal: stopper.signal})).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT", hint});
+      expect(requests).toHaveLength(0);
+      await expect(lstat(stateDir)).rejects.toMatchObject({code: "ENOENT"});
+    } finally {Object.defineProperty(process, "platform", platformDescriptor);}
+  });
+
   it("preserves a normalized API prefix and binds credentials to that complete root", async () => {
     await setSlot("work", {...slot, baseUrl: `${origin}/api/tenant///`});
     vi.stubEnv("OPPER_BASE_URL", `${origin}/api/tenant/`);

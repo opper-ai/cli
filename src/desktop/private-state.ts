@@ -108,8 +108,8 @@ try {
 }
 `;
 
-function conflict(kind: "directory" | "file"): OpperError {
-  return new OpperError("AGENT_CONFIG_CONFLICT", `Local proxy state ${kind} must be private, owned by the current user, and without a symlink or junction.`);
+function conflict(kind: "directory" | "file", hint?: string): OpperError {
+  return new OpperError("AGENT_CONFIG_CONFLICT", `Local proxy state ${kind} must be private, owned by the current user, and without a symlink or junction.`, hint);
 }
 
 async function requireExistingWindowsState(path: string, kind: "directory" | "file"): Promise<void> {
@@ -124,16 +124,33 @@ async function windowsState(path: string, kind: "directory" | "file", create: bo
   const executable = win32.join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const encoded = Buffer.from(POWERSHELL_PRIVATE_STATE_SCRIPT, "utf16le").toString("base64");
   await new Promise<void>((resolve, reject) => {
-    const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {timeout: 15_000, maxBuffer: 16_384, windowsHide: true}, (cause, stdout) => {
-      let result: {ok?: unknown; code?: unknown} | undefined;
-      try {result = JSON.parse(stdout.trim()) as {ok?: unknown; code?: unknown};} catch { /* Native checker failures are always closed. */ }
-      if (!cause && result?.ok === true) {resolve(); return;}
-      if (result?.code === "ENOENT") {
-        reject(Object.assign(new Error("No local proxy state found."), {code: "ENOENT"}));
-      } else reject(conflict(kind));
-    });
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(JSON.stringify({path, kind, create}));
+    const invalidResponse = () => conflict(kind, "The Windows security checker returned an invalid response. State was not accepted; retry the operation.");
+    try {
+      const child = execFile(executable, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {timeout: 15_000, maxBuffer: 16_384, windowsHide: true}, (cause, stdout) => {
+        // Never include subprocess messages or buffers: they can contain private paths/data.
+        // Process failures take precedence over any partial native JSON response.
+        if (cause?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {reject(invalidResponse()); return;}
+        if (cause?.killed || cause?.signal || cause?.code === "ETIMEDOUT") {
+          reject(conflict(kind, "The Windows security checker timed out or was terminated (15-second deadline). State was not accepted; retry when the machine is less busy."));
+          return;
+        }
+        if (typeof cause?.code === "string") {
+          reject(conflict(kind, "The Windows security checker could not start. Verify that Windows PowerShell is available and retry."));
+          return;
+        }
+        let result: {ok?: unknown; code?: unknown} | undefined;
+        try {result = JSON.parse(stdout.trim()) as {ok?: unknown; code?: unknown};} catch { /* Native checker failures are always closed. */ }
+        if (!cause && result?.ok === true) {resolve(); return;}
+        if (result?.ok === false && result.code === "ENOENT") {
+          reject(Object.assign(new Error("No local proxy state found."), {code: "ENOENT"}));
+        } else if (result?.ok === false && result.code === "AGENT_CONFIG_CONFLICT") reject(conflict(kind));
+        else reject(invalidResponse());
+      });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(JSON.stringify({path, kind, create}));
+    } catch {
+      reject(conflict(kind, "The Windows security checker could not start. Verify that Windows PowerShell is available and retry."));
+    }
   });
 }
 
