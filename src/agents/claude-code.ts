@@ -88,6 +88,11 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     // through Opper typically have no Anthropic key, so those calls fail
     // noisily and can leak the gateway token outside Opper.
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    // Claude Code turns tool search off for any non-Anthropic base URL, so
+    // every MCP tool definition is sent on every turn. Opper forwards
+    // tool_reference to Claude and emulates it for other models, so keep
+    // deferred loading on unless the user chose a setting themselves.
+    ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH || "true",
   };
   const contextEnv = await contextWindowEnv(routing);
   Object.assign(env, contextEnv);
