@@ -33,7 +33,7 @@ export function parseJsoncObject(text: string): Record<string, unknown> {
 }
 
 /** Remove one object property without consuming comments before its siblings. */
-export function deleteJsoncProperty(text: string, path: string[]): string {
+export function deleteJsoncProperty(text: string, path: (string | number)[]): string {
   parseJsoncObject(text);
   const root = parseTree(text, [], { allowTrailingComma: true });
   const property = root && findNodeAtLocation(root, path)?.parent;
