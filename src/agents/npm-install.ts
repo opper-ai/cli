@@ -9,6 +9,7 @@ import { OpperError } from "../errors.js";
 export async function npmInstallGlobal(
   packageName: string,
   docsUrl: string,
+  options: { engineStrict?: boolean; failureHint?: string } = {},
 ): Promise<void> {
   if (!(await which("npm"))) {
     throw new OpperError(
@@ -18,7 +19,11 @@ export async function npmInstallGlobal(
     );
   }
 
-  const result = run("npm", ["install", "-g", packageName], {
+  // npm may use a different Node runtime from a bundled Opper CLI. Let npm
+  // enforce the package's engines instead of checking our process.version.
+  const result = run("npm", ["install", "-g", packageName,
+    ...(options.engineStrict ? ["--engine-strict", "--force=false"] : []),
+  ], {
     inherit: true,
   });
   if (result.code === 0) return;
@@ -47,6 +52,7 @@ export async function npmInstallGlobal(
   throw new OpperError(
     "AGENT_NOT_FOUND",
     `npm install -g ${packageName} exited with code ${result.code}`,
-    `Check your network connection and npm permissions, or install manually from ${docsUrl}.`,
+    [`Check your network connection and npm permissions, or install manually from ${docsUrl}.`,
+      options.failureHint].filter(Boolean).join(" "),
   );
 }

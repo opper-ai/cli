@@ -67,6 +67,23 @@ describe("pi adapter", () => {
     expect(typeof pi.install).toBe("function");
   });
 
+  it("installs current Pi with npm engine requirements enforced", async () => {
+    await pi.install!();
+    expect(runMock).toHaveBeenCalledWith("npm", [
+      "install", "-g", "@earendil-works/pi-coding-agent", "--engine-strict", "--force=false",
+    ], { inherit: true });
+    expect(existsSync(modelsPath(sandbox))).toBe(false);
+  });
+
+  it("explains the npm runtime requirement when Pi installation fails", async () => {
+    runMock.mockReturnValue({ code: 1, stdout: "", stderr: "" });
+    await expect(pi.install!()).rejects.toMatchObject({
+      code: "AGENT_NOT_FOUND",
+      hint: expect.stringContaining("Node.js 22.19.0 or later"),
+    });
+    expect(existsSync(modelsPath(sandbox))).toBe(false);
+  });
+
   it("configure (no apiKey) throws AUTH_REQUIRED", async () => {
     await expect(pi.configure({})).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
   });
@@ -81,7 +98,7 @@ describe("pi adapter", () => {
     expect(models.providers?.opper?.headers).toBeUndefined();
   });
 
-  it("uses legacy env references for the legacy Pi release installed by the adapter", async () => {
+  it("uses legacy env references for an already installed legacy Pi release", async () => {
     runMock.mockImplementation((_cmd: string, args: string[]) => ({code:0,stdout:args[0] === "--version" ? "0.73.1" : ""}));
     await pi.configure({apiKey:"synthetic-legacy"});
     expect(readModels(sandbox).providers?.opper?.apiKey).toBe("OPPER_API_KEY");

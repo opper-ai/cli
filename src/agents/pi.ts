@@ -115,7 +115,10 @@ async function detect(): Promise<DetectResult> {
 }
 
 async function install(): Promise<void> {
-  await npmInstallGlobal("@mariozechner/pi-coding-agent", "https://pi.dev");
+  await npmInstallGlobal("@earendil-works/pi-coding-agent", "https://pi.dev", {
+    engineStrict: true,
+    failureHint: "If npm reports EBADENGINE, upgrade the Node.js used by npm to Node.js 22.19.0 or later, then retry.",
+  });
 }
 
 async function isConfigured(): Promise<boolean> {

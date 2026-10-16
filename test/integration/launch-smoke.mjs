@@ -63,10 +63,34 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
     NPM_CONFIG_IGNORE_SCRIPTS: "true", NPM_CONFIG_AUDIT: "false", NPM_CONFIG_FUND: "false",
     OPPER_INJECTION_SENTINEL: injectionMarker,
   };
-  const installed = await run(process.execPath, ["--input-type=module", "-e",
-    "const {npmInstallGlobal}=await import(process.argv[1]);await npmInstallGlobal(process.argv[2],'https://example.test');", installer, fixture], installEnv);
+  // A tarball exercises the same engine validation as a registry package;
+  // installing a local directory can instead create a link.
+  const packedFixture = await run(process.execPath, [npmCliPath, "pack", fixture, "--json", "--pack-destination", sandbox], installEnv);
+  assert.equal(packedFixture.code, 0, packedFixture.stderr);
+  const fixtureTarball = join(sandbox, JSON.parse(packedFixture.stdout)[0].filename);
+  const installScript = "const {npmInstallGlobal}=await import(process.argv[1]);await npmInstallGlobal(process.argv[2],'https://example.test',{engineStrict:true});";
+  const installed = await run(process.execPath, ["--input-type=module", "-e", installScript, installer, fixtureTarball], installEnv);
   assert.equal(installed.code, 0, installed.stderr);
   assert.ok(!existsSync(injectionMarker), "The installer executed a checkout's npm shim.");
+
+  const incompatible = join(sandbox, "incompatible engine");
+  mkdirSync(incompatible);
+  writeFileSync(join(incompatible, "package.json"), JSON.stringify({
+    name: "opper-engine-fixture", version: "1.0.0", engines: { node: ">=999.0.0" },
+    bin: { "opper-engine-fixture": "agent.cjs" },
+  }));
+  writeFileSync(join(incompatible, "agent.cjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
+  const packedIncompatible = await run(process.execPath, [npmCliPath, "pack", incompatible, "--json", "--pack-destination", sandbox], installEnv);
+  assert.equal(packedIncompatible.code, 0, packedIncompatible.stderr);
+  const incompatibleTarball = join(sandbox, JSON.parse(packedIncompatible.stdout)[0].filename);
+  const rejected = await run(process.execPath, ["--input-type=module", "-e", installScript, installer, incompatibleTarball], {
+    ...installEnv, NPM_CONFIG_FORCE: "true",
+  });
+  assert.notEqual(rejected.code, 0, "Strict installer accepted an incompatible Node engine.");
+  assert.match(rejected.stderr, /EBADENGINE/);
+  assert.ok(!existsSync(join(bin, windows ? "opper-engine-fixture.cmd" : "opper-engine-fixture")),
+    "An incompatible agent executable was installed.");
+  console.log("Strict npm installer accepts compatible packages and rejects incompatible engines, including with inherited force=true.");
 
   let denied = false;
   const requests = [];
