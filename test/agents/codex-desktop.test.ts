@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendFileSync, chmodSync, copyFileSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -164,10 +165,13 @@ beforeEach(async () => {
   await setSlot("prod", { apiKey: KEY, baseUrl: API_ROOT });
 }, NATIVE_FIXTURE_TIMEOUT);
 
-afterEach(() => {
+afterEach(async () => {
   process.execPath = ORIGINAL_EXEC_PATH;
   vi.unstubAllEnvs();
-  rmSync(home, { recursive: true, force: true });
+  // Async rm retries also cover Windows lstat EPERM while an executable handle
+  // is being released. Only this test-owned tree receives the bounded retries.
+  try {await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });}
+  catch (cause) {throw new Error("Codex desktop fixture cleanup failed.", {cause});}
 }, NATIVE_FIXTURE_TIMEOUT);
 
 describe("Codex desktop detection", NATIVE_FIXTURE_OPTIONS, () => {
@@ -330,7 +334,7 @@ describe("Codex desktop configuration and credentials", NATIVE_FIXTURE_OPTIONS, 
     rmSync(bundle, {recursive: true});
     expect(successfulHelperOutput(helper)).toBe(proxy.token);
     expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, supports_websockets: false});
-    await codexDesktop.unconfigure();
+    await expect(codexDesktop.unconfigure(), "Bundled proxy runtime removal").resolves.toBeUndefined();
     expect(configText()).toBe(ORIGINAL);
     expect(mocks.realExists(join(codexHome, "opper-desktop", NODE_NAME))).toBe(false);
   }, 60_000);

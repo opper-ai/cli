@@ -10,6 +10,7 @@ import { desktopStartCommand, desktopTagCommand, desktopClearCommand, desktopSta
 import { setSlot, type AuthSlot } from "../../src/auth/config.js";
 import { ensurePrivateStateDirectory, ensurePrivateStateFile, assertPrivateStateFile } from "../../src/desktop/private-state.js";
 import * as privateState from "../../src/desktop/private-state.js";
+import { OpperError } from "../../src/errors.js";
 
 let directory: string;
 let stateDir: string;
@@ -84,6 +85,18 @@ async function privateFile(path: string) {
   else expect((await lstat(path)).mode & 0o777).toBe(0o600);
 }
 describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 120_000 : 5_000, hookTimeout: process.platform === "win32" ? 60_000 : 10_000}, () => {
+  it("preserves safe Windows checker diagnostics without starting the proxy", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const hint = "The Windows security checker timed out or was terminated (15-second deadline).";
+    vi.spyOn(privateState, "ensurePrivateStateDirectory").mockRejectedValueOnce(new OpperError("AGENT_CONFIG_CONFLICT", "Private state rejected.", hint));
+    try {
+      Object.defineProperty(process, "platform", {value: "win32", configurable: true});
+      await expect(desktopStartCommand({key: "work", stateDir, port: 0, signal: stopper.signal})).rejects.toMatchObject({code: "AGENT_CONFIG_CONFLICT", hint});
+      expect(requests).toHaveLength(0);
+      await expect(lstat(stateDir)).rejects.toMatchObject({code: "ENOENT"});
+    } finally {Object.defineProperty(process, "platform", platformDescriptor);}
+  });
+
   it("preserves a normalized API prefix and binds credentials to that complete root", async () => {
     await setSlot("work", {...slot, baseUrl: `${origin}/api/tenant///`});
     vi.stubEnv("OPPER_BASE_URL", `${origin}/api/tenant/`);
@@ -300,6 +313,32 @@ describe("desktop command lifecycle", {timeout: process.platform === "win32" ? 1
     await writeFile(join(stateDir, "bridge.json"), JSON.stringify(manifest), { mode: 0o600 });
     expect(requests).toHaveLength(0);
   });
+  it.each(["bridge.json", "connection.json"])("preserves Windows checker hints after rechecking %s", async (name) => {
+    await mkdir(stateDir, {mode: 0o700});
+    const manifest = {version: 1, url: "http://127.0.0.1:1", token: "a".repeat(64), keyName: "work", origin, pid: process.pid};
+    const original = JSON.stringify({...manifest, identityFingerprint: "b".repeat(64)});
+    await writeFile(join(stateDir, "bridge.json"), JSON.stringify(manifest), {mode: 0o600});
+    await writeFile(join(stateDir, "connection.json"), original, {mode: 0o600});
+    const path = join(stateDir, name);
+    const before = await readFile(path, "utf8");
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const hint = "The Windows security checker timed out or was terminated (15-second deadline).";
+    try {
+      Object.defineProperty(process, "platform", {value: "win32", configurable: true});
+      vi.spyOn(privateState, "ensurePrivateStateDirectory").mockResolvedValue();
+      const checker = vi.spyOn(privateState, "assertPrivateStateFile").mockImplementation(async checked => {
+        if (checked === path) throw new OpperError("AGENT_CONFIG_CONFLICT", "synthetic-private-checker-output", hint);
+      });
+      const operation = name === "bridge.json" ? readDesktopRuntime(stateDir) : resolveDesktopApiContext(stateDir);
+      const outcome = await operation.catch(cause => cause);
+      expect(outcome).toMatchObject({code: "AGENT_CONFIG_CONFLICT", hint});
+      expect(`${outcome.message}\n${outcome.hint}`).not.toContain("synthetic-private-checker-output");
+      expect(checker.mock.calls.filter(([checked]) => checked === path)).toHaveLength(2);
+      expect(await readFile(path, "utf8")).toBe(before);
+      expect(requests).toHaveLength(0);
+    } finally {Object.defineProperty(process, "platform", platformDescriptor);}
+  });
+
   it.each(["ENOENT", "AGENT_CONFIG_CONFLICT"])("distinguishes disappearing Windows manifest state from invalid ACLs (%s)", async (code) => {
     await mkdir(stateDir, {mode: 0o700});
     const path = join(stateDir, "bridge.json");

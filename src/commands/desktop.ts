@@ -109,7 +109,7 @@ async function ensurePrivateDirectory(path: string, create = false): Promise<voi
     try { await ensurePrivateStateDirectory(path, create); }
     catch (cause) {
       if ((cause as NodeJS.ErrnoException).code === "ENOENT") throw error("No local proxy state found.", "Start `opper proxy start` first, or choose its --state-dir.");
-      throw error("Local proxy state must be private and owned by the current Windows user, without reparse points.");
+      throw error("Local proxy state must be private and owned by the current Windows user, without reparse points.", cause instanceof OpperError ? cause.hint : undefined);
     }
     return;
   }
@@ -150,7 +150,7 @@ async function readPrivateJsonOnce(directory: string, name: string, final: boole
         // A file deleted while this handle is open stays delete-pending, and its pathname
         // denies access, until the handle closes. Close it and check the pathname once more.
         if (!final) return RECHECK;
-        throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`);
+        throw error(`Cannot safely read local proxy ${name}: its Windows access controls are not private.`, cause instanceof OpperError ? cause.hint : undefined);
       }
     }
     try { return JSON.parse(await file.readFile("utf8")) as unknown; } catch { throw error(`Malformed local proxy ${name}.`); }
