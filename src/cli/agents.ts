@@ -38,16 +38,18 @@ const register: RegisterFn = (program, ctx) => {
     .command("configure <name>")
     .description("Configure an agent to use the selected Opper key without launching it")
     .option("--model <id>", "Opper model identifier (where supported)")
+    .option("--model-kinds <kinds>", "Conductor catalog: pools,routes (default) or all (includes provider-specific models)")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--proxy", "configure the local desktop session proxy (codex-desktop or claude-desktop)")
     .option("--state-dir <path>", "local proxy state directory (requires --proxy)")
     .option("--no-open", "print the session picker link without opening a browser (requires --proxy)")
-    .action(async (name: string, opts: { model?: string; codexHome?: string; proxy?: boolean; stateDir?: string; open?: boolean }) => {
-      if (opts.proxy || opts.stateDir !== undefined || opts.open === false) {
+    .action(async (name: string, opts: { model?: string; modelKinds?: string; codexHome?: string; proxy?: boolean; stateDir?: string; open?: boolean }) => {
+      if (opts.proxy || opts.stateDir !== undefined || opts.open === false || opts.modelKinds !== undefined) {
         await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.(), {
           ...(opts.proxy ? { proxy: true } : {}),
           ...(opts.stateDir !== undefined ? { stateDir: opts.stateDir } : {}),
           ...(opts.open === false ? { open: false } : {}),
+          ...(opts.modelKinds !== undefined ? { modelKinds: opts.modelKinds } : {}),
         });
       } else await agentsConfigureCommand(name, ctx.key(), opts.model, opts.codexHome, ctx.projectUuid?.());
     });

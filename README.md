@@ -136,6 +136,7 @@ opper launch claude --resume
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
 | Codex CLI | `codex` | per-invocation Responses provider and model overrides; preserves shared configuration and supports current native profile files |
 | Codex / ChatGPT desktop | `codex-desktop` | configures local Codex tasks on macOS with a persistent Responses provider, selected-key credential helper, and live Opper model catalog |
+| Conductor (Codex, macOS) | `conductor` | configures CLI mode and a custom Codex executable in Conductor's user settings, using the selected CLI login and Opper pool/route catalog |
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
 | OpenClaw | `openclaw` | `opper` provider entry in `~/.openclaw/agents/main/agent/models.json`; `opper launch openclaw` defaults to `gateway start` (background daemon) |
 | Pi | `pi` | temporary extension registers Opper in memory; the CLI leaves `models.json` and installed extensions unchanged |
@@ -219,6 +220,76 @@ opper agents remove codex-desktop --codex-home "$HOME/.codex-opper-test"
 A separate Codex home isolates Codex settings and task data. It does not by itself start a second desktop app instance or isolate the app's Electron profile.
 
 Removal restores previous defaults and preserves unrelated settings, comments, and deliberate model changes made afterward. If the generated provider was edited independently, removal reports a conflict and retains the backup. Symlinked config files are refused before writing; use `--codex-home <path>` to keep a dotfile-managed configuration intact. Restart the app after removal.
+
+### Conductor with Codex on macOS
+
+Install [Conductor](https://www.conductor.build) and let it install its managed
+Codex runtime (0.153.4 or later). Then configure the integration using a stored
+CLI login:
+
+```sh
+opper login
+opper --key default agents configure conductor --model claude-sonnet-5
+```
+
+The command selects **CLI** mode and the generated Codex executable (normally
+`~/.opper/conductor/codex`) in Conductor's user settings automatically. Restart
+Conductor. In a workspace, create a new chat with **+**, open the
+model picker, and choose **Add models**. In **Default models**, enable the wanted
+Opper model in the **Codex** column. Go back to the new chat and select it in the
+picker before sending a message. This integration covers Conductor's Codex agent.
+Repository settings can override the user defaults; if a repository still uses
+another executable or provider, check its Conductor settings.
+
+Conductor may still show **CLI not authenticated** in settings: that badge checks
+the normal Codex account, while this integration retrieves credentials from the
+Opper CLI login. You do not need to run `codex login` for the Opper connection.
+
+Setup updates only `codex_provider` and `codex_executable_path` in
+`~/.conductor/settings.toml`, preserving unrelated settings and recording the
+previous values for removal. If an earlier manual setup already selected this
+generated executable, removal clears that path to return to Conductor's bundled
+Codex. The executable uses invocation-specific provider and catalog settings;
+ordinary Codex settings in `~/.codex/config.toml` remain unchanged.
+The API key stays in the CLI credential store and is
+read from the selected slot when Codex refreshes credentials. Renewing that slot
+within the same organization and API host works without copying another key
+into Conductor. Deleting or expiring the slot stops credential retrieval;
+changing its organization or API host requires running setup again. An
+environment-only `OPPER_API_KEY` cannot configure this persistent integration.
+
+Setup fetches the selected key's authorized, tool-capable catalog. By default,
+Conductor lists providerless pools (such as `gpt-5-mini`) and `dynamic/...` routes,
+so each provider deployment does not crowd the picker. An exact model selected
+with `--model` is also retained, including a provider-specific ID; it is never
+rewritten to a pool. Pools and providers have distinct labels.
+
+To include every eligible provider-specific model, opt into the full catalog:
+
+```sh
+opper --key default agents configure conductor --model-kinds all
+```
+
+Run configure again without `--model-kinds all` (or with
+`--model-kinds pools,routes`) to return to the compact catalog. Existing generated
+catalogs stay as they are until you configure again. These defaults apply only
+to Conductor; other agents' catalogs are unchanged.
+
+Run the same configure command again to refresh models or change the selected
+login, model, or project. Built-in Codex web search is
+disabled for this connection, as with the Codex desktop integration. Existing
+Conductor chats keep their selected model; start a new chat after reconfiguring.
+
+To remove the generated integration:
+
+```sh
+opper agents remove conductor
+```
+
+Removal restores the saved Conductor selections where they are still owned;
+restart the app before starting another session. It preserves independent
+settings edits. Conflicting managed settings or changed generated files are
+reported for manual resolution.
 
 ### Local inference proxy and sessions (prototype)
 
@@ -831,6 +902,21 @@ PR CI runs the automated suite and package smoke test on Linux and Windows.
 These checks cover package installation and process launching; interactive
 Windows browser login, actual agent inference, and Ctrl-C behavior still need
 separate Windows verification.
+
+On a Mac with Conductor and its managed Codex installed, the optional integration
+test runs the built CLI through Conductor's actual runtime against a local fake
+gateway:
+
+```sh
+npm run build
+CONDUCTOR_INTEGRATION=1 node test/integration/conductor.mjs
+```
+
+It uses isolated settings and synthetic credentials to check automatic executable
+selection, pool/route discovery, provider opt-in, credential renewal, and restoring
+previous settings on removal. It does not make paid inference
+calls or change the normal Conductor/Codex settings. GUI model selection and
+live gateway inference are separate acceptance checks.
 
 ## Releasing
 

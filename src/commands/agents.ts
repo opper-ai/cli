@@ -42,7 +42,9 @@ export async function agentsListCommand(): Promise<void> {
   const launchLabel = (r: Row) =>
     r.launchable
       ? `opper launch ${r.name}`
-      : `opper editors ${r.name}`;
+      : r.name === "github-copilot-vscode"
+      ? `opper editors ${r.name}`
+      : `opper agents configure ${r.name}`;
 
   // Compute widths from uncoloured strings; apply colour after padEnd.
   const w = {
@@ -106,11 +108,14 @@ export async function agentsRemoveCommand(name: string, codexHome?: string): Pro
   console.log(`${adapter.displayName} integration removed.`);
 }
 
-export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string, projectUuid?: string, opts: DesktopRoutingOptions = {}): Promise<void> {
+export async function agentsConfigureCommand(name: string, key: string, model?: string, codexHome?: string, projectUuid?: string, opts: DesktopRoutingOptions & { modelKinds?: string } = {}): Promise<void> {
   const adapter = getAdapter(name);
   if (!adapter) throw new OpperError("AGENT_NOT_FOUND", `Unknown agent "${name}"`, "Run `opper agents list` to see supported agents.");
   if (codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
+  }
+  if (opts.modelKinds !== undefined && (adapter.name !== "conductor" || !["pools,routes", "all"].includes(opts.modelKinds))) {
+    throw new OpperError("INVALID_ARGUMENT", "--model-kinds accepts pools,routes or all and is only supported for conductor.");
   }
   validateDesktopRoutingOptions(adapter.name, opts);
   const context = await resolveApiContext(key, { projectUuid });
@@ -121,6 +126,7 @@ export async function agentsConfigureCommand(name: string, key: string, model?: 
   await adapter.configure({ keyName: key, ...context,
     ...(desktop ? { desktopProxy: desktop.proxy } : {}),
     ...(model ? { model } : {}),
+    ...(opts.modelKinds === "all" || opts.modelKinds === "pools,routes" ? { modelKinds: opts.modelKinds } : {}),
     ...(codexHome !== undefined ? { codexHome } : {}),
   });
   console.log(`${adapter.displayName} configured.`);
