@@ -42,6 +42,8 @@ export async function agentsListCommand(): Promise<void> {
   const launchLabel = (r: Row) =>
     r.launchable
       ? `opper launch ${r.name}`
+      : r.name === "github-copilot-vscode"
+      ? `opper editors ${r.name}`
       : `opper agents configure ${r.name}`;
 
   // Compute widths from uncoloured strings; apply colour after padEnd.

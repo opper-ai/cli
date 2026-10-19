@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { Command } from "commander";
 import { setSlot } from "../../src/auth/config.js";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 
@@ -8,6 +9,11 @@ const hermesDetect = vi.fn();
 const hermesIsConfigured = vi.fn().mockResolvedValue(false);
 const desktopPrepare = vi.fn();
 const desktopOpen = vi.fn();
+const configureCopilot = vi.fn();
+vi.mock("../../src/setup/github-copilot-vscode.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../src/setup/github-copilot-vscode.js")>(),
+  configureGitHubCopilotVSCode: configureCopilot,
+}));
 vi.mock("../../src/commands/desktop.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../src/commands/desktop.js")>(),
   prepareDesktopProxy: desktopPrepare, desktopOpenCommand: desktopOpen,
@@ -201,6 +207,29 @@ describe("agentsConfigureCommand", () => {
     await agentsConfigureCommand("codex-desktop", "prod");
     expect(configure.mock.calls[0]![0]).not.toHaveProperty("desktopProxy");
     expect(desktopPrepare).not.toHaveBeenCalled(); expect(desktopOpen).not.toHaveBeenCalled();
+  });
+
+  it("lets a signed-out user run the advertised VS Code Copilot setup command", async () => {
+    const registry = await import("../../src/agents/registry.js");
+    vi.spyOn(registry, "listAdapters").mockReturnValueOnce([{
+      name: "github-copilot-vscode", displayName: "GitHub Copilot (VS Code)", docsUrl: "https://github.com/features/copilot",
+      detect: vi.fn().mockResolvedValue({installed: true}), isConfigured: vi.fn().mockResolvedValue(false),
+      configure, unconfigure,
+    }]);
+    configureCopilot.mockReset().mockResolvedValue({path: "/tmp/copilot-test-settings.json", wrote: true});
+    const copilot = (await import("../../src/agents/github-copilot-vscode.js")).githubCopilotVSCode;
+    const detect = vi.spyOn(copilot, "detect").mockResolvedValue({installed: true});
+    await agentsListCommand();
+    const row = log.mock.calls.map(call => String(call[0])).find(text => text.includes("github-copilot-vscode"))!;
+    const args = row.slice(row.indexOf("opper ")).replace(/\u001b\[[0-9;]*m/g, "").trim().split(/\s+/).slice(1);
+    const cli = new Command().exitOverride();
+    const context = {key: () => "missing", version: "test"};
+    (await import("../../src/cli/agents.js")).default(cli, context);
+    (await import("../../src/cli/editors.js")).default(cli, context);
+    try { await cli.parseAsync(args, {from: "user"}); }
+    finally { detect.mockRestore(); }
+    expect(configureCopilot).toHaveBeenCalledExactlyOnceWith({channel: "stable"});
+    expect(configure).not.toHaveBeenCalled();
   });
 
   it.each(["all", "pools,routes"])("forwards Conductor catalog selection %s", async (modelKinds) => {
