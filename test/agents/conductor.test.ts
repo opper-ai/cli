@@ -17,9 +17,9 @@ vi.mock("node:fs/promises", async () => {
     return actual.rename(from,to);
   }};
 });
-vi.mock("../../src/setup/codex-models.js", async () => ({ ...await vi.importActual<typeof import("../../src/setup/codex-models.js")>("../../src/setup/codex-models.js"), fetchCodexModelCatalog: mocks.catalog }));
+vi.mock("../../src/setup/conductor-models.js", async () => ({ ...await vi.importActual<typeof import("../../src/setup/conductor-models.js")>("../../src/setup/conductor-models.js"), fetchConductorModelCatalog: mocks.catalog }));
 const { conductor } = await import("../../src/agents/conductor.js");
-const { toCodexModelCatalog } = await import("../../src/setup/codex-models.js");
+const { toConductorModelCatalog } = await import("../../src/setup/conductor-models.js");
 let home: string;
 let managed: string;
 const key = "synthetic-conductor-key";
@@ -49,7 +49,7 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "opper conductor "));mocks.home=home;managed=join(home,".opper/conductor");
   mocks.platform="darwin";mocks.failRename="";vi.stubEnv("OPPER_HOME", join(home,".opper"));vi.stubEnv("OPPER_API_KEY", undefined);vi.stubEnv("OPPER_BASE_URL", undefined);vi.stubEnv("OPPER_DISTRIBUTION", undefined);
   mocks.run.mockReset();mocks.run.mockImplementation((cmd: string) => ({code: 0,stdout: cmd.endsWith("plutil") ? "com.conductor.app" : "codex-cli 0.162.1",stderr:""}));
-  mocks.catalog.mockReset();mocks.catalog.mockImplementation(async (_context, selected) => toCodexModelCatalog([{id:model,opper:{kind:"dynamic_route",capabilities:["tools"]}},{id:"synthetic/extra",opper:{kind:"model",type:"llm",capabilities:["tools"]}}],selected));
+  mocks.catalog.mockReset();mocks.catalog.mockImplementation(async (_context, selected, kinds) => toConductorModelCatalog([{id:model,opper:{kind:"dynamic_route",capabilities:["tools"]}},{id:"synthetic/extra",opper:{kind:"model",type:"llm",capabilities:["tools"]}}],selected,kinds));
   await setSlot("test",{apiKey:key,baseUrl:host,orgId:42});runtime();vi.spyOn(console,"log").mockImplementation(()=>{});
 });
 afterEach(()=>{process.execPath=originalExecPath;vi.unstubAllEnvs();vi.restoreAllMocks();rmSync(home,{recursive:true,force:true});});
@@ -58,9 +58,9 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
   it("prepares an invocation-only wrapper and route catalog without persisting credentials or touching Codex",async()=>{
     const codex=join(home,".codex");mkdirSync(codex);writeFileSync(join(codex,"config.toml"),'# personal\nmodel="personal"\n');
     await conductor.configure(options());
-    expect(mocks.catalog).toHaveBeenCalledWith({apiKey:key,baseUrl:host},model);
+    expect(mocks.catalog).toHaveBeenCalledWith({apiKey:key,baseUrl:host},model,"pools,routes");
     expect(Object.values(contents()).join("\n")).not.toContain(key);
-    expect(JSON.parse(readFileSync(join(managed,"catalog.json"),"utf8")).models.map((m: {slug:string})=>m.slug)).toEqual([model,"synthetic/extra"]);
+    expect(JSON.parse(readFileSync(join(managed,"catalog.json"),"utf8")).models.map((m: {slug:string})=>m.slug)).toEqual([model]);
     expect(readFileSync(join(codex,"config.toml"),"utf8")).toBe('# personal\nmodel="personal"\n');
     const result=execute("codex",["app-server","--listen","stdio://","argument with spaces"]);expect(result.status,result.stderr).toBe(0);
     const args=JSON.parse(result.stdout) as string[];expect(args).toContain("argument with spaces");expect(args.join(" ")).toContain('model_provider="opper-conductor"');expect(args.join(" ")).toContain("model_catalog_json=");expect(args.join(" ")).toContain('web_search="disabled"');expect(args.join(" ")).toContain('"supports_websockets" = false');
@@ -92,6 +92,14 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
   it("refreshes the catalog idempotently and removes only its own artifacts",async()=>{
     await conductor.configure(options());const original=contents();await conductor.configure(options());expect(contents()).toEqual(original);
     writeFileSync(join(managed,"personal.txt"),"keep");await conductor.unconfigure();expect(readdirSync(managed)).toEqual(["personal.txt"]);expect(await conductor.isConfigured()).toBe(false);await conductor.unconfigure();
+  });
+  it("expands and narrows provider discovery while preserving an explicit deployment",async()=>{
+    const ids=()=>JSON.parse(readFileSync(join(managed,"catalog.json"),"utf8")).models.map((entry:{slug:string})=>entry.slug);
+    await conductor.configure({...options(),modelKinds:"all"});expect(ids()).toEqual([model,"synthetic/extra"]);
+    await conductor.configure(options());expect(ids()).toEqual([model]);
+    await conductor.configure({...options(),model:"synthetic/extra"});expect(ids()).toEqual(["synthetic/extra",model]);
+    await expect(conductor.configure({...options(),modelKinds:"providers" as "all"})).rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    expect(ids()).toEqual(["synthetic/extra",model]);
   });
   it("preserves independently edited files on configure and remove",async()=>{
     await conductor.configure(options());writeFileSync(join(managed,"catalog.json"),"edited");const before=contents();

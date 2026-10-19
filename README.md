@@ -234,10 +234,17 @@ opper --key default agents configure conductor --model claude-sonnet-5
 
 The command prints a custom executable path, normally `~/.opper/conductor/codex`.
 In Conductor, open **Settings → Agents → Codex** (called **Harnesses** in some
-versions), choose **CLI** mode and select that path as the custom Codex executable, then restart
-Conductor and start a new Codex chat. Choose a model or `dynamic/...` route in
-Conductor's picker. Setup prepares the executable; the CLI cannot verify that
-you selected it in the app. This integration covers Conductor's Codex agent.
+versions), choose **CLI** mode and select that path as the custom Codex executable,
+then restart Conductor. In a workspace, create a new chat with **+**, open the
+model picker, and choose **Add models**. In **Default models**, enable the wanted
+Opper model in the **Codex** column. Go back to the new chat and select it in the
+picker before sending a message. Setup prepares the executable; the CLI cannot
+verify that you selected it in the app. This integration covers Conductor's
+Codex agent.
+
+Conductor may still show **CLI not authenticated** in settings: that badge checks
+the normal Codex account, while this integration retrieves credentials from the
+Opper CLI login. You do not need to run `codex login` for the Opper connection.
 
 The executable uses invocation-specific provider and catalog settings. It does
 not edit `~/.codex/config.toml`, Conductor's settings, or the settings used by
@@ -248,9 +255,25 @@ into Conductor. Deleting or expiring the slot stops credential retrieval;
 changing its organization or API host requires running setup again. An
 environment-only `OPPER_API_KEY` cannot configure this persistent integration.
 
-Setup fetches the selected key's authorized, tool-capable catalog, including
-dynamic routes. Run the same configure command again to refresh models or
-change the selected login, model, or project. Built-in Codex web search is
+Setup fetches the selected key's authorized, tool-capable catalog. By default,
+Conductor lists providerless pools (such as `gpt-5-mini`) and `dynamic/...` routes,
+so each provider deployment does not crowd the picker. An exact model selected
+with `--model` is also retained, including a provider-specific ID; it is never
+rewritten to a pool. Pools and providers have distinct labels.
+
+To include every eligible provider-specific model, opt into the full catalog:
+
+```sh
+opper --key default agents configure conductor --model-kinds all
+```
+
+Run configure again without `--model-kinds all` (or with
+`--model-kinds pools,routes`) to return to the compact catalog. Existing generated
+catalogs stay as they are until you configure again. These defaults apply only
+to Conductor; other agents' catalogs are unchanged.
+
+Run the same configure command again to refresh models or change the selected
+login, model, or project. Built-in Codex web search is
 disabled for this connection, as with the Codex desktop integration. Existing
 Conductor chats keep their selected model; start a new chat after reconfiguring.
 

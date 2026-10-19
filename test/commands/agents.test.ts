@@ -203,6 +203,26 @@ describe("agentsConfigureCommand", () => {
     expect(desktopPrepare).not.toHaveBeenCalled(); expect(desktopOpen).not.toHaveBeenCalled();
   });
 
+  it.each(["all", "pools,routes"])("forwards Conductor catalog selection %s", async (modelKinds) => {
+    getAdapterMock.mockReturnValue({ name: "conductor", displayName: "Conductor", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
+    await setSlot("prod", { apiKey: "fixture-prod" });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await agentsConfigureCommand("conductor", "prod", undefined, undefined, undefined, { modelKinds });
+    expect(configure).toHaveBeenCalledExactlyOnceWith({ keyName: "prod", apiKey: "fixture-prod", baseUrl: "https://api.opper.ai", modelKinds });
+  });
+
+  it.each([
+    ["conductor", "models"], ["conductor", ""], ["conductor", "pools"],
+    ["codex-desktop", "all"], ["pi", "pools,routes"],
+  ])("rejects unsupported catalog selection for %s (%s) before credentials or writes", async (agent, modelKinds) => {
+    getAdapterMock.mockReturnValue({ name: agent, displayName: agent, docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
+    const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
+    await expect(agentsConfigureCommand(agent, "missing", undefined, undefined, undefined, { modelKinds }))
+      .rejects.toMatchObject({ code: "INVALID_ARGUMENT", message: expect.stringContaining("--model-kinds") });
+    expect(configure).not.toHaveBeenCalled();
+    expect(desktopPrepare).not.toHaveBeenCalled();
+  });
+
   it.each([{ proxy: true }, { stateDir: "/tmp/proxy" }, { open: false }])("rejects unsupported proxy options before credentials or writes (%j)", async (opts) => {
     getAdapterMock.mockReturnValue({ name: "codex", displayName: "Codex", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
     const { agentsConfigureCommand } = await import("../../src/commands/agents.js");

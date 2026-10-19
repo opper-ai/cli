@@ -26,6 +26,8 @@ export interface OpperRouting {
   compatShape: "openai" | "anthropic" | "responses";
 }
 
+export type ConductorModelKinds = "pools,routes" | "all";
+
 export interface ConfigureOptions {
   desktopProxy?: DesktopProxy;
   /** API key for adapters that bake the key into their config. */
@@ -34,6 +36,8 @@ export interface ConfigureOptions {
   keyName?: string;
   baseUrl?: string;
   model?: string;
+  /** Conductor catalog breadth. Other adapters keep their existing behavior. */
+  modelKinds?: ConductorModelKinds;
   /** Explicit Codex desktop configuration directory; does not change process.env. */
   codexHome?: string;
 }

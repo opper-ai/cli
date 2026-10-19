@@ -21,6 +21,7 @@ const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const cli = join(repo, "dist", "index.js");
 const cliBinary = process.env.CONDUCTOR_OPPER_BINARY;
 const routeID = "dynamic/conductor-synthetic-route";
+const poolID = "pool/conductor-synthetic-pool";
 const additionalID = "synthetic/conductor-additional-model";
 const projectUuid = "11111111-1111-4111-8111-111111111111";
 const initialKey = "synthetic-conductor-key";
@@ -67,6 +68,7 @@ const normalAuth = '{"OPENAI_API_KEY":"synthetic-normal-auth"}\n';
 const requests = [];
 const children = new Set();
 let activeKey = initialKey;
+let expectedInferenceModel;
 let fixtureError;
 const env = {
   PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`,
@@ -114,6 +116,8 @@ const server = createServer(async (request, response) => {
       response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: [
         { id: routeID, context_length: 128000, opper: { kind: "dynamic_route", display_name: "Conductor Synthetic Route",
           pricing: { kind: "variable" }, capabilities: ["tools"] } },
+        { id: poolID, context_length: 64000, opper: { kind: "pool", type: "llm", display_name: "Conductor Synthetic Pool",
+          members: [additionalID], capabilities: ["tools"] } },
         { id: additionalID, context_length: 32000, opper: { kind: "model", type: "llm", display_name: "Conductor Additional Model", capabilities: ["tools"] } },
       ] })); return;
     }
@@ -129,7 +133,7 @@ const server = createServer(async (request, response) => {
     else assert.ok(!request.headers["content-encoding"], "unrecognized request compression");
     const parsed = JSON.parse(body.toString("utf8"));
     row.model = parsed.model;
-    assert.equal(parsed.model, routeID, "the model selected from Conductor stays an exact gateway route ID");
+    assert.equal(parsed.model, expectedInferenceModel, "the model selected from Conductor keeps its exact gateway ID");
     assert.ok(!parsed.tools?.some((tool) => tool.type === "web_search" || tool.type === "web_search_preview"), "native web search remains disabled");
     response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
     response.end(responseEvents(parsed.model));
@@ -230,6 +234,8 @@ const listModels = () => withSidecar(({ rpc }) => rpc("listCodexModels", {
   type: "list_codex_models", agentType: "codex", cwd: home, codexExecutablePath: wrapper,
 }));
 async function inference(selected) {
+  expectedInferenceModel = selected.id;
+  const before = requests.length;
   await withSidecar(async ({ rpc, events, waitFor }) => {
     const id = `synthetic-${requests.length}`;
     await rpc("query", { type: "query", id, agentType: "codex", message: "Synthetic integration probe",
@@ -246,12 +252,14 @@ async function inference(selected) {
     assert.notEqual(terminal.method, "queryError", JSON.stringify(terminal));
     const event = terminal.params.event.rawPayload.event;
     assert.equal(event.type, "turn.completed", JSON.stringify(event));
-    assert.equal(event.conductor_sdk_metadata?.model, routeID);
+    assert.equal(event.conductor_sdk_metadata?.model, selected.id);
     assert.ok(events.some((message) => {
       const item = message.params?.event?.rawPayload?.event?.item;
       return item?.type === "agentMessage" && item.text === answer;
     }), "Conductor receives the completed assistant reply from the Responses stream");
   });
+  assert.ok(requests.slice(before).some((request) => request.method === "POST" && request.model === selected.id),
+    "the actual gateway request uses the exact selected pool, route, or provider ID");
 }
 
 try {
@@ -279,8 +287,10 @@ try {
   await saveSlot(initialKey);
   const cliOptions = { cwd: home, env, timeout: 30000, maxBuffer: 4_000_000 };
   const invokeCLI = (args) => run(cliBinary || process.execPath, cliBinary ? args : [cli, ...args], cliOptions);
-  const configured = await invokeCLI(["--no-telemetry", "--key", "fixture", "--project-uuid", projectUuid,
-    "agents", "configure", "conductor", "--model", routeID]);
+  const configure = (model, modelKinds) => invokeCLI(["--no-telemetry", "--key", "fixture", "--project-uuid", projectUuid,
+    "agents", "configure", "conductor", ...(model ? ["--model", model] : []),
+    ...(modelKinds ? ["--model-kinds", modelKinds] : [])]);
+  const configured = await configure(poolID);
   assert.ok(configured.stdout.includes(wrapper), "the operator receives the actual generated executable path");
   await access(wrapper, constants.X_OK);
   if (cliBinary) {
@@ -291,9 +301,13 @@ try {
   const selected = models.models.find((model) => model.id === routeID);
   assert.ok(selected && !selected.hidden, "the generated route is visible in Conductor's actual model discovery");
   assert.match(selected.displayName, /Conductor Synthetic Route/);
-  assert.ok(models.models.some((model) => model.id === additionalID), "Conductor can discover a model beyond the selected default");
+  const pool = models.models.find((model) => model.id === poolID);
+  assert.ok(pool && !pool.hidden, "the compact default exposes a tool-capable pool in real Conductor discovery");
+  assert.match(pool.displayName, /Conductor Synthetic Pool/);
+  assert.ok(!models.models.some((model) => model.id === additionalID), "provider models are absent from the compact default");
   assert.ok(requests.some((request) => request.path === "/v3/compat/models"), "the built CLI fetches the authorized compat catalog");
   await inference(selected);
+  await inference(pool);
   assert.ok(requests.some((request) => request.method === "POST" && request.auth === `Bearer ${initialKey}`));
 
   // No reconfigure: a new actual Conductor process must use the changed stored
@@ -305,13 +319,35 @@ try {
   const rotated = requests.slice(rotationStart).filter((request) => request.method === "POST");
   assert.ok(rotated.length > 0 && rotated.every((request) => request.auth === `Bearer ${rotatedKey}`));
 
+  await configure(routeID, "all");
+  const expanded = await listModels();
+  assert.ok(expanded.models.some((model) => model.id === additionalID && !model.hidden),
+    "--model-kinds all makes provider models selectable alongside pools and routes");
+  assert.ok(expanded.models.some((model) => model.id === poolID));
+  assert.ok(expanded.models.some((model) => model.id === routeID));
+
+  await configure(routeID, "pools,routes");
+  const compactAgain = await listModels();
+  assert.ok(!compactAgain.models.some((model) => model.id === additionalID),
+    "reconfiguring with the default removes previously enabled provider models");
+  assert.ok(compactAgain.models.some((model) => model.id === poolID));
+  assert.ok(compactAgain.models.some((model) => model.id === routeID));
+
+  await configure(additionalID);
+  const explicitModels = await listModels();
+  const explicit = explicitModels.models.find((model) => model.id === additionalID);
+  assert.ok(explicit && !explicit.hidden, "an explicitly selected provider remains an exact-ID exception to the compact default");
+  assert.ok(explicitModels.models.some((model) => model.id === poolID));
+  assert.ok(explicitModels.models.some((model) => model.id === routeID));
+  await inference(explicit);
+
   await invokeCLI(["--no-telemetry", "agents", "remove", "conductor"]);
   await assert.rejects(access(wrapper), { code: "ENOENT" });
   await assert.rejects(run(wrapper, ["--version"], cliOptions), { code: "ENOENT" });
   assert.equal(await readFile(join(normalCodex, "config.toml"), "utf8"), normalConfig);
   assert.equal(await readFile(join(normalCodex, "auth.json"), "utf8"), normalAuth);
   assert.ifError(fixtureError);
-  console.log(`Conductor ${runtimeVersion}; Codex ${version}: actual model discovery, selected route SSE completion, key rotation, explicit project header, removal, and normal Codex preservation passed. Fake keys and loopback only.`);
+  console.log(`Conductor ${runtimeVersion}; Codex ${version}: compact pool/route discovery, exact pool/route/provider SSE completion, provider opt-in enable/disable, explicit provider exception, key rotation, project headers, removal, and normal Codex preservation passed. Fake keys and loopback only.`);
 } finally {
   await Promise.all([...children].map(stop));
   server.closeAllConnections();

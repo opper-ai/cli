@@ -42,6 +42,13 @@ describe("agent command options", () => {
     expect(commands.remove).toHaveBeenCalledExactlyOnceWith("conductor", undefined);
   });
 
+  it.each(["all", "pools,routes"])("parses Conductor catalog selection %s", async (modelKinds) => {
+    await program().parseAsync(["agents", "configure", "conductor", "--model-kinds", modelKinds], { from: "user" });
+    expect(commands.configure).toHaveBeenCalledExactlyOnceWith(
+      "conductor", "default", undefined, undefined, undefined, { modelKinds },
+    );
+  });
+
   it("parses --codex-home for removal", async () => {
     await program().parseAsync(["agents", "remove", "codex-desktop", "--codex-home=/tmp/Codex Home"], { from: "user" });
     expect(commands.remove).toHaveBeenCalledExactlyOnceWith("codex-desktop", "/tmp/Codex Home");

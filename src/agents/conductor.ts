@@ -8,7 +8,7 @@ import { configPath, opperHome } from "../auth/paths.js";
 import { OPPER_HOST } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperError } from "../errors.js";
-import { fetchCodexModelCatalog } from "../setup/codex-models.js";
+import { fetchConductorModelCatalog } from "../setup/conductor-models.js";
 import { run } from "../util/run.js";
 import type { AgentAdapter, ConfigureOptions } from "./types.js";
 
@@ -120,6 +120,7 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
 
 async function configure(opts: ConfigureOptions = {}): Promise<void> {
   if (opts.codexHome !== undefined || opts.desktopProxy) throw new OpperError("INVALID_ARGUMENT", "Conductor uses its managed Codex executable; --codex-home and --proxy are not supported.");
+  if (opts.modelKinds !== undefined && opts.modelKinds !== "pools,routes" && opts.modelKinds !== "all") throw new OpperError("INVALID_ARGUMENT", "--model-kinds must be pools,routes or all.");
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Conductor requires a stored Opper credential for future GUI sessions.", "Store the key with opper login, then unset OPPER_API_KEY before configuring.");
   if (!findRuntime()) throw new OpperError("AGENT_NOT_FOUND", "Conductor with a managed Codex runtime 0.153.4 or later was not found.", "Install Conductor and initialize its Codex harness, then retry.");
   const keyName = opts.keyName ?? "default", slot = await getSlot(keyName);
@@ -129,7 +130,7 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   const selectedHost = rootUrl(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? host);
   if (selectedHost !== host || (opts.apiKey !== undefined && opts.apiKey !== slot.apiKey)) throw conflict("The selected credential or API host differs from its stored slot. Retry with the matching slot.");
   const model = opts.model ?? DEFAULT_MODELS.opus;
-  const catalog = await fetchCodexModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(opts.projectUuid ? {projectUuid: opts.projectUuid} : {})}, model);
+  const catalog = await fetchConductorModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(opts.projectUuid ? {projectUuid: opts.projectUuid} : {})}, model, opts.modelKinds ?? "pools,routes");
   const p = paths(), binding = {configPath: resolve(configPath()), keyName, host, org: slot.orgId === undefined ? null : String(slot.orgId)};
   await locked(async () => {
     await regular(p.directory, true);
@@ -198,7 +199,7 @@ try {
       throw error;
     }
   });
-  console.log(`Prepared Conductor (Codex): ${join(p.directory, "codex")}\nIn Conductor, choose Settings → Agents → Codex → CLI, then select this custom executable. Restart its Codex sessions and select an Opper model. Prepared files do not verify your UI selection. Re-run configure to refresh the model catalog.`);
+  console.log(`Prepared Conductor (Codex): ${join(p.directory, "codex")}\nIn Settings → Agents → Codex → CLI, select this custom executable. The CLI account badge does not check this Opper provider.\nIn Add models → Default models → Codex, enable the wanted models, then start a new Codex chat.\nCatalog: ${catalog.models.length} models (${opts.modelKinds ?? "pools,routes"}); reconfigure to refresh, or use --model-kinds all for provider deployments. UI selection is not verified.`);
 }
 
 async function unconfigure(): Promise<void> {
