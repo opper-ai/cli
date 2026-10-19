@@ -69,6 +69,22 @@ describe("agentsListCommand", () => {
       log.mockRestore();
     }
   });
+
+  it("prints a usable setup command for a configure-only Conductor integration", async () => {
+    const registry = await import("../../src/agents/registry.js");
+    vi.spyOn(registry, "listAdapters").mockReturnValueOnce([{
+      name: "conductor", displayName: "Conductor (Codex)", docsUrl: "https://www.conductor.build",
+      detect: vi.fn().mockResolvedValue({ installed: true }),
+      isConfigured: vi.fn().mockResolvedValue(false), configure: vi.fn(), unconfigure: vi.fn(),
+    }]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await agentsListCommand();
+      const output = log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("opper agents configure conductor");
+      expect(output).not.toContain("opper editors conductor");
+    } finally { log.mockRestore(); }
+  });
 });
 
 describe("agentsRemoveCommand", () => {

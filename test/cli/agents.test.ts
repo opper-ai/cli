@@ -28,6 +28,20 @@ describe("agent command options", () => {
     expect(commands.configure).toHaveBeenCalledExactlyOnceWith("codex-desktop", "prod", "claude-sonnet-5", "/tmp/Codex Home", undefined);
   });
 
+  it("parses Conductor setup with the selected slot, dynamic route and project", async () => {
+    const projectUuid = "11111111-1111-4111-8111-111111111111";
+    await program().parseAsync(["--key", "work", "--project-uuid", projectUuid,
+      "agents", "configure", "conductor", "--model", "dynamic/coding"], { from: "user" });
+    expect(commands.configure).toHaveBeenCalledExactlyOnceWith(
+      "conductor", "work", "dynamic/coding", undefined, projectUuid,
+    );
+  });
+
+  it("parses removal of the managed Conductor integration", async () => {
+    await program().parseAsync(["agents", "remove", "conductor"], { from: "user" });
+    expect(commands.remove).toHaveBeenCalledExactlyOnceWith("conductor", undefined);
+  });
+
   it("parses --codex-home for removal", async () => {
     await program().parseAsync(["agents", "remove", "codex-desktop", "--codex-home=/tmp/Codex Home"], { from: "user" });
     expect(commands.remove).toHaveBeenCalledExactlyOnceWith("codex-desktop", "/tmp/Codex Home");

@@ -22,4 +22,12 @@ describe("adapter registry", () => {
     expect(adapter?.displayName).toBe("Claude Desktop");
     expect(typeof adapter?.spawn).toBe("function");
   });
+
+  it("registers Conductor as a configure-only Codex integration", () => {
+    const adapter = getAdapter("conductor");
+    expect(adapter?.displayName).toBe("Conductor (Codex)");
+    expect(adapter?.spawn).toBeUndefined();
+    expect(typeof adapter?.configure).toBe("function");
+    expect(typeof adapter?.unconfigure).toBe("function");
+  });
 });

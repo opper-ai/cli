@@ -42,7 +42,7 @@ export async function agentsListCommand(): Promise<void> {
   const launchLabel = (r: Row) =>
     r.launchable
       ? `opper launch ${r.name}`
-      : `opper editors ${r.name}`;
+      : `opper agents configure ${r.name}`;
 
   // Compute widths from uncoloured strings; apply colour after padEnd.
   const w = {
