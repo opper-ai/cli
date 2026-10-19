@@ -136,7 +136,7 @@ opper launch claude --resume
 | OpenCode | `opencode` | provider block in `~/.config/opencode/opencode.json` |
 | Codex CLI | `codex` | per-invocation Responses provider and model overrides; preserves shared configuration and supports current native profile files |
 | Codex / ChatGPT desktop | `codex-desktop` | configures local Codex tasks on macOS with a persistent Responses provider, selected-key credential helper, and live Opper model catalog |
-| Conductor (Codex, macOS) | `conductor` | prepares a custom Codex executable with the selected CLI login and Opper model catalog; select it once in Conductor |
+| Conductor (Codex, macOS) | `conductor` | configures CLI mode and a custom Codex executable in Conductor's user settings, using the selected CLI login and Opper pool/route catalog |
 | Hermes | `hermes` | isolated `HERMES_HOME=~/.opper/hermes-home/` so your real `~/.hermes/` is never touched; `OPENAI_API_KEY` env var |
 | OpenClaw | `openclaw` | `opper` provider entry in `~/.openclaw/agents/main/agent/models.json`; `opper launch openclaw` defaults to `gateway start` (background daemon) |
 | Pi | `pi` | temporary extension registers Opper in memory; the CLI leaves `models.json` and installed extensions unchanged |
@@ -232,23 +232,26 @@ opper login
 opper --key default agents configure conductor --model claude-sonnet-5
 ```
 
-The command prints a custom executable path, normally `~/.opper/conductor/codex`.
-In Conductor, open **Settings → Agents → Codex** (called **Harnesses** in some
-versions), choose **CLI** mode and select that path as the custom Codex executable,
-then restart Conductor. In a workspace, create a new chat with **+**, open the
+The command selects **CLI** mode and the generated Codex executable (normally
+`~/.opper/conductor/codex`) in Conductor's user settings automatically. Restart
+Conductor. In a workspace, create a new chat with **+**, open the
 model picker, and choose **Add models**. In **Default models**, enable the wanted
 Opper model in the **Codex** column. Go back to the new chat and select it in the
-picker before sending a message. Setup prepares the executable; the CLI cannot
-verify that you selected it in the app. This integration covers Conductor's
-Codex agent.
+picker before sending a message. This integration covers Conductor's Codex agent.
+Repository settings can override the user defaults; if a repository still uses
+another executable or provider, check its Conductor settings.
 
 Conductor may still show **CLI not authenticated** in settings: that badge checks
 the normal Codex account, while this integration retrieves credentials from the
 Opper CLI login. You do not need to run `codex login` for the Opper connection.
 
-The executable uses invocation-specific provider and catalog settings. It does
-not edit `~/.codex/config.toml`, Conductor's settings, or the settings used by
-ordinary Codex launches. The API key stays in the CLI credential store and is
+Setup updates only `codex_provider` and `codex_executable_path` in
+`~/.conductor/settings.toml`, preserving unrelated settings and recording the
+previous values for removal. If an earlier manual setup already selected this
+generated executable, removal clears that path to return to Conductor's bundled
+Codex. The executable uses invocation-specific provider and catalog settings;
+ordinary Codex settings in `~/.codex/config.toml` remain unchanged.
+The API key stays in the CLI credential store and is
 read from the selected slot when Codex refreshes credentials. Renewing that slot
 within the same organization and API host works without copying another key
 into Conductor. Deleting or expiring the slot stops credential retrieval;
@@ -283,9 +286,10 @@ To remove the generated integration:
 opper agents remove conductor
 ```
 
-Restore Conductor's managed Codex executable selection and restart the app.
-Removal leaves normal Codex settings and unrelated files alone, and refuses to
-overwrite or delete generated files that were independently changed.
+Removal restores the saved Conductor selections where they are still owned;
+restart the app before starting another session. It preserves independent
+settings edits. Conflicting managed settings or changed generated files are
+reported for manual resolution.
 
 ### Local inference proxy and sessions (prototype)
 
@@ -908,8 +912,9 @@ npm run build
 CONDUCTOR_INTEGRATION=1 node test/integration/conductor.mjs
 ```
 
-It uses isolated settings and synthetic credentials to check catalog discovery,
-route selection, credential renewal, and removal. It does not make paid inference
+It uses isolated settings and synthetic credentials to check automatic executable
+selection, pool/route discovery, provider opt-in, credential renewal, and restoring
+previous settings on removal. It does not make paid inference
 calls or change the normal Conductor/Codex settings. GUI model selection and
 live gateway inference are separate acceptance checks.
 

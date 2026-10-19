@@ -9,11 +9,12 @@ import { OPPER_HOST } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperError } from "../errors.js";
 import { fetchConductorModelCatalog } from "../setup/conductor-models.js";
+import { configureConductorSettings, parseConductorSettingsBackup, restoreConductorSettings } from "../setup/conductor-settings.js";
 import { run } from "../util/run.js";
 import type { AgentAdapter, ConfigureOptions } from "./types.js";
 
 const REQUIRED = ["codex", "launcher.mjs", "auth.mjs", "catalog.json"] as const;
-const OPTIONAL = ["node", "NODE-LICENSE"] as const;
+const OPTIONAL = ["node", "NODE-LICENSE", "settings.json"] as const;
 const FILES = [...REQUIRED, ...OPTIONAL, "state.json"];
 type Artifact = { data: Buffer; mode: number };
 type State = { version: 1; files: Record<string, { sha256: string; mode: number }> };
@@ -24,6 +25,7 @@ function paths() {
   return { home, directory: join(home, "conductor"), lock: join(home, ".conductor.lock") };
 }
 function binaryRoot() { return join(homedir(), "Library", "Application Support", "com.conductor.app", "agent-binaries", "codex"); }
+function settingsPath() { return join(homedir(), ".conductor", "settings.toml"); }
 function rootUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new OpperError("INVALID_ARGUMENT", "Opper API root must be an HTTP(S) URL."); }
@@ -67,6 +69,13 @@ async function snapshot(directory: string): Promise<Map<string, Artifact>> {
   }
   return files;
 }
+async function readArtifact(path: string): Promise<Artifact | null> {
+  if (!await regular(path)) return null;
+  return {data: await readFile(path), mode: (await lstat(path)).mode & 0o777};
+}
+function sameArtifact(left: Artifact | null, right: Artifact | null): boolean {
+  return left === null || right === null ? left === right : left.mode === right.mode && left.data.equals(right.data);
+}
 function stateOf(files: Map<string, Artifact>): State | undefined {
   const raw = files.get("state.json");
   if (!raw) {
@@ -81,6 +90,7 @@ function stateOf(files: Map<string, Artifact>): State | undefined {
       Object.entries(state.files).some(([name, value]) => ![...REQUIRED, ...OPTIONAL].includes(name as typeof REQUIRED[number]) || !/^[a-f0-9]{64}$/.test(value?.sha256) || ![0o600, 0o700].includes(value?.mode))) {
     throw conflict("Invalid Conductor integration ownership state; preserve its files before retrying.");
   }
+  if (state.files["settings.json"] && !files.has("settings.json")) throw conflict("The tracked Conductor settings backup is missing; preserve the integration before retrying.");
   for (const [name, artifact] of files) {
     if (name === "state.json") continue;
     const expected = state.files[name];
@@ -95,6 +105,31 @@ async function atomic(path: string, artifact: Artifact): Promise<void> {
     await writeFile(temporary, artifact.data, {flag: "wx", mode: artifact.mode}); created = true;
     await chmod(temporary, artifact.mode); await rename(temporary, path);
   } finally { if (created) await rm(temporary, {force: true}); }
+}
+interface Change { path: string; previous: Artifact | null; next: Artifact | null }
+async function applyChange(change: Change): Promise<void> {
+  if (!sameArtifact(await readArtifact(change.path), change.previous)) throw conflict(`Conductor settings or integration files changed during setup: ${change.path}. Changes were preserved.`);
+  if (change.next) await atomic(change.path, change.next); else await rm(change.path, {force: true});
+}
+async function transaction(changes: Change[]): Promise<void> {
+  const applied: Change[] = [];
+  try {
+    for (const change of changes) {
+      if (sameArtifact(change.previous, change.next)) {
+        if (!sameArtifact(await readArtifact(change.path), change.previous)) throw conflict(`Conductor settings or integration files changed during setup: ${change.path}. Changes were preserved.`);
+        continue;
+      }
+      await applyChange(change); applied.push(change);
+    }
+  } catch (error) {
+    let rollbackFailed = false;
+    for (const change of applied.reverse()) {
+      try { await applyChange({path: change.path, previous: change.next, next: change.previous}); }
+      catch { rollbackFailed = true; }
+    }
+    if (rollbackFailed) throw conflict("Concurrent edits or a filesystem failure prevented complete Conductor rollback. Existing files were preserved; inspect the settings and integration before retrying.");
+    throw error;
+  }
 }
 async function locked<T>(fn: () => Promise<T>): Promise<T> {
   const p = paths(); await regular(p.home, true); await mkdir(p.home, {recursive: true, mode: 0o700});
@@ -135,7 +170,12 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   await locked(async () => {
     await regular(p.directory, true);
     const previous = await snapshot(p.directory), state = stateOf(previous);
+    const settings = settingsPath(); await regular(dirname(settings), true);
+    const originalSettings = await readArtifact(settings);
+    const backup = previous.get("settings.json");
+    const configured = configureConductorSettings(originalSettings?.data.toString() ?? null, join(p.directory, "codex"), backup ? parseConductorSettingsBackup(backup.data.toString()) : undefined);
     await mkdir(p.directory, {recursive: true, mode: 0o700});
+    await mkdir(dirname(settings), {recursive: true, mode: 0o700});
     const bundled = process.env.OPPER_DISTRIBUTION === "bundle";
     const node = bundled ? join(p.directory, "node") : await nodeLauncher();
     const helper = `import {readFileSync} from "node:fs";
@@ -181,25 +221,16 @@ try {
     const add = (name: string, data: string | Buffer, mode = 0o600) => generated.set(name, {data: Buffer.isBuffer(data) ? data : Buffer.from(data), mode});
     add("codex", `#!/bin/sh\nexec ${shellQuote(node)} ${shellQuote(join(p.directory, "launcher.mjs"))} "$@"\n`, 0o700);
     add("launcher.mjs", launcher); add("auth.mjs", helper); add("catalog.json", JSON.stringify(catalog, null, 2) + "\n");
+    add("settings.json", JSON.stringify(configured.backup, null, 2) + "\n");
     if (bundled) { add("node", await readFile(process.execPath), 0o700); add("NODE-LICENSE", await readFile(join(dirname(process.execPath), "NODE-LICENSE"))); }
     const next: State = {version: 1, files: Object.fromEntries([...generated].map(([name, artifact]) => [name, {sha256: digest(artifact.data), mode: artifact.mode}]))};
     add("state.json", JSON.stringify(next, null, 2) + "\n");
-    const changed: string[] = [];
-    try {
-      for (const name of FILES) {
-        const artifact = generated.get(name);
-        if (artifact) { await atomic(join(p.directory, name), artifact); changed.push(name); }
-        else if (state?.files[name] && previous.has(name)) { await rm(join(p.directory, name)); changed.push(name); }
-      }
-    } catch (error) {
-      for (const name of changed.reverse()) {
-        const original = previous.get(name);
-        if (original) await atomic(join(p.directory, name), original); else await rm(join(p.directory, name), {force: true});
-      }
-      throw error;
-    }
+    const changes: Change[] = FILES.filter(name => name !== "state.json" && (generated.has(name) || state?.files[name])).map(name => ({path: join(p.directory, name), previous: previous.get(name) ?? null, next: generated.get(name) ?? null}));
+    changes.push({path: settings, previous: originalSettings, next: {data: Buffer.from(configured.text), mode: originalSettings?.mode ?? 0o600}});
+    changes.push({path: join(p.directory, "state.json"), previous: previous.get("state.json") ?? null, next: generated.get("state.json")!});
+    await transaction(changes);
   });
-  console.log(`Prepared Conductor (Codex): ${join(p.directory, "codex")}\nIn Settings → Agents → Codex → CLI, select this custom executable. The CLI account badge does not check this Opper provider.\nIn Add models → Default models → Codex, enable the wanted models, then start a new Codex chat.\nCatalog: ${catalog.models.length} models (${opts.modelKinds ?? "pools,routes"}); reconfigure to refresh, or use --model-kinds all for provider deployments. UI selection is not verified.`);
+  console.log(`Configured Conductor (Codex): ${join(p.directory, "codex")}\nSelected CLI mode and the Opper executable in user settings (~/.conductor/settings.toml); repository or managed overrides may take precedence. Quit and reopen Conductor.\nIn Add models → Default models → Codex, enable the wanted models, then start a new Codex chat. The CLI account badge does not check this Opper provider.\nCatalog: ${catalog.models.length} models (${opts.modelKinds ?? "pools,routes"}); reconfigure to refresh, or use --model-kinds all for provider deployments.`);
 }
 
 async function unconfigure(): Promise<void> {
@@ -208,18 +239,36 @@ async function unconfigure(): Promise<void> {
   await locked(async () => {
     const files = await snapshot(p.directory), state = stateOf(files);
     if (!state) return;
-    for (const name of Object.keys(state.files)) if (files.has(name)) await rm(join(p.directory, name));
-    await rm(join(p.directory, "state.json"));
+    const changes: Change[] = [];
+    const backup = files.get("settings.json");
+    if (backup) {
+      const settings = settingsPath(); await regular(dirname(settings), true);
+      const current = await readArtifact(settings);
+      const restored = restoreConductorSettings(current?.data.toString() ?? null, parseConductorSettingsBackup(backup.data.toString()));
+      changes.push({path: settings, previous: current, next: restored === null ? null : {data: Buffer.from(restored), mode: current?.mode ?? 0o600}});
+    }
+    for (const name of [...Object.keys(state.files), "state.json"]) if (files.has(name)) changes.push({path: join(p.directory, name), previous: files.get(name)!, next: null});
+    await transaction(changes);
     try { await rmdir(p.directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error; }
   });
-  console.log("Removed the prepared Conductor integration. Restore the managed Codex executable in Conductor settings before starting another session.");
+  console.log("Removed the Conductor integration and restored its previous selection where still owned. For legacy manual setup, restore Conductor's managed Codex executable in Settings. Quit and reopen Conductor before starting another session.");
 }
 
 export const conductor: AgentAdapter = {
   name: "conductor", displayName: "Conductor (Codex)", docsUrl: "https://www.conductor.build/docs/reference/harnesses/codex",
   async detect() { const runtime = findRuntime(); return {installed: runtime !== undefined, ...(runtime ? {version: runtime.version} : {}), configPath: join(paths().directory, "codex")}; },
   async isConfigured() {
-    try { const files = await snapshot(paths().directory), state = stateOf(files); return state !== undefined && Object.keys(state.files).every(name => files.has(name)); } catch { return false; }
+    try {
+      const files = await snapshot(paths().directory), state = stateOf(files);
+      if (!state || !Object.keys(state.files).every(name => files.has(name))) return false;
+      const backup = files.get("settings.json");
+      if (backup) {
+        await regular(dirname(settingsPath()), true);
+        const settings = await readArtifact(settingsPath());
+        configureConductorSettings(settings?.data.toString() ?? null, join(paths().directory,"codex"), parseConductorSettingsBackup(backup.data.toString()));
+      }
+      return true;
+    } catch { return false; }
   },
   configure, unconfigure,
 };

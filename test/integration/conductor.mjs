@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 
 const run = promisify(execFile);
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -62,6 +63,13 @@ const temporary = await mkdtemp("/tmp/oc-");
 const opperHome = join(home, ".opper");
 const configPath = join(opperHome, "config.json");
 const wrapper = join(opperHome, "conductor", "codex");
+const conductorSettingsPath = join(home, ".conductor", "settings.toml");
+const previousExecutable = join(home, "previous-codex");
+const originalConductorSettings = '# Existing Conductor preferences\n' +
+  "codex_provider = 'custom' # Previous authentication choice\n" +
+  `codex_executable_path = ${JSON.stringify(previousExecutable)} # Previous executable\n` +
+  'wrap_lines = true # Preserve this preference\nterminal_font_size = "14"\n' +
+  '[git]\nbranch_prefix_custom = "keep-this-prefix"\n';
 const normalCodex = join(home, ".codex");
 const normalConfig = 'model = "synthetic-normal-codex"\nmodel_provider = "openai"\nweb_search = "cached"\n';
 const normalAuth = '{"OPENAI_API_KEY":"synthetic-normal-auth"}\n';
@@ -230,17 +238,29 @@ async function withSidecar(operation) {
     await stop(child);
   }
 }
-const listModels = () => withSidecar(({ rpc }) => rpc("listCodexModels", {
-  type: "list_codex_models", agentType: "codex", cwd: home, codexExecutablePath: wrapper,
-}));
+async function selectedExecutable() {
+  // Read the operator-facing file independently of the adapter's settings
+  // helper, then pass that selected value through Conductor's shipped RPC.
+  const settings = getStaticTOMLValue(parseTOML(await readFile(conductorSettingsPath, "utf8")));
+  assert.equal(settings.codex_provider, "default", "configure selects Conductor's CLI authentication mode");
+  assert.equal(settings.codex_executable_path, wrapper, "configure selects the generated executable in Conductor's real settings file");
+  return settings.codex_executable_path;
+}
+const listModels = async () => {
+  const executablePath = await selectedExecutable();
+  return withSidecar(({ rpc }) => rpc("listCodexModels", {
+    type: "list_codex_models", agentType: "codex", cwd: home, codexExecutablePath: executablePath,
+  }));
+};
 async function inference(selected) {
   expectedInferenceModel = selected.id;
   const before = requests.length;
+  const executablePath = await selectedExecutable();
   await withSidecar(async ({ rpc, events, waitFor }) => {
     const id = `synthetic-${requests.length}`;
     await rpc("query", { type: "query", id, agentType: "codex", message: "Synthetic integration probe",
       prompt: "Reply with the synthetic gateway result without using tools.", options: {
-        cwd: home, model: selected.id, codexExecutablePath: wrapper,
+        cwd: home, model: selected.id, codexExecutablePath: executablePath,
         initialCodexApprovalPolicy: "never", initialCodexSandboxMode: "read-only",
         localExecutionMcpEnabled: false, getDiffCommentsEnabled: false, progressUpdatesEnabled: false,
       } });
@@ -270,6 +290,8 @@ try {
   await mkdir(normalCodex, { recursive: true });
   await writeFile(join(normalCodex, "config.toml"), normalConfig);
   await writeFile(join(normalCodex, "auth.json"), normalAuth, { mode: 0o600 });
+  await mkdir(dirname(conductorSettingsPath), { recursive: true });
+  await writeFile(conductorSettingsPath, originalConductorSettings);
   const version = (await run(codex, ["--version"], { cwd: home, env, timeout: 5000 })).stdout.match(/codex-cli (\d+\.\d+\.\d+)/)?.[1];
   assert.ok(version, "the selected bundled executable identifies as Codex");
   const runtimeVersion = (await run(runtime, ["--version"], { cwd: home, env, timeout: 5000 })).stdout.trim();
@@ -293,6 +315,14 @@ try {
   const configured = await configure(poolID);
   assert.ok(configured.stdout.includes(wrapper), "the operator receives the actual generated executable path");
   await access(wrapper, constants.X_OK);
+  await selectedExecutable();
+  const configuredSettings = await readFile(conductorSettingsPath, "utf8");
+  assert.ok(configuredSettings.includes('# Existing Conductor preferences\n'));
+  assert.ok(configuredSettings.includes('wrap_lines = true # Preserve this preference\n'));
+  assert.ok(configuredSettings.includes('[git]\nbranch_prefix_custom = "keep-this-prefix"\n'));
+  // A real user preference edit made after setup must survive both repeated
+  // reconfiguration and restoration of only the two owned settings fields.
+  await writeFile(conductorSettingsPath, configuredSettings.replace('terminal_font_size = "14"', 'terminal_font_size = "16"'));
   if (cliBinary) {
     await access(join(dirname(wrapper), "node"), constants.X_OK);
     await access(join(dirname(wrapper), "NODE-LICENSE"));
@@ -344,10 +374,13 @@ try {
   await invokeCLI(["--no-telemetry", "agents", "remove", "conductor"]);
   await assert.rejects(access(wrapper), { code: "ENOENT" });
   await assert.rejects(run(wrapper, ["--version"], cliOptions), { code: "ENOENT" });
+  assert.equal(await readFile(conductorSettingsPath, "utf8"),
+    originalConductorSettings.replace('terminal_font_size = "14"', 'terminal_font_size = "16"'),
+    "remove restores the previous provider/executable and preserves unrelated comments and edits");
   assert.equal(await readFile(join(normalCodex, "config.toml"), "utf8"), normalConfig);
   assert.equal(await readFile(join(normalCodex, "auth.json"), "utf8"), normalAuth);
   assert.ifError(fixtureError);
-  console.log(`Conductor ${runtimeVersion}; Codex ${version}: compact pool/route discovery, exact pool/route/provider SSE completion, provider opt-in enable/disable, explicit provider exception, key rotation, project headers, removal, and normal Codex preservation passed. Fake keys and loopback only.`);
+  console.log(`Conductor ${runtimeVersion}; Codex ${version}: automatic settings selection, compact pool/route discovery, exact pool/route/provider SSE completion, provider opt-in enable/disable, explicit provider exception, key rotation, project headers, settings restoration, and normal Codex preservation passed. Fake keys and loopback only.`);
 } finally {
   await Promise.all([...children].map(stop));
   server.closeAllConnections();

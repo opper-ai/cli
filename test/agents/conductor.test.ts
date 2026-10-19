@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -7,14 +7,18 @@ import { once } from "node:events";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
 import { readDesktopConfig } from "../../src/setup/codex-desktop-config.js";
 
-const mocks = vi.hoisted(() => ({ home: "", platform: "darwin", run: vi.fn(), catalog: vi.fn(), failRename: "" }));
+const mocks = vi.hoisted(() => ({ home: "", platform: "darwin", run: vi.fn(), catalog: vi.fn(), failRename: "", failRemove: "", beforeRename: undefined as ((to: string) => void) | undefined }));
 vi.mock("node:os", async () => ({ ...await vi.importActual<typeof import("node:os")>("node:os"), homedir: () => mocks.home, platform: () => mocks.platform }));
 vi.mock("../../src/util/run.js", () => ({ run: mocks.run }));
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {...actual, rename: async (from: string, to: string) => {
     if (to === mocks.failRename) {mocks.failRename="";throw new Error("synthetic mid-write failure");}
+    mocks.beforeRename?.(to);
     return actual.rename(from,to);
+  }, rm: async (path: string, options?: Parameters<typeof actual.rm>[1]) => {
+    if(path===mocks.failRemove){mocks.failRemove="";throw new Error("synthetic removal failure");}
+    return actual.rm(path,options);
   }};
 });
 vi.mock("../../src/setup/conductor-models.js", async () => ({ ...await vi.importActual<typeof import("../../src/setup/conductor-models.js")>("../../src/setup/conductor-models.js"), fetchConductorModelCatalog: mocks.catalog }));
@@ -47,7 +51,7 @@ function contents() { return Object.fromEntries(readdirSync(managed).map(name =>
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "opper conductor "));mocks.home=home;managed=join(home,".opper/conductor");
-  mocks.platform="darwin";mocks.failRename="";vi.stubEnv("OPPER_HOME", join(home,".opper"));vi.stubEnv("OPPER_API_KEY", undefined);vi.stubEnv("OPPER_BASE_URL", undefined);vi.stubEnv("OPPER_DISTRIBUTION", undefined);
+  mocks.platform="darwin";mocks.failRename="";mocks.failRemove="";mocks.beforeRename=undefined;vi.stubEnv("OPPER_HOME", join(home,".opper"));vi.stubEnv("OPPER_API_KEY", undefined);vi.stubEnv("OPPER_BASE_URL", undefined);vi.stubEnv("OPPER_DISTRIBUTION", undefined);
   mocks.run.mockReset();mocks.run.mockImplementation((cmd: string) => ({code: 0,stdout: cmd.endsWith("plutil") ? "com.conductor.app" : "codex-cli 0.162.1",stderr:""}));
   mocks.catalog.mockReset();mocks.catalog.mockImplementation(async (_context, selected, kinds) => toConductorModelCatalog([{id:model,opper:{kind:"dynamic_route",capabilities:["tools"]}},{id:"synthetic/extra",opper:{kind:"model",type:"llm",capabilities:["tools"]}}],selected,kinds));
   await setSlot("test",{apiKey:key,baseUrl:host,orgId:42});runtime();vi.spyOn(console,"log").mockImplementation(()=>{});
@@ -125,7 +129,7 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
   });
   it("rolls back an interrupted write without partial artifacts on setup or refresh",async()=>{
     mocks.failRename=join(managed,"catalog.json");await expect(conductor.configure(options())).rejects.toThrow("synthetic mid-write failure");expect(readdirSync(managed)).toEqual([]);
-    await conductor.configure(options());const before=contents();mocks.failRename=join(managed,"catalog.json");await expect(conductor.configure(options())).rejects.toThrow("synthetic mid-write failure");expect(contents()).toEqual(before);expect(await conductor.isConfigured()).toBe(true);
+    await conductor.configure(options());const before=contents();mocks.failRename=join(managed,"catalog.json");await expect(conductor.configure({...options(),model:"synthetic/extra",modelKinds:"all"})).rejects.toThrow("synthetic mid-write failure");expect(contents()).toEqual(before);expect(await conductor.isConfigured()).toBe(true);
   });
   it("keeps bundled Node and authentication working after the original distribution is removed",async()=>{
     const bundle=join(home,"distribution");mkdirSync(bundle);
@@ -146,5 +150,55 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
       const [output]=await once(child.stdout,"data");const codexPid=Number(String(output).trim());expect(Number.isSafeInteger(codexPid)).toBe(true);
       const exited=once(child,"exit");child.kill("SIGTERM");expect(await exited).toEqual([null,"SIGTERM"]);expect(()=>process.kill(codexPid,0)).toThrow();
     } finally {clearTimeout(deadline);if(child.exitCode===null&&child.signalCode===null)child.kill("SIGKILL");}
+  });
+  it("automatically selects CLI mode and restores previous settings, comments and mode on removal",async()=>{
+    const path=join(home,".conductor/settings.toml");mkdirSync(dirname(path));
+    const original="# preserve\ncodex_provider = 'custom'\ncodex_executable_path = '/previous/codex'\nprivate_token = 'do-not-back-up'\n";
+    writeFileSync(path,original);chmodSync(path,0o640);await conductor.configure(options());
+    const configured=readFileSync(path,"utf8");expect(readDesktopConfig(configured)).toMatchObject({codex_provider:"default",codex_executable_path:join(managed,"codex")});expect(statSync(path).mode&0o777).toBe(0o640);
+    expect(Object.values(contents()).join("\n")).not.toContain("do-not-back-up");
+    await conductor.configure(options());writeFileSync(path,configured+"# independent edit\n");await conductor.unconfigure();
+    expect(readFileSync(path,"utf8")).toBe(original+"# independent edit\n");expect(statSync(path).mode&0o777).toBe(0o640);
+  });
+  it("removes a newly created settings file only when no independent content remains",async()=>{
+    const path=join(home,".conductor/settings.toml");await conductor.configure(options());expect(existsSync(path)).toBe(true);await conductor.unconfigure();expect(existsSync(path)).toBe(false);
+    await conductor.configure(options());writeFileSync(path,readFileSync(path,"utf8")+"theme = 'dark'\n");await conductor.unconfigure();expect(readFileSync(path,"utf8")).toBe("theme = 'dark'\n");
+  });
+  it("protects a missing or edited tracked settings backup",async()=>{
+    await conductor.configure(options());const path=join(managed,"settings.json"),backup=readFileSync(path);
+    rmSync(path);await expect(conductor.configure(options())).rejects.toThrow(/backup is missing/);await expect(conductor.unconfigure()).rejects.toThrow(/backup is missing/);expect(await conductor.isConfigured()).toBe(false);
+    writeFileSync(path,Buffer.concat([backup,Buffer.from(" ")]));await expect(conductor.configure(options())).rejects.toThrow(/settings.json changed/);await expect(conductor.unconfigure()).rejects.toThrow(/settings.json changed/);
+  });
+  it("preserves independent selection changes and avoids removing a wrapper still in use with an edited provider",async()=>{
+    const path=join(home,".conductor/settings.toml");await conductor.configure(options());
+    writeFileSync(path,readFileSync(path,"utf8").replace('"default"','"custom"'));const before=contents();
+    await expect(conductor.configure(options())).rejects.toThrow(/changed/);await expect(conductor.unconfigure()).rejects.toThrow(/provider changed/);expect(contents()).toEqual(before);
+    const changed=readFileSync(path,"utf8").replace(join(managed,"codex"),"/new/codex");writeFileSync(path,changed);await conductor.unconfigure();expect(readFileSync(path,"utf8")).toBe(changed);
+  });
+  it("rejects symlinked settings files and directories without changing their targets",async()=>{
+    const target=join(home,"personal.toml");writeFileSync(target,"theme = 'dark'\n");mkdirSync(join(home,".conductor"));symlinkSync(target,join(home,".conductor/settings.toml"));
+    await expect(conductor.configure(options())).rejects.toThrow(/linked/);expect(readFileSync(target,"utf8")).toBe("theme = 'dark'\n");
+    rmSync(join(home,".conductor"),{recursive:true});const targetDir=join(home,"private-settings");mkdirSync(targetDir);symlinkSync(targetDir,join(home,".conductor"));await expect(conductor.configure(options())).rejects.toThrow(/linked/);
+  });
+  it("rolls back managed files and external settings on failure before or after the settings write",async()=>{
+    const path=join(home,".conductor/settings.toml");mkdirSync(dirname(path));const original="codex_provider = 'custom'\n";writeFileSync(path,original);
+    for(const failedPath of [path,join(managed,"state.json")]){
+      mocks.failRename=failedPath;await expect(conductor.configure(options())).rejects.toThrow("synthetic mid-write failure");expect(readFileSync(path,"utf8")).toBe(original);expect(readdirSync(managed)).toEqual([]);
+    }
+  });
+  it("rolls back settings restoration if removing a managed file fails",async()=>{
+    const path=join(home,".conductor/settings.toml");await conductor.configure(options());const selected=readFileSync(path,"utf8"),before=contents();
+    mocks.failRemove=join(managed,"auth.mjs");await expect(conductor.unconfigure()).rejects.toThrow("synthetic removal failure");expect(contents()).toEqual(before);expect(readFileSync(path,"utf8")).toBe(selected);expect(await conductor.isConfigured()).toBe(true);
+  });
+  it("detects concurrent edits even when the planned external settings content is unchanged",async()=>{
+    const path=join(home,".conductor/settings.toml");await conductor.configure(options());const selected=readFileSync(path,"utf8"),before=contents();
+    mocks.beforeRename=(to)=>{if(to===join(managed,"catalog.json")){mocks.beforeRename=undefined;writeFileSync(path,selected+"# parallel edit\n");}};
+    await expect(conductor.configure({...options(),modelKinds:"all"})).rejects.toThrow(/changed during setup/);
+    expect(readFileSync(path,"utf8")).toBe(selected+"# parallel edit\n");expect(contents()).toEqual(before);
+  });
+  it("upgrades a legacy manual installation without later restoring a dead wrapper path",async()=>{
+    const path=join(home,".conductor/settings.toml");await conductor.configure(options());
+    const statePath=join(managed,"state.json"),state=JSON.parse(readFileSync(statePath,"utf8"));delete state.files["settings.json"];writeFileSync(statePath,JSON.stringify(state));rmSync(join(managed,"settings.json"));
+    await conductor.configure(options());await conductor.unconfigure();expect(readDesktopConfig(readFileSync(path,"utf8"))).toEqual({codex_provider:"default"});
   });
 });
