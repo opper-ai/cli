@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
+import { createRequire } from "node:module";
 import { setSlot, deleteSlot } from "../../src/auth/config.js";
 import { readDesktopConfig } from "../../src/setup/codex-desktop-config.js";
 
@@ -48,6 +49,21 @@ function authentication() {
 }
 function helper(auth=authentication()) { return spawnSync(auth.command, auth.args, {encoding: "utf8", timeout: 5000, env: {PATH: "", HOME: home}}); }
 function contents() { return Object.fromEntries(readdirSync(managed).map(name => [name, readFileSync(join(managed, name), "utf8")])); }
+async function holdSetupLock() {
+  const modulePath=createRequire(import.meta.url).resolve("proper-lockfile");
+  const script=`const lockfile=require(${JSON.stringify(modulePath)});lockfile.lock(process.argv[1],{lockfilePath:process.argv[2],realpath:false,stale:10000,update:2000}).then(()=>{process.send({ready:true});setInterval(()=>{},1000);}).catch(error=>{process.send({error:error.code});process.exit(1);});`;
+  const child=spawn(originalExecPath,["-e",script,managed,join(home,".opper/.conductor.lock")],{stdio:["ignore","ignore","ignore","ipc"]});
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const ready=await Promise.race([once(child,"message"),new Promise<never>((_,reject)=>{deadline=setTimeout(()=>reject(new Error("lock owner did not become ready")),3000);deadline.unref();})]);
+    expect(ready[0]).toEqual({ready:true});return child;
+  } catch(error) {if(child.exitCode===null&&child.signalCode===null){const stopped=once(child,"exit");child.kill("SIGKILL");await stopped;}throw error;}
+  finally {clearTimeout(deadline);}
+}
+async function stopSetupLockOwner(child: ReturnType<typeof spawn>) {
+  if(child.exitCode===null&&child.signalCode===null){const stopped=once(child,"exit");child.kill("SIGKILL");await stopped;}
+  expect(()=>process.kill(child.pid!,0)).toThrow();
+}
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "opper conductor "));mocks.home=home;managed=join(home,".opper/conductor");
@@ -200,5 +216,30 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
     const path=join(home,".conductor/settings.toml");await conductor.configure(options());
     const statePath=join(managed,"state.json"),state=JSON.parse(readFileSync(statePath,"utf8"));delete state.files["settings.json"];writeFileSync(statePath,JSON.stringify(state));rmSync(join(managed,"settings.json"));
     await conductor.configure(options());await conductor.unconfigure();expect(readDesktopConfig(readFileSync(path,"utf8"))).toEqual({codex_provider:"default"});
+  });
+  it("reclaims an expired setup lease after its owner is killed",async()=>{
+    const owner=await holdSetupLock();await stopSetupLockOwner(owner);
+    const lockPath=join(home,".opper/.conductor.lock"),expired=new Date(Date.now()-20000);utimesSync(lockPath,expired,expired);
+    await conductor.configure(options());expect(await conductor.isConfigured()).toBe(true);expect(existsSync(lockPath)).toBe(false);
+  });
+  it("does not steal an active owner's renewed lease beyond the stale interval",async()=>{
+    const owner=await holdSetupLock(),lockPath=join(home,".opper/.conductor.lock"),initial=statSync(lockPath);
+    try {
+      await new Promise(resolve=>setTimeout(resolve,11000));expect(statSync(lockPath).mtimeMs).toBeGreaterThan(initial.mtimeMs+6000);
+      await expect(conductor.configure(options())).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});
+      expect(statSync(lockPath).ino).toBe(initial.ino);expect(existsSync(managed)).toBe(false);
+    } finally {await stopSetupLockOwner(owner);}
+  },20000);
+  it("does not report successful removal while a first install owns the lease before creating its directory",async()=>{
+    const owner=await holdSetupLock();
+    try {expect(existsSync(managed)).toBe(false);await expect(conductor.unconfigure()).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});}
+    finally {await stopSetupLockOwner(owner);}
+    const lockPath=join(home,".opper/.conductor.lock"),expired=new Date(Date.now()-20000);utimesSync(lockPath,expired,expired);
+    await conductor.unconfigure();expect(existsSync(lockPath)).toBe(false);
+  });
+  it("preserves symlinked or non-directory setup lock paths",async()=>{
+    const path=join(home,".opper/.conductor.lock"),target=join(home,"personal-lock");mkdirSync(target);symlinkSync(target,path);
+    await expect(conductor.configure(options())).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});expect(existsSync(target)).toBe(true);
+    rmSync(path);writeFileSync(path,"user content");await expect(conductor.unconfigure()).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});expect(readFileSync(path,"utf8")).toBe("user content");
   });
 });

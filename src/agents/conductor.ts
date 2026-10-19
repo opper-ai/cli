@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import lockfile from "proper-lockfile";
 import { getSlot, isSlotExpired } from "../auth/config.js";
 import { configPath, opperHome } from "../auth/paths.js";
 import { OPPER_HOST } from "../config/endpoints.js";
@@ -133,11 +134,21 @@ async function transaction(changes: Change[]): Promise<void> {
 }
 async function locked<T>(fn: () => Promise<T>): Promise<T> {
   const p = paths(); await regular(p.home, true); await mkdir(p.home, {recursive: true, mode: 0o700});
-  try { await mkdir(p.lock, {mode: 0o700}); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw conflict("Another Conductor configuration is in progress. Retry after it finishes.");
+  await regular(p.lock, true);
+  let release: () => Promise<void>;
+  try {
+    release = await lockfile.lock(p.directory, {
+      // First setup has no integration directory yet. Refresh the lease while
+      // writing; killed writers (including the old mkdir lock) expire safely.
+      realpath: false, lockfilePath: p.lock, stale: 10_000, update: 2_000,
+      retries: {retries: 50, factor: 1, minTimeout: 40, maxTimeout: 40},
+      // Keep proper-lockfile's fail-fast behavior if our lease is compromised.
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOCKED") throw conflict("Another Conductor configuration is in progress. Retry after it finishes; an interrupted setup's lease expires after ten seconds.");
     throw error;
   }
-  try { return await fn(); } finally { await rmdir(p.lock); }
+  try { await chmod(p.lock, 0o700); return await fn(); } finally { await release(); }
 }
 function toml(value: unknown): string {
   if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") return JSON.stringify(value);
@@ -235,10 +246,12 @@ try {
 
 async function unconfigure(): Promise<void> {
   const p = paths();
-  if (!await regular(p.directory, true)) return;
-  await locked(async () => {
+  const removed = await locked(async () => {
+    // Serialize even before first setup creates the directory: otherwise a
+    // concurrent remove could report success and leave the new install behind.
+    if (!await regular(p.directory, true)) return false;
     const files = await snapshot(p.directory), state = stateOf(files);
-    if (!state) return;
+    if (!state) return false;
     const changes: Change[] = [];
     const backup = files.get("settings.json");
     if (backup) {
@@ -250,7 +263,9 @@ async function unconfigure(): Promise<void> {
     for (const name of [...Object.keys(state.files), "state.json"]) if (files.has(name)) changes.push({path: join(p.directory, name), previous: files.get(name)!, next: null});
     await transaction(changes);
     try { await rmdir(p.directory); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error; }
+    return true;
   });
+  if (!removed) return;
   console.log("Removed the Conductor integration and restored its previous selection where still owned. For legacy manual setup, restore Conductor's managed Codex executable in Settings. Quit and reopen Conductor before starting another session.");
 }
 
