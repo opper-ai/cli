@@ -235,6 +235,11 @@ async function readState(path: string): Promise<StoredState | undefined> {
   }
   return state;
 }
+function checkCatalogOwnership(path: string, state?: StoredState): boolean {
+  const owned = state?.config.settings.model_catalog_json === path;
+  if (!owned && existsSync(path)) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged catalog.json exists in the Opper desktop configuration directory. It and the existing settings were preserved.");
+  return owned;
+}
 async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
   const p = paths(home);
   await mkdir(p.home, { recursive: true });
@@ -269,6 +274,7 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
     const p = paths(home);
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
+    const ownedCatalog = checkCatalogOwnership(p.catalog, previous);
     const current = readDesktopConfig(existing ?? "");
     if (previous && opts.model === undefined) {
       // The app picker may change model without updating our installation
@@ -299,7 +305,7 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
     // edited provider or manually configured native URL.
     applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
-    const previousCatalog = previous ? await readOptional(p.catalog) : null;
+    const previousCatalog = ownedCatalog ? await readOptional(p.catalog) : null;
     let preserveIds: string[] = [];
     if (previousCatalog !== null) {
       try {
@@ -330,7 +336,7 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
     }
     const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state, ...(projectUuid ? {projectUuid} : {}), ...((bundled || previous?.bundledRuntime) ? { bundledRuntime: true } : {}) };
     const backups = new Map<string, { contents: Buffer; mode: number } | null>();
-    for (const file of [p.auth, p.catalog, p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
+    for (const file of [p.auth, ...(!native || ownedCatalog ? [p.catalog] : []), p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
       try { backups.set(file, { contents: await readFile(file), mode: (await stat(file)).mode & 0o777 }); }
       catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; backups.set(file, null); }
     }
@@ -342,7 +348,7 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
         await atomicWrite(p.runtimeLicense, await readFile(join(dirname(process.execPath), "NODE-LICENSE")));
       }
       await atomicWrite(p.auth, proxy ? PROXY_AUTH_HELPER : AUTH_HELPER);
-      if (native) await rm(p.catalog, { force: true });
+      if (native) { if (ownedCatalog) await rm(p.catalog, { force: true }); }
       else await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
       await atomicWrite(p.state, JSON.stringify(state, null, 2) + "\n");
       if (await readOptional(p.config) !== existing) throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during setup. Retry to preserve those edits.");
@@ -395,6 +401,7 @@ async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
     await checkConfigPaths(home);
     const state = await readState(p.state);
     if (!state) return;
+    const ownedCatalog = checkCatalogOwnership(p.catalog, state);
     const existing = await readOptional(p.config);
     if (existing !== null) {
       const restored = removeDesktopConfig(existing, state.config);
@@ -402,7 +409,7 @@ async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
       if (!state.configExisted && restored.trim() === "") await rm(p.config);
       else await atomicWrite(p.config, restored, (await stat(p.config)).mode & 0o777);
     }
-    for (const file of [p.auth, p.catalog, p.state, ...(state.bundledRuntime ? [p.runtime, p.runtimeLicense] : [])]) await rm(file, { force: true });
+    for (const file of [p.auth, ...(ownedCatalog ? [p.catalog] : []), p.state, ...(state.bundledRuntime ? [p.runtime, p.runtimeLicense] : [])]) await rm(file, { force: true });
     // Keep independently added files; only remove the directory when empty.
     try { const { rmdir } = await import("node:fs/promises"); await rmdir(p.directory); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw e; }

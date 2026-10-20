@@ -211,13 +211,32 @@ try {
     const cli = join(repo, "dist/index.js");
     await writeFile(join(opperHome, "config.json"), JSON.stringify({ version: 1, defaultKey: "fixture", telemetry: { enabled: false }, keys: { fixture: { apiKey: key, baseUrl, source: "manual" } } }));
     const configure = (...extraArgs) => run(process.execPath, [cli, "--no-telemetry", "--key", "fixture", "agents", "configure", "codex-desktop", ...extraArgs], options);
+    nativeSupported = false;
     await configure("--model", deployment, "--model-kinds", "all");
+    const desktopCatalogPath = join(codexHome,"opper-desktop","catalog.json");
+    await access(desktopCatalogPath); // The legacy server installed an owned file.
+    nativeSupported = true;
+    await configure();
+    await assert.rejects(access(desktopCatalogPath),{code:"ENOENT"});
     const nativeConfig = await readFile(join(codexHome,"config.toml"),"utf8");
     assert.ok(nativeConfig.includes("model_catalog_url") && !nativeConfig.includes("model_catalog_json"), "Desktop uses the verified remote URL");
     assert.deepEqual((await picker(binary, ["app-server"])).map(row => row.model), [deployment, route, pool, extra]);
     await configure(); // upgrade retains selected provider and old full catalog
     assert.deepEqual((await picker(binary, ["app-server"])).map(row => row.model), [deployment, route, pool, extra]);
     await infer(deployment, true);
+    const personalCatalog = '{"models":[{"slug":"personal/catalog"}]}';
+    await writeFile(desktopCatalogPath,personalCatalog);
+    const nativeStatePath=join(codexHome,"opper-desktop","state.json");
+    const nativeStateBefore=await readFile(nativeStatePath,"utf8");
+    const nativeConfigBefore=await readFile(join(codexHome,"config.toml"),"utf8");
+    const unownedStart=requests.length;
+    await assert.rejects(configure(),error=>/Unmanaged catalog/.test(error.stderr));
+    await assert.rejects(run(process.execPath,[cli,"--no-telemetry","agents","remove","codex-desktop"],options),error=>/Unmanaged catalog/.test(error.stderr));
+    assert.equal(await readFile(desktopCatalogPath,"utf8"),personalCatalog);
+    assert.equal(await readFile(nativeStatePath,"utf8"),nativeStateBefore);
+    assert.equal(await readFile(join(codexHome,"config.toml"),"utf8"),nativeConfigBefore);
+    assert.equal(requests.length,unownedStart,"unexpected native catalog conflicts before discovery");
+    await rm(desktopCatalogPath); // Remove only the disposable test's user file.
     const before = await readFile(join(codexHome, "config.toml"), "utf8");
     rejected = true;
     await assert.rejects(configure());

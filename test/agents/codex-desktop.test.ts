@@ -191,6 +191,16 @@ describe("Codex desktop detection", NATIVE_FIXTURE_OPTIONS, () => {
     expect(await codexDesktop.isConfigured()).toBe(true);
     await codexDesktop.unconfigure(); expect(configText()).toBe(ORIGINAL);
   });
+  it.each(["refresh","remove"])("preserves an unowned catalog added after native setup during %s", async operation => {
+    nativeRuntime();vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json(nativeCatalog())));
+    await codexDesktop.configure(options());
+    const directory=join(codexHome,"opper-desktop"), catalogPath=join(directory,"catalog.json");
+    const personal=JSON.stringify({models:[{slug:"personal/catalog"}]});writeFileSync(catalogPath,personal);
+    const configBefore=configText(), managedBefore=allText(directory);vi.mocked(fetch).mockClear();mocks.fetchCatalog.mockClear();
+    await expect(operation === "refresh" ? codexDesktop.configure(options()) : codexDesktop.unconfigure()).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT",message:expect.stringContaining("Unmanaged")});
+    expect(readFileSync(catalogPath,"utf8")).toBe(personal);expect(configText()).toBe(configBefore);expect(allText(directory)).toBe(managedBefore);
+    expect(fetch).not.toHaveBeenCalled();expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
   it("respects disabled native discovery in the selected custom home", async () => {
     const previous = mocks.run.getMockImplementation()!;
     mocks.run.mockImplementation((command: string, args: string[], options?: {env?: NodeJS.ProcessEnv}) => args[0] === "features"
