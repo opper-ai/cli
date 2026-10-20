@@ -32,7 +32,9 @@ describe("cross-platform process execution", () => {
     expect(nativeSpawnSync(shim, [], { timeout: 10_000 }).error).toBeDefined();
     const args = ["", "a prompt with spaces", 'a "quote"', "a&b|c>file", "%OPPER_ARG_EXPANSION%", "caret^", "åäö", "C:\\path with spaces\\"];
     const result = spawnSync("fixture", args, {
-      cwd: sandbox, env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ""}`, OPPER_ARG_EXPANSION: "must remain literal" },
+      // Only this private shim is under test. Its Node and script paths are
+      // absolute, so scanning the runner's unrelated PATH adds no coverage.
+      cwd: sandbox, env: { ...process.env, PATH: bin, OPPER_ARG_EXPANSION: "must remain literal" },
       encoding: "utf8", timeout: 10_000,
     });
     expect(result.error ?? undefined).toBeUndefined();
