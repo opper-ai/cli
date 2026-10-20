@@ -114,8 +114,8 @@ export async function agentsConfigureCommand(name: string, key: string, model?: 
   if (codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
-  if (opts.modelKinds !== undefined && (!["conductor", "codex-desktop", "opencode", "pi"].includes(adapter.name) || !["pools,routes", "all"].includes(opts.modelKinds))) {
-    throw new OpperError("INVALID_ARGUMENT", "--model-kinds accepts pools,routes or all and is supported for conductor, codex-desktop, opencode and pi.");
+  if (opts.modelKinds !== undefined && (!["conductor", "codex-desktop", "claude-desktop", "opencode", "pi"].includes(adapter.name) || !["pools,routes", "all"].includes(opts.modelKinds))) {
+    throw new OpperError("INVALID_ARGUMENT", "--model-kinds accepts pools,routes or all and is supported for conductor, codex-desktop, claude-desktop, opencode and pi.");
   }
   validateDesktopRoutingOptions(adapter.name, opts);
   const context = await resolveApiContext(key, { projectUuid });

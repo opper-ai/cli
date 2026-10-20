@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,6 +22,7 @@ if (process.platform !== "darwin" || !existsSync(app)) {
 const run = promisify(execFile);
 const directory = await mkdtemp(join(tmpdir(), "opper-desktop-catalog-"));
 const selected = "provider/claude-sonnet-5";
+const projectUuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const pools = ["claude-opus-5", "claude-sonnet-5"];
 const requests = [];
 let oldServer = false;
@@ -31,7 +32,7 @@ const server = createServer((request, response) => {
   requests.push({path:url.pathname,headers:request.headers});
   if (request.headers.authorization !== "Bearer synthetic" || denied) { response.writeHead(403).end(); return; }
   const all = request.headers["x-opper-catalog-model-kinds"] === "all";
-  const ids = all || url.pathname.endsWith("compat/models") ? [...pools, selected] : pools;
+  const ids = all || url.pathname.endsWith("compat/models") ? [...pools, selected, "claude-haiku-4-5"] : pools;
   const wanted = request.headers["x-opper-catalog-selected-model"];
   if (wanted && !ids.includes(wanted)) { response.writeHead(404).end(); return; }
   const ordered = wanted ? [wanted,...ids.filter(id=>id!==wanted)] : ids;
@@ -43,14 +44,27 @@ try {
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
   const baseUrl=`http://127.0.0.1:${server.address().port}`;
   const env={PATH:process.env.PATH,HOME:directory,USERPROFILE:directory};
+  // Exercise the actual public CLI with a strict Claude ID outside curated defaults.
+  const cliHome=join(directory,"cli-home");
+  await mkdir(cliHome);
+  const cliEnv={...env,HOME:cliHome,USERPROFILE:cliHome,OPPER_API_KEY:"synthetic",OPPER_BASE_URL:baseUrl,NO_UPDATE_NOTIFIER:"1"};
+  const cliPath=join(process.cwd(),"dist","index.js");
+  await run(process.execPath,[cliPath,"--project-uuid",projectUuid,"agents","configure","claude-desktop","--model","claude-haiku-4-5","--model-kinds","all"],{env:cliEnv,cwd:cliHome,timeout:20000,maxBuffer:100000});
+  const cliProfilePath=join(cliHome,"Library","Application Support","Claude-3p","configLibrary","727f05c8-a429-43cc-b1c6-36d8883d98b8.json");
+  const cliProfile=await readFile(cliProfilePath,"utf8");
+  assert.equal(JSON.parse(cliProfile).inferenceCustomHeaders["X-Opper-Catalog-Selected-Model"],"claude-haiku-4-5");
+  assert.equal(JSON.parse(cliProfile).inferenceCustomHeaders["X-Opper-Catalog-Model-Kinds"],"all");
+  assert.ok(!Object.hasOwn(JSON.parse(cliProfile),"inferenceModels"));
+  await assert.rejects(run(process.execPath,[cliPath,"agents","configure","claude-desktop","--model","gpt-5.5","--model-kinds","all"],{env:cliEnv,cwd:cliHome,timeout:20000,maxBuffer:100000}),error=>error.stderr.includes('does not support model "gpt-5.5"'));
+  assert.equal(await readFile(cliProfilePath,"utf8"),cliProfile);
   const adapterURL=pathToFileURL(join(process.cwd(),"dist","agents","claude-desktop.js")).href;
   const driver=join(directory,"configure.mjs");
   await writeFile(driver,`import {claudeDesktop} from ${JSON.stringify(adapterURL)}; await claudeDesktop.configure(JSON.parse(process.argv[2])); if(!await claudeDesktop.isConfigured()) throw Error("configured profile not recognized");`);
   const configure=(extra={})=>run(process.execPath,[driver,JSON.stringify({apiKey:"synthetic",baseUrl,...extra})],{env,cwd:directory,timeout:20000,maxBuffer:100000});
   const profilePath=join(directory,"Library","Application Support","Claude-3p","configLibrary","727f05c8-a429-43cc-b1c6-36d8883d98b8.json");
   const profile=async()=>JSON.parse(await readFile(profilePath,"utf8"));
-  await configure({projectUuid:"synthetic-project"});
-  assert.equal((await profile()).inferenceCustomHeaders["X-Opper-Project"],"synthetic-project");
+  await configure({projectUuid});
+  assert.equal((await profile()).inferenceCustomHeaders["X-Opper-Project"],projectUuid);
   assert.equal((await profile()).modelDiscoveryEnabled,true);
   assert.ok(!Object.hasOwn(await profile(),"inferenceModels"));
   assert.equal((await profile()).inferenceCustomHeaders["X-Opper-Catalog-Model-Kinds"],"pools,routes");
@@ -106,17 +120,17 @@ try {
   const discovered=await fixture.discover(`${baseUrl}/v3/compat`,"synthetic","bearer",headers);
   assert.equal(discovered.ok,true);
   const dynamic=fixture.compose("gateway",{discovered:discovered.models});
-  assert.deepEqual(Array.from(dynamic,model=>model.id),[selected,...pools]);
+  assert.deepEqual(Array.from(dynamic,model=>model.id),[selected,pools[0],"claude-haiku-4-5",pools[1]]);
   const pinned=fixture.compose("gateway",{adminList:[{name:pools[0]}],discovered:discovered.models});
   assert.deepEqual(Array.from(pinned,model=>model.id),[pools[0]],"explicit list suppresses the discovered lineup");
   const configured=await profile();
   const wire=fixture.wire.call({creds:{baseUrl:configured.inferenceGatewayBaseUrl,headers:configured.inferenceCustomHeaders},resolvedAuthScheme:()=>configured.inferenceGatewayAuthScheme,providerLabel:"Gateway"});
-  assert.equal(wire.adminHeaders["X-Opper-Project"],"synthetic-project");
+  assert.equal(wire.adminHeaders["X-Opper-Project"],projectUuid);
   await fetch(`${wire.baseUrl}/v1/messages`,{method:"POST",headers:{Authorization:"Bearer synthetic",...wire.adminHeaders,"Content-Type":"application/json"},body:JSON.stringify({model:selected,messages:[{role:"user",content:"synthetic request"}]})});
   assert.equal(requests.at(-1).path,"/v3/compat/v1/messages");
-  assert.equal(requests.at(-1).headers["x-opper-project"],"synthetic-project");
-  assert.ok(requests.every(request=>request.headers.authorization==="Bearer synthetic"&&request.headers["x-opper-project"]==="synthetic-project"));
-  console.log("Claude Desktop: real installed version gate and isolated native config passed; native bundled discovery/parser/composition fixture fetched synthetic catalog, retained provider selection, and proved explicit lists pin the picker. Native gateway wire resolution kept the same project on the synthetic message request. Auth failure/downgrade preserved configuration. App UI and real inference were not launched.");
+  assert.equal(requests.at(-1).headers["x-opper-project"],projectUuid);
+  assert.ok(requests.every(request=>request.headers.authorization==="Bearer synthetic"&&request.headers["x-opper-project"]===projectUuid));
+  console.log("Claude Desktop: built CLI configured exact Claude model and catalog policy, rejecting incompatible models unchanged. Real installed version gate and isolated native config passed; native bundled discovery/parser/composition fixture fetched synthetic catalog, retained provider selection, and proved explicit lists pin the picker. Native gateway wire resolution kept the same project on the synthetic message request. Auth failure/downgrade preserved configuration. App UI and real inference were not launched.");
 } finally {
   server.closeAllConnections();
   await new Promise(resolve=>server.close(resolve));
