@@ -79,10 +79,11 @@ function reasoningFor(entry: CodexCompatModel, metadata: Map<string, CodexModelM
   const efforts = members.length === 0 ? [] : REASONING_EFFORTS.filter((effort) =>
     members.every((member) => member?.supported.includes(effort)),
   );
+  // Supported efforts are choices, not evidence of a default. Every possible
+  // pool member must explicitly agree before we advertise one to Codex.
   const commonDefault = members[0]?.default;
   const defaultEffort = efforts.find((effort) => effort === commonDefault &&
-    members.every((member) => member?.default === commonDefault)) ??
-    efforts.find((effort) => effort === "medium") ?? efforts[0];
+    members.every((member) => member?.default === commonDefault));
   return {
     supported_reasoning_levels: efforts.map((effort) => ({
       effort,

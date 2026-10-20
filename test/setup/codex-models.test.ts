@@ -75,7 +75,7 @@ describe("toCodexModelCatalog", () => {
     expect(catalog.models[0]?.default_reasoning_summary).toBe("none");
   });
 
-  it("intersects every pool member and selects a valid default", () => {
+  it("intersects every pool member and emits only a shared supported default", () => {
     const entry = model({ opper: { kind: "pool", type: "llm", capabilities: ["tools"], members: ["a", "b"] } });
     const metadata = [
       { id: "a", params: { reasoning: { supported: ["low", "medium", "high"], default: "high" } } },
@@ -83,7 +83,7 @@ describe("toCodexModelCatalog", () => {
     ];
     const result = toCodexModelCatalog([entry], entry.id, metadata).models[0]!;
     expect(result.supported_reasoning_levels.map((level) => level.effort)).toEqual(["medium", "high"]);
-    expect(result.default_reasoning_level).toBe("medium");
+    expect(result).not.toHaveProperty("default_reasoning_level");
     metadata[1]!.params.reasoning.default = "high";
     expect(toCodexModelCatalog([entry], entry.id, metadata).models[0]?.default_reasoning_level).toBe("high");
     expect(toCodexModelCatalog([entry], entry.id, metadata.slice(0, 1)).models[0]?.supported_reasoning_levels).toEqual([]);
@@ -105,8 +105,26 @@ describe("toCodexModelCatalog", () => {
     const entry = model({ opper: { kind: "model", type: "llm", capabilities: ["tools"] } });
     for (const supported of [["future"], ["high", "max"]]) {
       const result = toCodexModelCatalog([entry], entry.id, [{ id: entry.id, params: { reasoning: { supported, default: "invalid" } } }]).models[0]!;
-      expect(result.default_reasoning_level).toBe(supported[0] === "future" ? undefined : "high");
+      expect(result).not.toHaveProperty("default_reasoning_level");
     }
+  });
+
+  it.each([
+    {supported:["medium","high"],defaults:[undefined]},
+    {supported:["medium","high"],defaults:[""]},
+    {supported:["medium","high"],defaults:["low"]},
+    {supported:["low","high"],defaults:["future"]},
+    {supported:["medium","high"],defaults:["high",undefined]},
+    {supported:["medium","high"],defaults:["high","medium"]},
+    {supported:["medium","high"],defaults:["low","low"]},
+  ])("omits an unconfirmed reasoning default on the wire while retaining supported efforts: %j", ({supported,defaults}) => {
+    const ids=defaults.map((_,index)=>`provider/${index}`);
+    const entry=model({id:defaults.length === 1 ? ids[0]! : "pool/reasoning",opper:{kind:defaults.length === 1 ? "model" : "pool",type:"llm",capabilities:["tools"],members:ids}});
+    const metadata=ids.map((id,index)=>({id,params:{reasoning:{supported,...(defaults[index] === undefined ? {} : {default:defaults[index]})}}}));
+    const wire=JSON.parse(JSON.stringify(toCodexModelCatalog([entry],entry.id,metadata))).models[0];
+    expect(wire.supported_reasoning_levels.map((level:{effort:string})=>level.effort)).toEqual(supported);
+    expect(wire).not.toHaveProperty("default_reasoning_level");
+    expect(wire.supports_reasoning_summaries).toBe(true);
   });
 
   it("uses conservative bounds for missing or invalid context metadata", () => {
@@ -142,7 +160,7 @@ describe("fetchCodexModelCatalog", () => {
       efforts: entry.supported_reasoning_levels.map((level) => level.effort),
       default: entry.default_reasoning_level,
     }))).toEqual([
-      { id: "claude-sonnet-5", efforts: ["medium", "high"], default: "medium" },
+      { id: "claude-sonnet-5", efforts: ["medium", "high"], default: undefined },
     ]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("https://gateway.example/api/v3/models?limit=0", {
