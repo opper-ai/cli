@@ -111,7 +111,13 @@ function hasOpaqueCatalogSelection(args: string[]): boolean {
 
 async function hasSavedCatalog(): Promise<boolean> {
   try {
-    return typeof readDesktopConfig(await readFile(codexConfigPath(), "utf8")).model_catalog_json === "string";
+    const config = readDesktopConfig(await readFile(codexConfigPath(), "utf8"));
+    const providers = config.model_providers;
+    const remoteCatalog = providers && typeof providers === "object"
+      ? (providers as Record<string, { model_catalog_url?: unknown }>)[PROVIDER]?.model_catalog_url : undefined;
+    // Codex deep-merges our invocation provider with its saved definition. A
+    // local catalog override would take precedence and suppress this native URL.
+    return typeof config.model_catalog_json === "string" || typeof remoteCatalog === "string";
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
     // Codex owns parsing of existing configuration. Avoid masking its errors or

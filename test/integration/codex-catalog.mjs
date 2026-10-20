@@ -8,6 +8,7 @@ import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:f
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { toCodexModelCatalog } from "../../dist/setup/codex-models.js";
 import { gunzipSync } from "node:zlib";
 const exec = promisify(execFile);
 function run(command, args, options) {
@@ -37,6 +38,12 @@ let rejected = false;
 const server = createServer(async (request, response) => {
   requests.push({ method: request.method, path: request.url, auth: request.headers.authorization });
   if (request.headers.authorization !== `Bearer ${key}` || rejected) { response.writeHead(401).end(); return; }
+  if (request.url.startsWith("/native-catalog")) {
+    const standard = new URL(request.url, "http://fixture").searchParams.get("format") === "standard";
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(standard ? { data: entries } : toCodexModelCatalog(entries, pool, [], {})));
+    return;
+  }
   if (request.url.split("?")[0].endsWith("/models")) {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(request.url.startsWith("/v3/models") ? { models: [{ id: deployment }] } : { data: entries })); return;
@@ -135,6 +142,32 @@ try {
   assert.equal(requests.filter(row => row.method === "POST").at(-1).model, route, "explicit native model survives resume after ephemeral catalog cleanup");
   await infer(deployment);
   assert.equal(await readFile(join(codexHome, "config.toml"), "utf8"), original);
+
+  // A configured remote URL works natively on modern Codex and must retain
+  // precedence over our generated fallback, including the adapter provider merge.
+  const remoteConfig = `${original}\n[model_providers.opper-cli]\nmodel_catalog_url = "${baseUrl}/native-catalog"\n`;
+  await writeFile(join(codexHome, "config.toml"), remoteConfig);
+  const baselineProvider = `{ name = "Opper", base_url = "${baseUrl}/v3/compat", env_key = "OPPER_API_KEY", wire_api = "responses", requires_openai_auth = false, http_headers = {} }`;
+  const baseline = await picker(binary, ["-c", 'model_provider="opper-cli"', "-c", `model_providers.opper-cli=${baselineProvider}`, "-c", 'web_search="disabled"', "--model", pool, "app-server"], { ...env, OPPER_API_KEY: key });
+  assert.deepEqual(baseline.map(row => row.model), [pool, route], "original invocation flags preserve the native URL");
+  let nativeStart = requests.length;
+  assert.deepEqual((await adapterPicker({})).map(row => row.model), [pool, route]);
+  const remoteRequests = requests.slice(nativeStart);
+  assert.ok(remoteRequests.some(row => row.method === "GET" && row.path.startsWith("/native-catalog?client_version=")));
+  assert.ok(!remoteRequests.some(row => row.path.startsWith("/v3/")), "adapter must not fetch or replace a configured remote catalog");
+  nativeStart = requests.length;
+  await infer(route);
+  assert.equal(requests.filter(row => row.method === "POST").at(-1).model, route);
+  assert.ok(!requests.slice(nativeStart).some(row => row.method === "GET" && row.path.startsWith("/v3/")));
+  assert.equal(await readFile(join(codexHome, "config.toml"), "utf8"), remoteConfig);
+  // The standard Opper ID response is not Codex metadata. The native request
+  // happens, but the picker stays empty rather than accepting {data:[...]}.
+  await writeFile(join(codexHome, "config.toml"), remoteConfig.replace('/native-catalog"', '/native-catalog?format=standard"'));
+  nativeStart = requests.length;
+  assert.deepEqual((await adapterPicker({})).map(row => row.model), []);
+  assert.ok(requests.slice(nativeStart).some(row => row.path.includes("format=standard") && row.path.includes("client_version=")));
+  await writeFile(join(codexHome, "config.toml"), original);
+  console.log("native remote catalog baseline/current preservation and standard-vs-Codex metadata confirmed");
 
   // Optional older CLI demonstrates the compatibility gate uses the existing
   // explicit-model inference path, without requiring our newer catalog schema.

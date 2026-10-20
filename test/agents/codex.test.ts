@@ -172,6 +172,15 @@ describe("codex adapter", () => {
     expect(spawnedArgs().some((arg) => arg.startsWith("model_catalog_json="))).toBe(false);
   });
 
+  it("preserves a preconfigured native remote catalog instead of overriding it with a local file", async () => {
+    const before = 'model = "dynamic/native-route"\n[model_providers.opper-cli]\nmodel_catalog_url = "https://gateway.example/codex/models"\n';
+    writeConfig(before);
+    await codex.spawn!([], ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    expect(spawnedArgs().some((arg) => arg.startsWith("model_catalog_json="))).toBe(false);
+    expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
   it("aborts before spawning when discovery rejects the selected credential", async () => {
     fetchCatalogMock.mockRejectedValue(new Error("credential rejected"));
     await expect(codex.spawn!([], ROUTING)).rejects.toThrow("credential rejected");
