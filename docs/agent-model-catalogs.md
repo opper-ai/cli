@@ -10,15 +10,15 @@ source.
 
 | Integration | Discovery contract | This change |
 | --- | --- | --- |
-| Codex CLI | Modern runtimes support authenticated `model_catalog_url`; the response must contain Codex metadata, not standard OpenAI model rows | Preserve configured native URL/local catalogs; temporary translated catalog only on the fallback path |
-| Codex Desktop | Supports native remote catalogs and local `model_catalog_json`; current Opper setup supplies a local catalog | Filter fresh catalogs and preserve the current model and prior authorized catalog on refresh |
+| Codex CLI | Authenticated `model_catalog_url` with native metadata | Prefer the verified native API response; preserve user catalogs; translate only on older runtimes/servers |
+| Codex Desktop | Native remote or local `model_catalog_json` | Migrate owned local catalogs after verification; retain legacy fallback |
 | OpenCode | models.dev plus explicit custom-provider models; baseURL alone does not discover account routes | Apply the same policy to agent setup/launch, editor setup and the installed login bridge |
 | Pi | Custom provider `models.json` or extension registration; no generic custom `/models` discovery setting | Filter fresh catalogs and preserve authorized saved/configured selections |
-| Conductor | Bundled Codex supports native remote catalogs; released wrapper supplies a local catalog | Already released; unchanged |
+| Conductor | Bundled Codex native remote catalog | Prefer the verified native URL in the managed wrapper; retain legacy fallback |
 | Hermes | Native provider `/models` discovery; local list is fallback metadata | Keep native discovery |
 | Claude Code | Native protocol `/models` picker | Keep native discovery and protocol mappings |
 | Copilot | Existing protocol-specific bridge | Keep its existing selection contract |
-| Claude Desktop | Native gateway discovery exists, but explicit `inferenceModels` overrides it; current adapter pins that list | Preserve current restriction; native adaptation remains a follow-up |
+| Claude Desktop | Native Anthropic discovery; explicit `inferenceModels` suppresses it | Prefer verified Claude-only discovery; preserve customized lists and old app/server fallback |
 | VS Code community Copilot extension | Native `/models` possible when configured list is absent, but treats every returned entry as tool-capable chat | Keep existing setup: Opper's response includes embeddings, so enabling raw discovery would advertise unsupported choices |
 | OpenClaw | Custom provider schema requires explicit model definitions; discovery hooks are provider-specific | Requires a separate integration update: installed 2026.4.10 does not expose Opper from the CLI's current per-agent file alone |
 
@@ -27,11 +27,41 @@ an endpoint expecting a different schema, or losing model capability constraints
 For VS Code, a safe native path needs upstream capability filtering or a compatible
 LLM-only endpoint contract. For OpenClaw, root provider/default-model settings and
 older-version compatibility must be resolved and tested before changing discovery.
-These integrations are explicit follow-ups, not claimed as converted. Claude Desktop is also a native-discovery candidate: its current explicit list suppresses discovery, and a conversion must preserve saved choices and supported model restrictions.
+VS Code and OpenClaw remain explicit follow-ups, not claimed as converted.
+
+## Native discovery configuration
+
+Modern Codex uses a provider setting such as:
+
+```toml
+[model_providers.opper-cli]
+model_catalog_url = "https://api.opper.ai/v3/compat/models?format=codex&type=pool,dynamic_route&selected_model=claude-sonnet-5"
+```
+
+The CLI verifies that native discovery is enabled in the actual Codex home and
+probes this endpoint with the selected credential/project before configuring it.
+Codex then refreshes the URL directly with provider authentication and project
+headers. Only a valid legacy OpenAI response selects the generated fallback;
+authentication, transport and malformed native-response errors stop setup.
+The API preserves exact authorized IDs and tool/capability restrictions.
+Unavailable selections return a uniform 400, route-store failures return 503 and
+responses over Codex's 1 MiB client limit fail explicitly without truncation.
+
+Claude Desktop has no separate catalog URL. The CLI verifies native app support
+and the API response marker `X-Opper-Model-Catalog: claude-desktop` before removing
+an owned name-only `inferenceModels` list. Request headers select that Claude-only
+presentation, the kind policy and exact model. These headers affect listing only;
+strict supported Claude IDs/pools remain enforced and routes are excluded.
+The same project scope is used for discovery and inference. Customized per-model
+metadata and discovery opt-outs keep their explicit lists.
+
+These changes require the corresponding API rollout. Older servers keep the
+fallback. Previously native configuration stays intact if support verification
+fails. No production rollout or release is implied by these local changes.
 
 ## Default and compatibility policy
 
-For generated catalogs, fresh authenticated setups default to `pools,routes`.
+For generated and native catalogs, fresh authenticated setups default to `pools,routes`.
 `opper.kind` is authoritative, so namespaced pools remain pools and bare IDs
 marked `model` remain deployments. Older responses without `kind` use the legacy
 providerless-pool and `dynamic/` conventions. Existing capability/context/pricing
@@ -44,6 +74,8 @@ Use `--model-kinds all` to include provider deployments:
 ```sh
 opper launch codex --model-kinds all
 opper agents configure codex-desktop --model-kinds all
+opper agents configure conductor --model-kinds all
+opper agents configure claude-desktop --model-kinds all
 opper launch opencode --model-kinds all
 opper editors opencode --overwrite --model-kinds all
 opper editors opencode --login-bridge --model-kinds all
@@ -75,6 +107,11 @@ with a particular route/deployment. The launcher does not infer a model from
 historical Codex session files. Unsupported/unknown older Codex runtimes use the
 existing launch behavior. No-credential OpenCode template setup is unchanged.
 
+Existing local Codex catalogs migrate to native `all` conservatively so saved
+provider selections cannot disappear. Broad native policy stays broad; changing a
+narrow native selection also broadens it to preserve the prior selection. Claude
+Desktop upgrades from an existing explicit list also use `all`.
+
 ## Local validation
 
 Run the focused unit suites and `npm test`, `npm run typecheck`, `npm run build`.
@@ -86,6 +123,8 @@ node test/integration/catalog-display.mjs
 node test/integration/pi-model-catalog.mjs
 # Set CODEX_CATALOG_BINARY if the default bundled desktop binary is unavailable.
 CODEX_CATALOG_INTEGRATION=1 node test/integration/codex-catalog.mjs
+CONDUCTOR_INTEGRATION=1 node test/integration/conductor.mjs
+node test/integration/claude-desktop-catalog.mjs
 ```
 
 These exercise native model listing/model-list RPC separately from generated JSON,
@@ -93,12 +132,12 @@ plus actual agent inference, exact request model IDs, refresh and failure paths.
 They do not constitute interactive TUI/desktop picker clicking, live customer
 configuration tests, paid inference, production deployment or a release.
 
-Validation snapshot (20 October 2026): 1,328 tests passed, 13 platform tests skipped;
-three bundle-builder checks, TypeScript/build and packed npm installation/agent
-launch smoke passed. Native workflows used Codex 0.163.0-alpha.10.2 plus the
-0.147.0 legacy fallback, OpenCode 1.18.34 and Pi 1.2.0. Independent review found no
-remaining actionable findings after the scoped-selection fixes. Windows-specific
-skips and interactive picker UI clicking remain unverified on this macOS run.
+The API opt-in runtime test uses production catalog and Responses handlers with
+only the provider adapter mocked. Run `OPPER_NATIVE_CODEX_INTEGRATION=1 go test
+./internal/handler -run '^TestCodexNativeCatalogRuntime$' -count=1 -v` in task-api.
+Claude Desktop fixtures use its installed discovery/parser functions; they do not
+open the app or perform inference. Windows native runtime workflows and interactive
+picker clicking remain unverified on this macOS run.
 
 
 ## Native discovery audit
@@ -109,9 +148,8 @@ fetch an explicit `model_catalog_url` directly with provider authentication,
 project headers and `client_version`. No local catalog file is needed. Standard
 Opper `{data:[...]}` produced an empty picker; the same endpoint returning full
 Codex `{models:[...]}` metadata populated it. Codex 0.147 ignored the URL.
-The API repository's inspected `origin/main` does not expose that Codex catalog
-format. The preferred future native path therefore needs a compatible API endpoint;
-setting the URL to today's standard model list is insufficient. See the
+The API change adds that format to the existing endpoint. Setting the URL to the
+standard model list without `format=codex` remains insufficient. See the
 [official remote catalog contract](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#serve-a-remote-catalog).
 
 The baseline CLI already preserved a configured native URL. The fallback initially
@@ -130,8 +168,8 @@ Other harness details:
   custom-provider catalog URL. The current extension registers the CLI-generated catalog.
 - Hermes already uses direct authenticated discovery. Claude Code also does, but
   its native picker restricts IDs to Claude/Anthropic names, including route names.
-- Claude Desktop supports native discovery. Its explicit `inferenceModels` takes
-  precedence, and our current setup pins that list. Native conversion remains unimplemented.
+- Claude Desktop's native conversion uses the filtered API profile. Customized
+  lists and older app/server setups retain the explicit fallback.
 - VS Code's community extension supports native discovery, but module-level runtime
   checks confirmed it advertises embeddings as tool/image-capable chat models.
 - OpenClaw's built-in vLLM/SGLang and provider-plugin discovery are specialized;
@@ -140,4 +178,4 @@ Other harness details:
   discovery option was found. Its binary was not installed for this audit.
 
 These checks keep built-in endpoint polling, plugin callbacks and CLI catalog
-translation distinct. No backend changes or native conversions were made in the audit.
+translation distinct. The audit informed the native conversions described above.
