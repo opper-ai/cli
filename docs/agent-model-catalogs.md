@@ -135,9 +135,35 @@ configuration tests, paid inference, production deployment or a release.
 The API opt-in runtime test uses production catalog and Responses handlers with
 only the provider adapter mocked. Run `OPPER_NATIVE_CODEX_INTEGRATION=1 go test
 ./internal/handler -run '^TestCodexNativeCatalogRuntime$' -count=1 -v` in task-api.
-Claude Desktop fixtures use its installed discovery/parser functions; they do not
-open the app or perform inference. Windows native runtime workflows and interactive
-picker clicking remain unverified on this macOS run.
+Claude Desktop automated fixtures use its installed discovery/parser functions;
+they do not open the app or perform inference. The separate manual desktop smoke
+below covers the real macOS UI. Windows native runtime workflows remain unverified.
+
+### Manual desktop smoke, 20 October 2026
+
+The user operated the installed signed Codex/ChatGPT and Claude Desktop apps in
+fresh temporary profiles and confirmed both worked. Gateway logs independently
+confirmed native catalog requests and successful real Opper inference for both
+`claude-haiku-4-5` and `aws/claude-haiku-4-5-eu` in each app.
+
+- Codex fetched `format=codex` itself with `client_version=0.163.0` and completed
+  pool and exact-provider requests through `/v3/compat/responses`.
+- Claude Desktop fetched the acknowledged Claude-only catalog and completed pool
+  and exact-provider requests through `/v3/compat/v1/messages`.
+- The local gateway used the production catalog handlers with an authorized live
+  Claude pool snapshot. Inference went to the real Opper gateway and providers;
+  the selected provider ID was preserved, while the pool chose an eligible member.
+- The fixture deliberately rejected a separate Codex background request for
+  `gpt-6-luna`, outside its two-model allowance. That request never reached Opper.
+  Background model generation was not part of this smoke test.
+- Normal Codex settings and Claude gateway/profile files matched their pre-test
+  hashes, and the original app processes remained running. A later cleanup check
+  observed a rewrite of normal Claude's general `config.json`, which contains
+  runtime cache/updater state; it was left intact. The isolated profiles used
+  separate state, disabled shortcuts/updaters, and synthetic client credentials.
+
+This verifies the desktop discovery/picker/inference path before rollout. It does
+not imply the new native response format has been deployed or the CLI released.
 
 
 ## Native discovery audit
