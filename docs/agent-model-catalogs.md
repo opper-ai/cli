@@ -100,8 +100,11 @@ Neither adapter rewrites session history.
 
 Codex CLI leaves native profiles/config/model overrides and existing catalog
 settings on their existing path, including `model_providers.opper-cli.model_catalog_url`
-in the selected Codex home. Remote URLs inherited only from system/managed configuration
-were not exercised by this local-file detection test. Resume/fork likewise bypass generated catalogs
+in the selected Codex home and applicable host defaults, legacy managed files,
+and system requirements. Catalog paths apply across providers; remote URLs are
+checked for the invocation provider and any enforced provider selection. Existing
+malformed or unreadable layers are left for Codex to report. Resume/fork likewise
+bypass generated catalogs
 and retain the prior CLI model precedence; use an explicit `--model` to continue
 with a particular route/deployment. The launcher does not infer a model from
 historical Codex session files. Unsupported/unknown older Codex runtimes use the
