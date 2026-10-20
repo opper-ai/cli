@@ -13,10 +13,23 @@ import { join } from "node:path";
 const whichMock = vi.fn();
 vi.mock("../../src/util/which.js", () => ({ which: whichMock }));
 
-const { homedirMock } = vi.hoisted(() => ({ homedirMock: vi.fn() }));
+const { homedirMock, platformMock, systemFiles } = vi.hoisted(() => ({ homedirMock: vi.fn(), platformMock: vi.fn(), systemFiles: new Map<string, string | Error>() }));
 vi.mock("node:os", async () => {
   const actual = await vi.importActual<typeof import("node:os")>("node:os");
-  return { ...actual, homedir: homedirMock };
+  return { ...actual, homedir: homedirMock, platform: platformMock };
+});
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {...actual, readFile: async (path: Parameters<typeof actual.readFile>[0], options: Parameters<typeof actual.readFile>[1]) => {
+    if (typeof path === "string" && (path.startsWith("/etc/codex/") || /[\\/]OpenAI[\\/]Codex[\\/]/.test(path))) {
+      const value = systemFiles.get(path);
+      if (value instanceof Error) throw value;
+      if (value === undefined) throw Object.assign(new Error("missing fixture"), {code:"ENOENT"});
+      return value;
+    }
+    return actual.readFile(path, options);
+  }};
 });
 
 const runMock = vi.fn();
@@ -34,6 +47,7 @@ const fetchCatalogMock = vi.fn();
 vi.mock("../../src/setup/codex-models.js", () => ({ fetchCodexModelCatalog: fetchCatalogMock }));
 
 const { codex } = await import("../../src/agents/codex.js");
+const { hasInheritedCodexCatalog } = await import("../../src/setup/codex-inherited-catalog.js");
 
 const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
@@ -69,6 +83,7 @@ describe("codex adapter", () => {
   let cfgPath: string;
 
   beforeEach(() => {
+    systemFiles.clear();platformMock.mockReturnValue("darwin");
     fetchCatalogMock.mockReset();
     fetchCatalogMock.mockResolvedValue({ models: [{ slug: ROUTING.model }] });
     whichMock.mockReset();
@@ -179,6 +194,54 @@ describe("codex adapter", () => {
     expect(fetchCatalogMock).not.toHaveBeenCalled();
     expect(spawnedArgs().some((arg) => arg.startsWith("model_catalog_json="))).toBe(false);
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it.each([
+    ["darwin", "/etc/codex/config.toml", 'model_catalog_json="/managed/catalog.json"'],
+    ["linux", "/etc/codex/config.toml", '[model_providers.opper-cli]\nmodel_catalog_url="https://managed.example/models"'],
+    ["darwin", "/etc/codex/requirements.toml", 'model_catalog_json="/required/catalog.json"'],
+    ["darwin", "/etc/codex/requirements.toml", '[model_providers.opper-cli]\nmodel_catalog_url="https://required.example/models"'],
+    ["darwin", "/etc/codex/managed_config.toml", 'model_catalog_json="/legacy/catalog.json"'],
+    ["win32", String.raw`C:\CorpData\OpenAI\Codex\config.toml`, '[model_providers.opper-cli]\nmodel_catalog_url="https://windows.example/models"'],
+    ["win32", String.raw`C:\CorpData\OpenAI\Codex\requirements.toml`, 'model_catalog_json="C:/Required/models.json"'],
+  ])("preserves inherited catalog settings from %s %s", async (platform, path, text) => {
+    platformMock.mockReturnValue(platform);vi.stubEnv("ProgramData",String.raw`C:\CorpData`);systemFiles.set(path,text);
+    await codex.spawn!([],ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    expect(spawnedArgs().some(arg=>arg.startsWith("model_catalog_json="))).toBe(false);
+    expect(systemFiles.get(path)).toBe(text);
+  });
+  it("keeps an enforced provider's catalog when requirements replace the provider selection", async () => {
+    systemFiles.set("/etc/codex/config.toml",'[model_providers.required]\nmodel_catalog_url="https://required.example/models"');
+    systemFiles.set("/etc/codex/requirements.toml",'model_provider="required"');
+    await codex.spawn!([],ROUTING);expect(fetchCatalogMock).not.toHaveBeenCalled();
+  });
+  it("continues managed discovery when system catalog settings target another provider", async () => {
+    systemFiles.set("/etc/codex/config.toml",'[model_providers.other]\nmodel_catalog_url="https://other.example/models"');
+    await codex.spawn!([],ROUTING);expect(fetchCatalogMock).toHaveBeenCalledTimes(1);
+  });
+  it.each(['[invalid', Object.assign(new Error("not readable"),{code:"EACCES"})])("leaves unreadable or malformed inherited configuration to Codex: %s", async value => {
+    systemFiles.set("/etc/codex/config.toml",value);
+    await codex.spawn!([],ROUTING);expect(fetchCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("allows persistent adapters to check other layers separately from owned user settings", async () => {
+    writeConfig('model_catalog_json="/owned/catalog.json"');
+    const options={codexHome:join(sandbox,".codex"),includeUserConfig:false};
+    expect(await hasInheritedCodexCatalog("opper-desktop",options)).toBe(false);
+    systemFiles.set("/etc/codex/config.toml",'[model_providers.opper-desktop]\nmodel_catalog_url="https://desktop.example/models"');
+    expect(await hasInheritedCodexCatalog("opper-desktop",options)).toBe(true);
+    expect(await hasInheritedCodexCatalog("opper-conductor",options)).toBe(false);
+  });
+  it("uses the Windows system default when ProgramData is absent", async () => {
+    platformMock.mockReturnValue("win32");vi.stubEnv("ProgramData",undefined);vi.stubEnv("PROGRAMDATA",undefined);
+    systemFiles.set(String.raw`C:\ProgramData\OpenAI\Codex\config.toml`,'model_catalog_json="C:/Managed/models.json"');
+    await codex.spawn!([],ROUTING);expect(fetchCatalogMock).not.toHaveBeenCalled();
+  });
+  it("preserves Windows legacy managed catalogs in the selected Codex home", async () => {
+    platformMock.mockReturnValue("win32");writeConfig("");
+    writeFileSync(join(sandbox,".codex","managed_config.toml"),'model_catalog_json="C:/Legacy/models.json"');
+    await codex.spawn!([],ROUTING);expect(fetchCatalogMock).not.toHaveBeenCalled();
   });
 
   it("aborts before spawning when discovery rejects the selected credential", async () => {

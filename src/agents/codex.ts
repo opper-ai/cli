@@ -2,7 +2,7 @@ import { spawnSync } from "../util/spawn.js";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { readDesktopConfig } from "../setup/codex-desktop-config.js";
+import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
 import { run } from "../util/run.js";
 import { which } from "../util/which.js";
@@ -109,23 +109,6 @@ function hasOpaqueCatalogSelection(args: string[]): boolean {
   return false;
 }
 
-async function hasSavedCatalog(): Promise<boolean> {
-  try {
-    const config = readDesktopConfig(await readFile(codexConfigPath(), "utf8"));
-    const providers = config.model_providers;
-    const remoteCatalog = providers && typeof providers === "object"
-      ? (providers as Record<string, { model_catalog_url?: unknown }>)[PROVIDER]?.model_catalog_url : undefined;
-    // Codex deep-merges our invocation provider with its saved definition. A
-    // local catalog override would take precedence and suppress this native URL.
-    return typeof config.model_catalog_json === "string" || typeof remoteCatalog === "string";
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-    // Codex owns parsing of existing configuration. Avoid masking its errors or
-    // replacing settings we cannot safely interpret.
-    return true;
-  }
-}
-
 function supportsInvocationCatalog(): boolean {
   const version = run("codex", ["--version"], { timeout: 5_000 });
   const match = version.stdout.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
@@ -150,7 +133,7 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   const modelArgs = hasNativeModelSelection(args) ? [] : ["--model", routing.model];
   let directory: string | undefined;
   try {
-    if (!hasOpaqueCatalogSelection(args) && !await hasSavedCatalog() && supportsInvocationCatalog()) {
+    if (!hasOpaqueCatalogSelection(args) && !await hasInheritedCodexCatalog(PROVIDER) && supportsInvocationCatalog()) {
       const catalog = await fetchCodexModelCatalog({
         apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl,
         ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}),
