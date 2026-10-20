@@ -46,6 +46,9 @@ beforeEach(()=>{
   vi.spyOn(console,"log").mockImplementation(()=>{});
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();vi.restoreAllMocks();rmSync(home,{recursive:true,force:true});});
+// These lifecycle fixtures simulate macOS application discovery and runtime
+// layouts. Windows system-path behavior is covered by the CLI detector tests.
+describe.skipIf(process.platform === "win32")("macOS Codex harness catalog preservation",()=>{
 describe.each(["desktop","conductor"] as const)("%s inherited catalogs",agent=>{
   const configure=()=>agent==="desktop"?codexDesktop.configure({...options(),codexHome}):conductor.configure(options());
   const provider=agent==="desktop"?"opper-desktop":"opper-conductor";
@@ -72,4 +75,6 @@ it("preserves a personal Conductor local catalog instead of shadowing it with ge
   await expect(conductor.configure(options())).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});
   expect(readFileSync(join(codexHome,"config.toml"),"utf8")).toBe('model_catalog_json="/personal/models.json"\n');
   expect(existsSync(join(home,"opper"))).toBe(false);expect(fetch).not.toHaveBeenCalled();expect(fixture.catalog).not.toHaveBeenCalled();
+});
+
 });
