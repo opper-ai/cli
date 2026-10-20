@@ -57,7 +57,7 @@ const KEY = "fixture-prod-key-not-a-real-credential";
 const ORIGINAL_EXEC_PATH = process.execPath;
 const NODE_NAME = process.platform === "win32" ? "node.exe" : "node";
 // Windows fixtures run native ACL checks and copy/restore the full Node binary.
-// Budget those integration steps without changing any subprocess deadline.
+// Budget native fixture steps separately from production command deadlines.
 const NATIVE_FIXTURE_TIMEOUT = process.platform === "win32" ? 30_000 : undefined;
 const NATIVE_FIXTURE_OPTIONS = NATIVE_FIXTURE_TIMEOUT === undefined ? {} : {timeout: NATIVE_FIXTURE_TIMEOUT};
 const ORIGINAL = '# personal defaults\nmodel = "gpt-5.5" # chosen model\nmodel_provider = "openai"\n\n[features]\nmulti_agent = true\n\n[projects."/personal/project"]\ntrust_level = "trusted"\n\n[mcp_servers.notes]\ncommand = "notes"\n';
@@ -449,7 +449,12 @@ describe("Codex desktop configuration and credentials", NATIVE_FIXTURE_OPTIONS, 
     expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toBe(license);
     expect(configText()).toBe(config);
     expect(readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8")).toBe(state);
-    expect(spawnSync(auth.command, auth.args, { encoding: "utf8", timeout: 5_000, env: { PATH: "", HOME: home } })).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
+    // A freshly restored Windows executable can start slowly on a hosted
+    // runner. Reuse this fixture's bounded native budget for this probe only.
+    const executed = spawnSync(auth.command, auth.args, { encoding: "utf8", timeout: NATIVE_FIXTURE_TIMEOUT ?? 5_000, env: { PATH: "", HOME: home } });
+    const diagnostics = JSON.stringify({ error: executed.error?.message, code: executed.error?.code, signal: executed.signal, status: executed.status });
+    expect(executed.error, diagnostics).toBeUndefined();
+    expect(executed, diagnostics).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
   });
 
   it("uses the selected slot and host for discovery and writes persistent keyless configuration", async () => {
