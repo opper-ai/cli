@@ -10,6 +10,7 @@ import { OpperError } from "../errors.js";
 import { run } from "../util/run.js";
 import { windowsDesktopApps, powerShellLiteral } from "../util/windows-desktop.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
+import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
 import { codexCatalogUrl, nativeCodexCatalog, nativeCodexRefreshKinds, supportsNativeCodexCatalog } from "../setup/codex-native-catalog.js";
 import { applyDesktopConfig, removeDesktopConfig, readDesktopConfig, DESKTOP_PROVIDER, type DesktopConfigState } from "../setup/codex-desktop-config.js";
 import type { AgentAdapter, ConfigureOptions, OpperRouting, SpawnOptions, UnconfigureOptions } from "./types.js";
@@ -256,6 +257,9 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
   const slot = await getSlot(keyName);
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${keyName}"`, "Run `opper login` first.");
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
+  if (await hasInheritedCodexCatalog(DESKTOP_PROVIDER, {codexHome: home, includeUserConfig: false})) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "An inherited Codex model catalog or unreadable managed configuration is present. Existing settings were preserved; reconcile the host configuration before configuring Codex Desktop.");
+  }
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
   const proxy = opts.desktopProxy ? proxySettings(opts.desktopProxy) : undefined;
   let model = opts.model ?? fallbackModel;

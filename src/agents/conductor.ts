@@ -10,6 +10,7 @@ import { OPPER_HOST } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperError } from "../errors.js";
 import { fetchConductorModelCatalog } from "../setup/conductor-models.js";
+import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
 import { nativeCodexCatalog, nativeCodexRefreshKinds, supportsNativeCodexCatalog } from "../setup/codex-native-catalog.js";
 import { readDesktopConfig } from "../setup/codex-desktop-config.js";
 import { configureConductorSettings, parseConductorSettingsBackup, restoreConductorSettings } from "../setup/conductor-settings.js";
@@ -208,6 +209,7 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   const host = rootUrl(slot.baseUrl || OPPER_HOST);
   const selectedHost = rootUrl(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? host);
   if (selectedHost !== host || (opts.apiKey !== undefined && opts.apiKey !== slot.apiKey)) throw conflict("The selected credential or API host differs from its stored slot. Retry with the matching slot.");
+  if (await hasInheritedCodexCatalog("opper-conductor")) throw conflict("An inherited Codex model catalog or unreadable configuration is present. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
   let model = opts.model ?? DEFAULT_MODELS.opus;
   let modelCount = 0, nativeDiscovery = false;
   const p = paths(), binding = {configPath: resolve(configPath()), keyName, host, org: slot.orgId === undefined ? null : String(slot.orgId)};
@@ -228,11 +230,12 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
     const configPath = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
     const personalConfig = await readPersonalConfig(configPath);
     const personal = readDesktopConfig(personalConfig ?? "");
+    if (Object.hasOwn(personal, "model_catalog_json")) throw conflict("Conductor has a personal Codex model_catalog_json. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
     const customProvider = (personal.model_providers as Record<string, {model_catalog_url?: unknown}> | undefined)?.["opper-conductor"];
     if (customProvider?.model_catalog_url !== undefined) throw conflict("Conductor's Codex provider has a manually configured model_catalog_url. Its settings and integration were preserved; reconcile that URL before configuring managed discovery.");
     const projectUuid = opts.projectUuid ?? previousProject(previous, state);
     const kinds = nativeCodexRefreshKinds(model, opts.modelKinds, state?.catalogUrl, previousCatalog !== undefined);
-    const native = typeof personal.model_catalog_json !== "string" && supportsNativeCodexCatalog(runtime.path)
+    const native = supportsNativeCodexCatalog(runtime.path)
       ? await nativeCodexCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model, kinds) : undefined;
     const catalog = native ? undefined : await fetchConductorModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model,
       kinds);
