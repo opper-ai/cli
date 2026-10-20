@@ -35,6 +35,7 @@ const entries = [
 ];
 const requests = [];
 let rejected = false;
+let nativeSupported = false;
 const server = createServer(async (request, response) => {
   requests.push({ method: request.method, path: request.url, auth: request.headers.authorization });
   if (request.headers.authorization !== `Bearer ${key}` || rejected) { response.writeHead(401).end(); return; }
@@ -46,6 +47,12 @@ const server = createServer(async (request, response) => {
   }
   if (request.url.split("?")[0].endsWith("/models")) {
     response.setHeader("content-type", "application/json");
+    const params = new URL(request.url, "http://fixture").searchParams;
+    if (nativeSupported && params.get("format") === "codex") {
+      const selected = params.get("selected_model");
+      if (!entries.some(entry => entry.id === selected)) { response.statusCode = 400; response.end(JSON.stringify({error:"unavailable selection"})); return; }
+      response.end(JSON.stringify(toCodexModelCatalog(entries, selected, [], {modelKinds: params.has("type") ? "pools,routes" : "all"}))); return;
+    }
     response.end(JSON.stringify(request.url.startsWith("/v3/models") ? { models: [{ id: deployment }] } : { data: entries })); return;
   }
   if (request.method !== "POST" || !request.url.endsWith("/responses")) { response.writeHead(426).end(); return; }
@@ -169,6 +176,21 @@ try {
   await writeFile(join(codexHome, "config.toml"), original);
   console.log("native remote catalog baseline/current preservation and standard-vs-Codex metadata confirmed");
 
+  nativeSupported = true;
+  nativeStart = requests.length;
+  assert.deepEqual((await adapterPicker({})).map(row => row.model), [pool, route]);
+  assert.ok(requests.slice(nativeStart).some(row => row.path.includes("format=codex") && row.path.includes("client_version=")), "Codex itself refreshes the compatible native endpoint");
+  assert.ok(!requests.slice(nativeStart).some(row => row.path.startsWith("/v3/models")), "native mode needs no secondary static metadata fetch");
+  assert.deepEqual((await adapterPicker({model: deployment})).map(row => row.model), [deployment, route, pool]);
+  assert.deepEqual((await adapterPicker({modelKinds: "all"})).map(row => row.model), [pool, route, deployment, extra]);
+  nativeStart = requests.length;
+  const disabledRows = await picker(process.execPath,[driver,JSON.stringify(["--disable","api_key_model_discovery","app-server"]),JSON.stringify(routing)]);
+  assert.deepEqual(disabledRows.map(row=>row.model),[pool,route],"an explicit native-discovery opt-out uses the local fallback");
+  assert.ok(!requests.slice(nativeStart).some(row=>row.path.includes("format=codex")),"passthrough feature opt-out must not probe native discovery");
+  await infer(route);
+  assert.equal(await readFile(join(codexHome,"config.toml"),"utf8"),original);
+  console.log("native endpoint discovery and inference confirmed");
+
   // Optional older CLI demonstrates the compatibility gate uses the existing
   // explicit-model inference path, without requiring our newer catalog schema.
   const legacyBinary = process.env.CODEX_LEGACY_BINARY;
@@ -190,6 +212,8 @@ try {
     await writeFile(join(opperHome, "config.json"), JSON.stringify({ version: 1, defaultKey: "fixture", telemetry: { enabled: false }, keys: { fixture: { apiKey: key, baseUrl, source: "manual" } } }));
     const configure = (...extraArgs) => run(process.execPath, [cli, "--no-telemetry", "--key", "fixture", "agents", "configure", "codex-desktop", ...extraArgs], options);
     await configure("--model", deployment, "--model-kinds", "all");
+    const nativeConfig = await readFile(join(codexHome,"config.toml"),"utf8");
+    assert.ok(nativeConfig.includes("model_catalog_url") && !nativeConfig.includes("model_catalog_json"), "Desktop uses the verified remote URL");
     assert.deepEqual((await picker(binary, ["app-server"])).map(row => row.model), [deployment, route, pool, extra]);
     await configure(); // upgrade retains selected provider and old full catalog
     assert.deepEqual((await picker(binary, ["app-server"])).map(row => row.model), [deployment, route, pool, extra]);
@@ -201,10 +225,25 @@ try {
     rejected = false;
     await run(process.execPath, [cli, "--no-telemetry", "agents", "remove", "codex-desktop"], options);
     assert.equal(await readFile(join(codexHome, "config.toml"), "utf8"), original);
+
+    // An explicit home controls the native feature gate even while the ambient
+    // CODEX_HOME supports it. Local catalogs still work in the opted-out home.
+    const disabledHome = join(home, "explicit disabled home");
+    await mkdir(disabledHome);
+    const disabledOriginal = '[features]\napi_key_model_discovery = false\n';
+    await writeFile(join(disabledHome,"config.toml"),disabledOriginal);
+    const disabledStart = requests.length;
+    await configure("--codex-home",disabledHome,"--model",pool);
+    const disabledConfig = await readFile(join(disabledHome,"config.toml"),"utf8");
+    assert.ok(disabledConfig.includes("model_catalog_json") && !disabledConfig.includes("model_catalog_url"));
+    assert.ok(!requests.slice(disabledStart).some(row => row.path.includes("format=codex")),"disabled explicit home must not probe native discovery");
+    assert.deepEqual((await picker(binary,["app-server"],{...env,CODEX_HOME:disabledHome})).map(row=>row.model),[pool,route]);
+    await run(process.execPath,[cli,"--no-telemetry","agents","remove","codex-desktop","--codex-home",disabledHome],options);
+    assert.equal(await readFile(join(disabledHome,"config.toml"),"utf8"),disabledOriginal);
   }
   assert.ok(requests.some(row => row.path === "/v3/compat/models"));
   assert.ok(requests.some(row => row.path === "/v3/models?limit=0"));
-  console.log("PASS: native discovery absence; real picker fresh/selected/all; route/provider SSE + explicit saved-session resume; desktop refresh/failure/removal; configuration preserved.");
+  console.log("PASS: legacy fallback and native endpoint discovery; real picker fresh/selected/all; route/provider SSE + explicit saved-session resume; desktop native refresh/failure/removal; configuration preserved.");
 } finally {
   server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));

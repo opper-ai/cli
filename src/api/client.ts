@@ -19,9 +19,9 @@ interface ErrorBody {
 export class OpperApi {
   constructor(private readonly config: OpperApiConfig) {}
 
-  async get<T>(path: string, query?: Record<string, string | number | undefined>): Promise<T> {
+  async get<T>(path: string, query?: Record<string, string | number | undefined>, options: Pick<RequestInit, "redirect" | "signal"> = {}): Promise<T> {
     const url = this.buildUrl(path, query);
-    const res = await this.fetch(url, { method: "GET", headers: this.headers() });
+    const res = await this.fetch(url, { method: "GET", headers: this.headers(), ...options });
     return this.parseJson<T>(res);
   }
 

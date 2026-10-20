@@ -10,15 +10,17 @@ import { OPPER_HOST } from "../config/endpoints.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { OpperError } from "../errors.js";
 import { fetchConductorModelCatalog } from "../setup/conductor-models.js";
+import { nativeCodexCatalog, nativeCodexRefreshKinds, supportsNativeCodexCatalog } from "../setup/codex-native-catalog.js";
+import { readDesktopConfig } from "../setup/codex-desktop-config.js";
 import { configureConductorSettings, parseConductorSettingsBackup, restoreConductorSettings } from "../setup/conductor-settings.js";
 import { run } from "../util/run.js";
 import type { AgentAdapter, ConfigureOptions } from "./types.js";
 
-const REQUIRED = ["codex", "launcher.mjs", "auth.mjs", "catalog.json"] as const;
-const OPTIONAL = ["node", "NODE-LICENSE", "settings.json"] as const;
+const REQUIRED = ["codex", "launcher.mjs", "auth.mjs"] as const;
+const OPTIONAL = ["catalog.json", "node", "NODE-LICENSE", "settings.json"] as const;
 const FILES = [...REQUIRED, ...OPTIONAL, "state.json"];
 type Artifact = { data: Buffer; mode: number };
-type State = { version: 1; files: Record<string, { sha256: string; mode: number }> };
+type State = { version: 1; files: Record<string, { sha256: string; mode: number }>; catalogUrl?: string; model?: string; projectUuid?: string };
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 const conflict = (message: string) => new OpperError("AGENT_CONFIG_CONFLICT", message);
 function paths() {
@@ -74,6 +76,32 @@ async function readArtifact(path: string): Promise<Artifact | null> {
   if (!await regular(path)) return null;
   return {data: await readFile(path), mode: (await lstat(path)).mode & 0o777};
 }
+async function readPersonalConfig(path: string): Promise<string | null> {
+  // Read-only discovery must keep linked personal dotfiles usable. We never
+  // own, rewrite or remove the user's Codex configuration from Conductor.
+  try { return await readFile(path, "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+function previousProject(files: Map<string, Artifact>, state?: State): string | undefined {
+  if (state?.projectUuid !== undefined) return state.projectUuid;
+  const launcher = files.get("launcher.mjs")?.data.toString();
+  if (!launcher) return;
+  // Older ownership state did not record project scope. Recover only the JSON
+  // argv emitted by our verified launcher; never execute generated source.
+  const match = launcher.match(/const child=spawn\(target,\[\.\.\.process\.argv\.slice\(2\),\.\.\.(\[[^\n]*\])\],\{stdio:"inherit"\}\);/);
+  if (!match) throw conflict("The existing Conductor project scope could not be read; its files were preserved.");
+  try {
+    const args: unknown = JSON.parse(match[1]!);
+    if (!Array.isArray(args) || args.some(arg => typeof arg !== "string")) throw new Error();
+    const setting = args.find((arg: string) => arg.startsWith("model_providers.opper-conductor="));
+    if (typeof setting !== "string") throw new Error();
+    const parsed = readDesktopConfig(`provider=${setting.slice(setting.indexOf("=") + 1)}`);
+    const headers = (parsed.provider as {http_headers?: Record<string, unknown>} | undefined)?.http_headers;
+    const project = headers && Object.entries(headers).find(([name]) => name.toLowerCase() === "x-opper-project")?.[1];
+    if (project !== undefined && typeof project !== "string") throw new Error();
+    return project;
+  } catch { throw conflict("The existing Conductor project scope is invalid; its files were preserved."); }
+}
 function sameArtifact(left: Artifact | null, right: Artifact | null): boolean {
   return left === null || right === null ? left === right : left.mode === right.mode && left.data.equals(right.data);
 }
@@ -87,6 +115,10 @@ function stateOf(files: Map<string, Artifact>): State | undefined {
   try { state = JSON.parse(raw.data.toString()); } catch { throw conflict("Invalid Conductor integration ownership state; preserve its files before retrying."); }
   if (state?.version !== 1 || !state.files || typeof state.files !== "object" || Array.isArray(state.files) ||
       REQUIRED.some(name => !Object.hasOwn(state.files, name)) ||
+      (!state.catalogUrl && !Object.hasOwn(state.files, "catalog.json")) ||
+      (state.catalogUrl !== undefined && typeof state.catalogUrl !== "string") ||
+      (state.model !== undefined && typeof state.model !== "string") ||
+      (state.projectUuid !== undefined && typeof state.projectUuid !== "string") ||
       Boolean(state.files.node) !== Boolean(state.files["NODE-LICENSE"]) ||
       Object.entries(state.files).some(([name, value]) => ![...REQUIRED, ...OPTIONAL].includes(name as typeof REQUIRED[number]) || !/^[a-f0-9]{64}$/.test(value?.sha256) || ![0o600, 0o700].includes(value?.mode))) {
     throw conflict("Invalid Conductor integration ownership state; preserve its files before retrying.");
@@ -168,19 +200,43 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   if (opts.codexHome !== undefined || opts.desktopProxy) throw new OpperError("INVALID_ARGUMENT", "Conductor uses its managed Codex executable; --codex-home and --proxy are not supported.");
   if (opts.modelKinds !== undefined && opts.modelKinds !== "pools,routes" && opts.modelKinds !== "all") throw new OpperError("INVALID_ARGUMENT", "--model-kinds must be pools,routes or all.");
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Conductor requires a stored Opper credential for future GUI sessions.", "Store the key with opper login, then unset OPPER_API_KEY before configuring.");
-  if (!findRuntime()) throw new OpperError("AGENT_NOT_FOUND", "Conductor with a managed Codex runtime 0.153.4 or later was not found.", "Install Conductor and initialize its Codex harness, then retry.");
+  const runtime = findRuntime();
+  if (!runtime) throw new OpperError("AGENT_NOT_FOUND", "Conductor with a managed Codex runtime 0.153.4 or later was not found.", "Install Conductor and initialize its Codex harness, then retry.");
   const keyName = opts.keyName ?? "default", slot = await getSlot(keyName);
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No stored Opper credential for slot ${JSON.stringify(keyName)}.`, "Run opper login first.");
   if (isSlotExpired(slot)) throw new OpperError("AUTH_EXPIRED", "The selected Opper credential expired. Renew it before configuring Conductor.");
   const host = rootUrl(slot.baseUrl || OPPER_HOST);
   const selectedHost = rootUrl(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? host);
   if (selectedHost !== host || (opts.apiKey !== undefined && opts.apiKey !== slot.apiKey)) throw conflict("The selected credential or API host differs from its stored slot. Retry with the matching slot.");
-  const model = opts.model ?? DEFAULT_MODELS.opus;
-  const catalog = await fetchConductorModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(opts.projectUuid ? {projectUuid: opts.projectUuid} : {})}, model, opts.modelKinds ?? "pools,routes");
+  let model = opts.model ?? DEFAULT_MODELS.opus;
+  let modelCount = 0, nativeDiscovery = false;
   const p = paths(), binding = {configPath: resolve(configPath()), keyName, host, org: slot.orgId === undefined ? null : String(slot.orgId)};
   await locked(async () => {
     await regular(p.directory, true);
     const previous = await snapshot(p.directory), state = stateOf(previous);
+    const previousCatalog = previous.get("catalog.json");
+    if (opts.model === undefined && state) {
+      if (state.model) model = state.model;
+      else if (previousCatalog) {
+        try {
+          const selected = JSON.parse(previousCatalog.data.toString()).models?.[0]?.slug;
+          if (typeof selected !== "string" || !selected) throw new Error();
+          model = selected;
+        } catch { throw conflict("The existing Conductor model selection is invalid; its files were preserved."); }
+      }
+    }
+    const configPath = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
+    const personalConfig = await readPersonalConfig(configPath);
+    const personal = readDesktopConfig(personalConfig ?? "");
+    const customProvider = (personal.model_providers as Record<string, {model_catalog_url?: unknown}> | undefined)?.["opper-conductor"];
+    if (customProvider?.model_catalog_url !== undefined) throw conflict("Conductor's Codex provider has a manually configured model_catalog_url. Its settings and integration were preserved; reconcile that URL before configuring managed discovery.");
+    const projectUuid = opts.projectUuid ?? previousProject(previous, state);
+    const kinds = nativeCodexRefreshKinds(model, opts.modelKinds, state?.catalogUrl, previousCatalog !== undefined);
+    const native = typeof personal.model_catalog_json !== "string" && supportsNativeCodexCatalog(runtime.path)
+      ? await nativeCodexCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model, kinds) : undefined;
+    const catalog = native ? undefined : await fetchConductorModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model,
+      kinds);
+    modelCount = native?.modelCount ?? catalog!.models.length; nativeDiscovery = native !== undefined;
     const settings = settingsPath(); await regular(dirname(settings), true);
     const originalSettings = await readArtifact(settings);
     const backup = previous.get("settings.json");
@@ -204,13 +260,21 @@ try {
 }
 `;
     const provider = {name: "Opper", base_url: `${host}/v3/compat`, wire_api: "responses", requires_openai_auth: false, supports_websockets: false,
-      ...(opts.projectUuid ? {http_headers: {"X-Opper-Project": opts.projectUuid}} : {}),
+      ...(native ? {model_catalog_url: native.url} : {}),
+      ...(projectUuid ? {http_headers: {"X-Opper-Project": projectUuid}} : {}),
       auth: {command: node, args: [join(p.directory, "auth.mjs"), JSON.stringify(binding)], refresh_interval_ms: 300_000}};
-    const overrides = ["-c", 'model_provider="opper-conductor"', "-c", `model_providers.opper-conductor=${toml(provider)}`, "-c", `model_catalog_json=${toml(join(p.directory, "catalog.json"))}`, "-c", `model=${toml(model)}`, "-c", 'web_search="disabled"'];
+    const overrides = ["-c", 'model_provider="opper-conductor"', "-c", `model_providers.opper-conductor=${toml(provider)}`, ...(!native ? ["-c", `model_catalog_json=${toml(join(p.directory, "catalog.json"))}`] : []), "-c", `model=${toml(model)}`, "-c", 'web_search="disabled"'];
     const launcher = `import {readdirSync} from "node:fs";
 import {join} from "node:path";
 import {spawn, spawnSync} from "node:child_process";
 const directory = ${JSON.stringify(binaryRoot())};
+const featureFlags=[];
+for(let i=2;i<process.argv.length;i++) {
+  const arg=process.argv[i];
+  if(arg==="--") break;
+  if(arg==="--enable" || arg==="--disable") {featureFlags.push(arg);if(process.argv[i+1]!==undefined)featureFlags.push(process.argv[++i]);}
+  else if(/^--(?:enable|disable)=/.test(arg))featureFlags.push(arg);
+}
 const compare = (a,b) => {const x=a.split(".").map(Number),y=b.split(".").map(Number);return x[0]-y[0] || x[1]-y[1] || x[2]-y[2];};
 try {
   let target;
@@ -218,7 +282,13 @@ try {
     const path=join(directory,version,"codex");
     const result=spawnSync(path,["--version"],{encoding:"utf8",timeout:5000});
     const actual=result.stdout?.match(/^codex-cli (\\d+\\.\\d+\\.\\d+)\\s*$/)?.[1];
-    if (result.status===0 && actual && compare(actual,"0.153.4")>=0) {target=path;break;}
+    if (result.status===0 && actual && compare(actual,"0.153.4")>=0) {
+      if (${Boolean(native)}) {
+        const features=spawnSync(path,["features","list",...featureFlags],{encoding:"utf8",timeout:5000});
+        if(features.status!==0 || !/^api_key_model_discovery\\s+.+?\\s+true\\s*$/m.test(features.stdout??"")) continue;
+      }
+      target=path;break;
+    }
   }
   if (!target) throw new Error();
   const child=spawn(target,[...process.argv.slice(2),...${JSON.stringify(overrides)}],{stdio:"inherit"});
@@ -231,17 +301,19 @@ try {
     const generated = new Map<string, Artifact>();
     const add = (name: string, data: string | Buffer, mode = 0o600) => generated.set(name, {data: Buffer.isBuffer(data) ? data : Buffer.from(data), mode});
     add("codex", `#!/bin/sh\nexec ${shellQuote(node)} ${shellQuote(join(p.directory, "launcher.mjs"))} "$@"\n`, 0o700);
-    add("launcher.mjs", launcher); add("auth.mjs", helper); add("catalog.json", JSON.stringify(catalog, null, 2) + "\n");
+    add("launcher.mjs", launcher); add("auth.mjs", helper);
+    if (catalog) add("catalog.json", JSON.stringify(catalog, null, 2) + "\n");
     add("settings.json", JSON.stringify(configured.backup, null, 2) + "\n");
     if (bundled) { add("node", await readFile(process.execPath), 0o700); add("NODE-LICENSE", await readFile(join(dirname(process.execPath), "NODE-LICENSE"))); }
-    const next: State = {version: 1, files: Object.fromEntries([...generated].map(([name, artifact]) => [name, {sha256: digest(artifact.data), mode: artifact.mode}]))};
+    const next: State = {version: 1, files: Object.fromEntries([...generated].map(([name, artifact]) => [name, {sha256: digest(artifact.data), mode: artifact.mode}])), ...(native ? {catalogUrl: native.url, model} : {}), ...(projectUuid ? {projectUuid} : {})};
     add("state.json", JSON.stringify(next, null, 2) + "\n");
     const changes: Change[] = FILES.filter(name => name !== "state.json" && (generated.has(name) || state?.files[name])).map(name => ({path: join(p.directory, name), previous: previous.get(name) ?? null, next: generated.get(name) ?? null}));
     changes.push({path: settings, previous: originalSettings, next: {data: Buffer.from(configured.text), mode: originalSettings?.mode ?? 0o600}});
     changes.push({path: join(p.directory, "state.json"), previous: previous.get("state.json") ?? null, next: generated.get("state.json")!});
+    if (await readPersonalConfig(configPath) !== personalConfig) throw conflict("Codex settings changed during Conductor discovery. Retry to preserve those edits.");
     await transaction(changes);
   });
-  console.log(`Configured Conductor (Codex): ${join(p.directory, "codex")}\nSelected CLI mode and the Opper executable in user settings (~/.conductor/settings.toml); repository or managed overrides may take precedence. Quit and reopen Conductor.\nIn Add models → Default models → Codex, enable the wanted models, then start a new Codex chat. The CLI account badge does not check this Opper provider.\nCatalog: ${catalog.models.length} models (${opts.modelKinds ?? "pools,routes"}); reconfigure to refresh, or use --model-kinds all for provider deployments.`);
+  console.log(`Configured Conductor (Codex): ${join(p.directory, "codex")}\nSelected CLI mode and the Opper executable in user settings (~/.conductor/settings.toml); repository or managed overrides may take precedence. Quit and reopen Conductor.\nIn Add models → Default models → Codex, enable the wanted models, then start a new Codex chat. The CLI account badge does not check this Opper provider.\nCatalog: ${modelCount} models (${nativeDiscovery ? "native discovery" : opts.modelKinds ?? "pools,routes"}); ${nativeDiscovery ? "Codex refreshes the catalog directly." : "reconfigure to refresh, or use --model-kinds all for provider deployments."}`);
 }
 
 async function unconfigure(): Promise<void> {

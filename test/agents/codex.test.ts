@@ -85,6 +85,7 @@ describe("codex adapter", () => {
   afterEach(() => {
     rmSync(sandbox, { recursive: true, force: true });
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   function writeConfig(text: string): void {
@@ -179,6 +180,46 @@ describe("codex adapter", () => {
     expect(fetchCatalogMock).not.toHaveBeenCalled();
     expect(spawnedArgs().some((arg) => arg.startsWith("model_catalog_json="))).toBe(false);
     expect(readFileSync(cfgPath, "utf8")).toBe(before);
+  });
+
+  it("prefers authenticated native discovery on a capable runtime and a supporting backend", async () => {
+    runMock.mockImplementation((_command, args: string[]) => ({ code: 0, stdout: args[0] === "features" ? "api_key_model_discovery stable true" : "codex-cli 0.163.0" }));
+    const actual = await vi.importActual<typeof import("../../src/setup/codex-models.js")>("../../src/setup/codex-models.js");
+    const native = actual.toCodexModelCatalog([{ id: ROUTING.model, opper: { kind: "pool", type: "llm", capabilities: ["tools"] } }], ROUTING.model);
+    const fetch = vi.fn().mockResolvedValue(Response.json(native)); vi.stubGlobal("fetch", fetch);
+    await codex.spawn!([], ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    const setting = spawnedArgs().find(arg => arg.startsWith("model_providers.opper-cli.model_catalog_url="))!;
+    expect(new URL(JSON.parse(setting.slice(setting.indexOf("=") + 1))).searchParams.get("selected_model")).toBe(ROUTING.model);
+    expect(spawnedArgs().some(arg => arg.startsWith("model_catalog_json="))).toBe(false);
+    expect(fetch.mock.calls[0]![1].headers.Authorization).toBe(`Bearer ${ROUTING.apiKey}`);
+  });
+
+  it.each([
+    ["--disable","api_key_model_discovery"],
+    ["--disable=api_key_model_discovery"],
+    ["--enable","api_key_model_discovery","--disable=api_key_model_discovery"],
+  ])("checks effective native discovery flags before choosing a catalog: %j", async (...args) => {
+    runMock.mockImplementation((_command, featureArgs: string[])=>({code:0,stdout:featureArgs[0] === "features"
+      ? `api_key_model_discovery stable ${featureArgs.some(arg=>arg.startsWith("--disable")) ? "false":"true"}` : "codex-cli 0.163.0"}));
+    const fetch=vi.fn();vi.stubGlobal("fetch",fetch);
+    await codex.spawn!(args,ROUTING);
+    expect(fetch).not.toHaveBeenCalled();expect(fetchCatalogMock).toHaveBeenCalledTimes(1);
+    expect(runMock).toHaveBeenCalledWith("codex",["features","list",...args],{timeout:5000});
+    expect(spawnedArgs().some(arg=>arg.startsWith("model_catalog_json="))).toBe(true);
+  });
+
+  it("falls back for a valid legacy envelope but never for native auth or schema failures", async () => {
+    runMock.mockImplementation((_command, args: string[]) => ({ code: 0, stdout: args[0] === "features" ? "api_key_model_discovery stable true" : "codex-cli 0.163.0" }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ data: [{ id: ROUTING.model }] })));
+    await codex.spawn!([], ROUTING); expect(fetchCatalogMock).toHaveBeenCalledTimes(1);
+    fetchCatalogMock.mockClear(); spawnSyncMock.mockClear();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ models: [{ slug: ROUTING.model }] })));
+    await expect(codex.spawn!([], ROUTING)).rejects.toThrow(/native Codex/);
+    expect(fetchCatalogMock).not.toHaveBeenCalled(); expect(spawnSyncMock).not.toHaveBeenCalled();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({}, { status: 401 })));
+    await expect(codex.spawn!([], ROUTING)).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+    expect(fetchCatalogMock).not.toHaveBeenCalled(); expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
   it("aborts before spawning when discovery rejects the selected credential", async () => {

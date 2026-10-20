@@ -9,6 +9,19 @@ const settings = {
 const original = '# user preferences\nmodel = "gpt-5.5" # chosen model\nmodel_provider = "openai"\n\n[projects."/my/project"]\ntrust_level = "trusted"\n\n[mcp_servers.notes]\ncommand = "notes"\n';
 
 describe("Codex desktop configuration", () => {
+  it("uses a native provider URL without a shadowing local catalog and restores the original", () => {
+    const before = 'model_catalog_json = "/personal/catalog.json" # keep on removal\n' + original;
+    const native = { model: settings.model, provider: { ...settings.provider, model_catalog_url: "https://example.invalid/models?format=codex" } };
+    const applied = applyDesktopConfig(before, native);
+    expect(readDesktopConfig(applied.text).model_catalog_json).toBeUndefined();
+    expect(removeDesktopConfig(applied.text, applied.state)).toBe(before);
+  });
+  it("transitions an owned local catalog to native discovery without losing backup values", () => {
+    const local = applyDesktopConfig(original, settings);
+    const native = applyDesktopConfig(local.text, { model: settings.model, provider: { ...settings.provider, model_catalog_url: "https://example.invalid/models?format=codex" } }, local.state);
+    expect(readDesktopConfig(native.text).model_catalog_json).toBeUndefined();
+    expect(removeDesktopConfig(native.text, native.state)).toBe(original);
+  });
   it("preserves comments, project and MCP settings and restores the exact original", () => {
     const applied = applyDesktopConfig(original, settings);
     expect(applied.text).toContain('# user preferences\nmodel = "claude-sonnet-5" # chosen model');

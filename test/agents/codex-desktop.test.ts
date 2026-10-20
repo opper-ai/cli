@@ -168,6 +168,7 @@ beforeEach(async () => {
 afterEach(async () => {
   process.execPath = ORIGINAL_EXEC_PATH;
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   // Async rm retries also cover Windows lstat EPERM while an executable handle
   // is being released. Only this test-owned tree receives the bounded retries.
   try {await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });}
@@ -175,6 +176,87 @@ afterEach(async () => {
 }, NATIVE_FIXTURE_TIMEOUT);
 
 describe("Codex desktop detection", NATIVE_FIXTURE_OPTIONS, () => {
+  function nativeRuntime() {
+    const previous = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[]) => args[0] === "features" ? ok("api_key_model_discovery stable true") : previous(command, args));
+  }
+  const nativeCatalog = () => toCodexModelCatalog([{ id: MODEL, opper: { kind: "pool", type: "llm", capabilities: ["tools"] } }], MODEL);
+  it("prefers native discovery on fresh supported setups and restores original settings on removal", async () => {
+    nativeRuntime(); vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(nativeCatalog())));
+    await codexDesktop.configure(options());
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+    expect(readDesktopConfig(configText()).model_catalog_json).toBeUndefined();
+    expect(new URL(provider().model_catalog_url).searchParams.get("type")).toBe("pool,dynamic_route");
+    expect(mocks.realExists(join(codexHome, "opper-desktop/catalog.json"))).toBe(false);
+    expect(await codexDesktop.isConfigured()).toBe(true);
+    await codexDesktop.unconfigure(); expect(configText()).toBe(ORIGINAL);
+  });
+  it("respects disabled native discovery in the selected custom home", async () => {
+    const previous = mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command: string, args: string[], options?: {env?: NodeJS.ProcessEnv}) => args[0] === "features"
+      ? ok(`api_key_model_discovery stable ${options?.env?.CODEX_HOME === codexHome ? "false" : "true"}`) : previous(command,args));
+    const fetch=vi.fn();vi.stubGlobal("fetch",fetch);
+    await codexDesktop.configure(options());
+    expect(fetch).not.toHaveBeenCalled(); expect(mocks.fetchCatalog).toHaveBeenCalledTimes(1);
+    expect(provider().model_catalog_url).toBeUndefined();
+  });
+  it("retains managed project scope on native refresh and accepts an explicit replacement", async () => {
+    nativeRuntime();const fetch=vi.fn().mockImplementation(()=>Promise.resolve(Response.json(nativeCatalog())));vi.stubGlobal("fetch",fetch);
+    const projectUuid="11111111-1111-4111-8111-111111111111";
+    await codexDesktop.configure(options({projectUuid}));
+    await codexDesktop.configure(options());
+    expect(provider().http_headers).toEqual({"X-Opper-Project":projectUuid});
+    expect(fetch.mock.calls.at(-1)![1].headers).toMatchObject({"X-Opper-Project":projectUuid});
+    const replacement="22222222-2222-4222-8222-222222222222";
+    await codexDesktop.configure(options({projectUuid:replacement}));
+    expect(provider().http_headers).toEqual({"X-Opper-Project":replacement});
+  });
+  it("preserves setup when switching a saved project to a differently scoped proxy", async () => {
+    const projectUuid="11111111-1111-4111-8111-111111111111";
+    await codexDesktop.configure(options({projectUuid})); const before=configText();
+    const {proxy}=await desktopProxy();mocks.fetchCatalog.mockClear();
+    await expect(codexDesktop.configure(options({desktopProxy:proxy}))).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});
+    expect(configText()).toBe(before);expect(mocks.fetchCatalog).not.toHaveBeenCalled();
+  });
+  it("upgrades owned local catalogs to broad native discovery and preserves that policy", async () => {
+    await codexDesktop.configure(options()); nativeRuntime();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(Response.json(nativeCatalog()))));
+    await codexDesktop.configure(options());
+    expect(new URL(provider().model_catalog_url).searchParams.has("type")).toBe(false);
+    expect(mocks.realExists(join(codexHome, "opper-desktop/catalog.json"))).toBe(false);
+    await codexDesktop.configure(options());
+    expect(new URL(provider().model_catalog_url).searchParams.has("type")).toBe(false);
+    await codexDesktop.unconfigure(); expect(configText()).toBe(ORIGINAL);
+  });
+  it("uses the legacy backend fallback only for an old envelope and leaves setup unchanged on native failure", async () => {
+    nativeRuntime(); vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ data: [{ id: MODEL }] })));
+    await codexDesktop.configure(options()); expect(mocks.fetchCatalog).toHaveBeenCalledTimes(1);
+    const before = configText(); const state = allText(join(codexHome, "opper-desktop"));
+    mocks.fetchCatalog.mockClear();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({}, { status: 401 })));
+    await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "AUTH_EXPIRED" });
+    expect(mocks.fetchCatalog).not.toHaveBeenCalled(); expect(configText()).toBe(before);
+    expect(allText(join(codexHome, "opper-desktop"))).toBe(state);
+  });
+  it("reinstates the generated local fallback if native format becomes unavailable", async () => {
+    nativeRuntime();vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json(nativeCatalog())));
+    await codexDesktop.configure(options());
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({data:[{id:MODEL}]})));
+    await codexDesktop.configure(options());
+    expect(provider().model_catalog_url).toBeUndefined();
+    expect(readDesktopConfig(configText()).model_catalog_json).toBe(join(codexHome,"opper-desktop/catalog.json"));
+    expect(await codexDesktop.isConfigured()).toBe(true);
+    await codexDesktop.unconfigure();expect(configText()).toBe(ORIGINAL);
+  });
+  it("keeps native proxy catalog authentication on the loopback bridge", async () => {
+    nativeRuntime(); const {proxy}=await desktopProxy();
+    vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json(nativeCatalog())));
+    await codexDesktop.configure(options({desktopProxy:proxy}));
+    expect(new URL(provider().model_catalog_url).origin).toBe(proxy.baseUrl);
+    expect(provider().auth.args).toContain(proxy.stateDir);
+    expect(new URL(vi.mocked(fetch).mock.calls[0]![0] as string).origin).toBe(new URL(API_ROOT).origin);
+    expect(vi.mocked(fetch).mock.calls[0]![1]!.headers).toMatchObject({Authorization:`Bearer ${KEY}`});
+  });
   it("rejects an environment key instead of borrowing a stored credential for Finder launches", async () => {
     vi.stubEnv("OPPER_API_KEY", "independent-env-key");
     await expect(codexDesktop.configure(options())).rejects.toMatchObject({ code: "AUTH_REQUIRED", message: expect.stringContaining("stored Opper credential") });

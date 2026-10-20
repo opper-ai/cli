@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
+import { toConductorModelCatalog } from "../../dist/setup/conductor-models.js";
 
 const run = promisify(execFile);
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -24,6 +25,7 @@ const cliBinary = process.env.CONDUCTOR_OPPER_BINARY;
 const routeID = "dynamic/conductor-synthetic-route";
 const poolID = "pool/conductor-synthetic-pool";
 const additionalID = "synthetic/conductor-additional-model";
+const unselectedID = "synthetic/conductor-unselected-model";
 const projectUuid = "11111111-1111-4111-8111-111111111111";
 const initialKey = "synthetic-conductor-key";
 const rotatedKey = "synthetic-conductor-renewed-key";
@@ -78,6 +80,9 @@ const children = new Set();
 let activeKey = initialKey;
 let expectedInferenceModel;
 let fixtureError;
+let nativeFormat = false;
+let denied = false;
+let nativeNewRoute = false;
 const env = {
   PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`,
   HOME: home, ZDOTDIR: home, SHELL: "/bin/zsh", TMPDIR: temporary,
@@ -120,14 +125,22 @@ const server = createServer(async (request, response) => {
     }
     assert.equal(row.auth, `Bearer ${activeKey}`, "fixture received the current synthetic stored key");
     assert.equal(row.project, projectUuid, "discovery and inference retain the explicit project target");
-    if (request.method === "GET" && request.url === "/v3/compat/models") {
-      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: [
+    const url = new URL(request.url, "http://fixture");
+    if (request.method === "GET" && url.pathname === "/v3/compat/models") {
+      if (denied) {response.writeHead(401).end();return;}
+      const entries = [
         { id: routeID, context_length: 128000, opper: { kind: "dynamic_route", display_name: "Conductor Synthetic Route",
           pricing: { kind: "variable" }, capabilities: ["tools"] } },
         { id: poolID, context_length: 64000, opper: { kind: "pool", type: "llm", display_name: "Conductor Synthetic Pool",
           members: [additionalID], capabilities: ["tools"] } },
         { id: additionalID, context_length: 32000, opper: { kind: "model", type: "llm", display_name: "Conductor Additional Model", capabilities: ["tools"] } },
-      ] })); return;
+        { id: unselectedID, context_length: 32000, opper: { kind: "model", type: "llm", capabilities: ["tools"] } },
+        ...(nativeNewRoute ? [{id:"dynamic/new-native-route",context_length:64000,opper:{kind:"dynamic_route",capabilities:["tools"]}}] : []),
+      ];
+      const body = nativeFormat && url.searchParams.get("format") === "codex"
+        ? toConductorModelCatalog(entries, url.searchParams.get("selected_model"), url.searchParams.has("type") ? "pools,routes" : "all")
+        : {data:entries};
+      response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(body)); return;
     }
     if (request.method === "GET" && request.url === "/v3/models?limit=0") {
       response.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ models: [{ id: additionalID }] })); return;
@@ -170,7 +183,14 @@ async function stop(child) {
   }
   // A descendant must not survive an early startup failure. The group belongs
   // only to this detached fixture process, never the user's app.
-  try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
+  try { process.kill(-child.pid, "SIGKILL"); } catch (error) {
+    if (error.code !== "ESRCH") {
+      const groups=(await run("/bin/ps",["-axo","pid=,pgid=,stat=,comm="])).stdout.split("\n").filter(line=>Number(line.trim().split(/\s+/)[1])===child.pid);
+      // macOS may report EPERM after the detached group has already exited.
+      // Accept that only after checking no task-owned group member remains.
+      if (error.code !== "EPERM" || groups.length) throw error;
+    }
+  }
   children.delete(child);
 }
 
@@ -358,8 +378,8 @@ try {
 
   await configure(routeID, "pools,routes");
   const compactAgain = await listModels();
-  assert.ok(!compactAgain.models.some((model) => model.id === additionalID),
-    "reconfiguring with the default removes previously enabled provider models");
+  assert.ok(compactAgain.models.some((model) => model.id === additionalID),
+    "reconfiguration retains previously exposed provider selections for existing sessions");
   assert.ok(compactAgain.models.some((model) => model.id === poolID));
   assert.ok(compactAgain.models.some((model) => model.id === routeID));
 
@@ -371,6 +391,54 @@ try {
   assert.ok(explicitModels.models.some((model) => model.id === routeID));
   await inference(explicit);
 
+  // The old backend ignored format=codex and returned data[]. Upgrading that
+  // same owned installation must prefer native discovery and retain its full
+  // authorized inventory, because older sessions may reference deployments.
+  nativeFormat = true;
+  await configure();
+  const managedStatePath=join(dirname(wrapper),"state.json");
+  let managedState=JSON.parse(await readFile(managedStatePath,"utf8"));
+  assert.ok(managedState.catalogUrl.includes("format=codex"));
+  assert.equal(new URL(managedState.catalogUrl).searchParams.has("type"),false);
+  await assert.rejects(access(join(dirname(wrapper),"catalog.json")),{code:"ENOENT"});
+  const beforeDisabled=requests.length;
+  await assert.rejects(run(wrapper,["--disable","api_key_model_discovery","--version"],cliOptions),error=>/reconfigure/.test(error.stderr));
+  assert.equal(requests.length,beforeDisabled,"a disabled native wrapper fails before starting catalog discovery");
+  let nativeStart=requests.length;
+  const migrated=await listModels();
+  assert.ok(migrated.models.some(model=>model.id===additionalID));
+  assert.ok(migrated.models.some(model=>model.id===unselectedID));
+  assert.ok(requests.slice(nativeStart).some(request=>request.path.includes("format=codex")&&request.path.includes("client_version=")),"Codex itself fetched the native catalog");
+  await configure(undefined,"pools,routes");
+  managedState=JSON.parse(await readFile(managedStatePath,"utf8"));
+  assert.equal(new URL(managedState.catalogUrl).searchParams.has("type"),false,"refresh must preserve previously exposed provider IDs");
+  // Server-side catalog changes are visible to a new actual Conductor process
+  // without regenerating the wrapper or running another configure command.
+  nativeNewRoute=true;nativeStart=requests.length;
+  assert.ok((await listModels()).models.some(model=>model.id==="dynamic/new-native-route"));
+  assert.ok(requests.slice(nativeStart).some(request=>request.path.includes("client_version=")));
+  activeKey=initialKey;await saveSlot(initialKey);
+  await inference(migrated.models.find(model=>model.id===additionalID));
+  const stateBefore=await readFile(managedStatePath,"utf8"), launcherBefore=await readFile(join(dirname(wrapper),"launcher.mjs"),"utf8");
+  denied=true;await assert.rejects(configure());denied=false;
+  assert.equal(await readFile(managedStatePath,"utf8"),stateBefore);
+  assert.equal(await readFile(join(dirname(wrapper),"launcher.mjs"),"utf8"),launcherBefore);
+
+  // A fresh native installation can safely use the compact policy plus one
+  // exact selected deployment exception. Removal restores the same preferences.
+  await invokeCLI(["--no-telemetry","agents","remove","conductor"]);
+  await configure(additionalID);
+  managedState=JSON.parse(await readFile(managedStatePath,"utf8"));
+  assert.equal(new URL(managedState.catalogUrl).searchParams.get("type"),"pool,dynamic_route");
+  const freshNative=await listModels();
+  assert.ok(freshNative.models.some(model=>model.id===additionalID));
+  assert.ok(!freshNative.models.some(model=>model.id===unselectedID));
+  await inference(freshNative.models.find(model=>model.id===additionalID));
+  await configure(additionalID,"all");
+  assert.ok((await listModels()).models.some(model=>model.id===unselectedID));
+  await configure();
+  assert.equal(new URL(JSON.parse(await readFile(managedStatePath,"utf8")).catalogUrl).searchParams.has("type"),false);
+
   await invokeCLI(["--no-telemetry", "agents", "remove", "conductor"]);
   await assert.rejects(access(wrapper), { code: "ENOENT" });
   await assert.rejects(run(wrapper, ["--version"], cliOptions), { code: "ENOENT" });
@@ -380,7 +448,7 @@ try {
   assert.equal(await readFile(join(normalCodex, "config.toml"), "utf8"), normalConfig);
   assert.equal(await readFile(join(normalCodex, "auth.json"), "utf8"), normalAuth);
   assert.ifError(fixtureError);
-  console.log(`Conductor ${runtimeVersion}; Codex ${version}: automatic settings selection, compact pool/route discovery, exact pool/route/provider SSE completion, provider opt-in enable/disable, explicit provider exception, key rotation, project headers, settings restoration, and normal Codex preservation passed. Fake keys and loopback only.`);
+  console.log(`Conductor ${runtimeVersion}; Codex ${version}: legacy fallback; native API discovery, fresh/upgrade catalog policy, runtime refresh, exact SSE completion, provider exception/all, key rotation, auth failure preservation, project headers, removal restoration and normal Codex preservation passed. Fake keys and loopback only.`);
 } finally {
   await Promise.all([...children].map(stop));
   server.closeAllConnections();
