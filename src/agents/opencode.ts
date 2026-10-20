@@ -7,6 +7,7 @@ import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
 import { deleteJsoncProperty, parseJsoncObject } from "../util/jsonc.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
+import { openCodeCatalogSelection } from "../setup/opencode-catalog-selection.js";
 import { openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OPPER_COMPAT_URL, OPPER_HOST } from "../config/endpoints.js";
@@ -54,7 +55,7 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   // scoped to the key, so this is also the only way the user's own pools and
   // `dynamic/<name>` routes reach OpenCode's picker. Only setup without a key
   // uses the template; authenticated catalog failures leave config untouched.
-  const models = opts.apiKey ? await resolveOpenCodeModels({ apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }) : await resolveOpenCodeModels();
+  const models = opts.apiKey ? await resolveOpenCodeModels({ apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, openCodeCatalogSelection(opts.modelKinds, opts.model)) : await resolveOpenCodeModels();
 
   // overwrite: true so a re-run pulls in the latest models, costs and
   // defaults. Without it, an existing `provider.opper` block from an older
@@ -393,7 +394,11 @@ async function spawn(
     apiKey: routing.apiKey,
     baseUrl: routing.apiBaseUrl,
     ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}),
-  });
+  }, openCodeCatalogSelection(
+    // Native selection/resume flags may refer to history outside config files.
+    args.some(arg => /^(?:--(?:model|session|continue|agent)(?:=|$)|-[msca])/.test(arg)) ? "all" : routing.modelKinds,
+    routing.modelOverride,
+  ));
   // Validate existing inline config before mutating either config file. The
   // runtime override also prevents an old project whitelist or URL from
   // overriding the catalog and credentials chosen for this launch.

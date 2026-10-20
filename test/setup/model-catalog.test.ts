@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OpperError } from "../../src/errors.js";
 import { selectCatalogEntries, validateModelKinds } from "../../src/setup/model-catalog.js";
 
-interface Entry { id: string; opper?: { kind?: string }; marker?: string }
+interface Entry { id: string; opper?: { kind?: string | undefined } | undefined; marker?: string }
 const ids = (entries: Entry[]) => entries.map(entry => entry.id);
 const entries: Entry[] = [
   { id: "vendor/deployment", opper: { kind: "model" } },
@@ -54,9 +54,11 @@ describe("shared model catalog selection", () => {
       { id: "dynamic/legacy" }, { id: "dynamic/model", opper: { kind: "model" } },
       { id: "unknown-bare", opper: { kind: "future-kind" } },
       { id: "empty-metadata", opper: {} },
+      { id: "undefined-metadata", opper: undefined },
+      { id: "undefined-kind", opper: { kind: undefined } },
     ];
     const selected = selectCatalogEntries(legacy, {});
-    expect(ids(selected)).toEqual(["dynamic/legacy", "bare-legacy", "empty-metadata"]);
+    expect(ids(selected)).toEqual(["dynamic/legacy", "bare-legacy", "empty-metadata", "undefined-metadata", "undefined-kind"]);
     expect(selected[1]!.marker).toBe("keep metadata");
   });
 

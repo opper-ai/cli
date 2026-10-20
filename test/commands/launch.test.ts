@@ -58,6 +58,19 @@ describe("launchCommand", () => {
     desktopOpenMock.mockReset().mockResolvedValue({ url: "http://127.0.0.1:12345/open/fresh-ticket" });
   });
 
+  it.each(["codex","codex-desktop","opencode","pi"])("passes full catalog intent to %s",async (agent)=>{
+    await setSlot("default",{apiKey:"synthetic"}); adapter.detect.mockResolvedValue({installed:true}); adapter.spawn.mockResolvedValue(0);
+    getAdapterMock.mockReturnValueOnce({...adapter,name:agent});
+    await launchCommand({agent,key:"default",modelKinds:"all"});
+    expect(adapter.spawn.mock.calls[0]![1]).toMatchObject({modelKinds:"all",apiKey:"synthetic"});
+  });
+
+  it.each([["hermes","all"],["pi","models"]])("rejects unsupported catalog policy for %s before login",async(agent,modelKinds)=>{
+    getAdapterMock.mockReturnValueOnce({...adapter,name:agent});
+    await expect(launchCommand({agent,key:"missing",modelKinds})).rejects.toMatchObject({code:"INVALID_ARGUMENT"});
+    expect(loginMock).not.toHaveBeenCalled(); expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
   it("keeps desktop launches direct unless --proxy is explicit", async () => {
     await setSlot("default", { apiKey: "real-key" });
     adapter.detect.mockResolvedValue({ installed: true }); adapter.spawn.mockResolvedValue(0);

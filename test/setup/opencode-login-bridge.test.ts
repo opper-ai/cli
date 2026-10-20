@@ -84,3 +84,25 @@ describe("OpenCode login bridge setup", () => {
     expect(await readFile(path, "utf8")).toContain("CustomPlugin");
   });
 });
+
+it("uses narrow native-plugin fallback for fresh setup and retains configured or selected deployments", async () => {
+  const installed = await installOpenCodeLoginBridge();
+  expect(await readFile(installed.path, "utf8")).toContain('const DEFAULT_MODEL_KINDS = "pools,routes";');
+  vi.stubEnv("OPPER_API_KEY", "synthetic"); vi.stubEnv("OPPER_CLI_LAUNCH_OPENCODE", "0");
+  const entries = [
+    {id:"vendor/new",opper:{kind:"model"}}, {id:"pool",opper:{kind:"pool"}},
+    {id:"dynamic/team",opper:{kind:"dynamic_route"}}, {id:"vendor/saved",opper:{kind:"model"}},
+  ].map(entry=>({...entry,pricing:{prompt:"0.000001",completion:"0.000002"},opper:{...entry.opper,type:"llm",capabilities:["tools"]}}));
+  vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>Promise.resolve(Response.json({data:entries}))));
+  const plugin=await import(pathToFileURL(installed.path).href);
+  const fresh: any={}; await (await plugin.OpperLoginPlugin()).config(fresh);
+  expect(fresh.provider.opper.whitelist).toEqual(["dynamic/team","pool"]);
+  const upgrade: any={model:"opper/vendor/saved",agent:{plan:{model:"opper/vendor/saved"}},provider:{opper:{models:{"vendor/new":{},"vendor/denied":{}}}}};
+  await (await plugin.OpperLoginPlugin()).config(upgrade);
+  expect(upgrade.provider.opper.whitelist).toEqual(["dynamic/team","pool","vendor/new","vendor/saved"]);
+  expect(upgrade.model).toBe("opper/vendor/saved"); expect(upgrade.agent.plan.model).toBe("opper/vendor/saved");
+  await installOpenCodeLoginBridge("default",undefined,"all");
+  expect(await readFile(installed.path,"utf8")).toContain('const DEFAULT_MODEL_KINDS = "all";');
+  await installOpenCodeLoginBridge();
+  expect(await readFile(installed.path,"utf8")).toContain('const DEFAULT_MODEL_KINDS = "all";');
+});

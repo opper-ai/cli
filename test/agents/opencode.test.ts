@@ -189,7 +189,7 @@ describe("opencode adapter", () => {
     vi.stubEnv("OPENCODE_CONFIG_CONTENT", JSON.stringify({ provider: { opper: { options: { headers: { "X-Opper-Project": "stale", "X-Team": "team" } } } } }));
     spawnSyncMock.mockReturnValue({ status: 0 });
     await opencode.spawn!([], { ...ROUTING, projectUuid });
-    expect(resolveOpenCodeModelsMock).toHaveBeenCalledWith({ apiKey: ROUTING.apiKey, baseUrl: ROUTING.apiBaseUrl, projectUuid });
+    expect(resolveOpenCodeModelsMock).toHaveBeenCalledWith({ apiKey: ROUTING.apiKey, baseUrl: ROUTING.apiBaseUrl, projectUuid }, expect.objectContaining({modelKinds:"pools,routes"}));
     const config = JSON.parse(spawnSyncMock.mock.calls[0]![2].env.OPENCODE_CONFIG_CONTENT);
     expect(config.provider.opper.options.headers).toEqual({ "X-Team": "team", "X-Opper-Project": projectUuid });
     vi.unstubAllEnvs();
