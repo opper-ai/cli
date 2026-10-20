@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { getSlot, isSlotExpired } from "../auth/config.js";
 import { configPath, opperHome } from "../auth/paths.js";
@@ -21,7 +21,7 @@ const REQUIRED = ["codex", "launcher.mjs", "auth.mjs"] as const;
 const OPTIONAL = ["catalog.json", "node", "NODE-LICENSE", "settings.json"] as const;
 const FILES = [...REQUIRED, ...OPTIONAL, "state.json"];
 type Artifact = { data: Buffer; mode: number };
-type State = { version: 1; files: Record<string, { sha256: string; mode: number }>; catalogUrl?: string; model?: string; projectUuid?: string };
+type State = { version: 1; files: Record<string, { sha256: string; mode: number }>; catalogUrl?: string; model?: string; projectUuid?: string; codexHome?: string };
 const digest = (data: Buffer) => createHash("sha256").update(data).digest("hex");
 const conflict = (message: string) => new OpperError("AGENT_CONFIG_CONFLICT", message);
 function paths() {
@@ -120,6 +120,7 @@ function stateOf(files: Map<string, Artifact>): State | undefined {
       (state.catalogUrl !== undefined && typeof state.catalogUrl !== "string") ||
       (state.model !== undefined && typeof state.model !== "string") ||
       (state.projectUuid !== undefined && typeof state.projectUuid !== "string") ||
+      (state.codexHome !== undefined && (typeof state.codexHome !== "string" || !isAbsolute(state.codexHome))) ||
       Boolean(state.files.node) !== Boolean(state.files["NODE-LICENSE"]) ||
       Object.entries(state.files).some(([name, value]) => ![...REQUIRED, ...OPTIONAL].includes(name as typeof REQUIRED[number]) || !/^[a-f0-9]{64}$/.test(value?.sha256) || ![0o600, 0o700].includes(value?.mode))) {
     throw conflict("Invalid Conductor integration ownership state; preserve its files before retrying.");
@@ -209,13 +210,24 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
   const host = rootUrl(slot.baseUrl || OPPER_HOST);
   const selectedHost = rootUrl(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? host);
   if (selectedHost !== host || (opts.apiKey !== undefined && opts.apiKey !== slot.apiKey)) throw conflict("The selected credential or API host differs from its stored slot. Retry with the matching slot.");
-  if (await hasInheritedCodexCatalog("opper-conductor")) throw conflict("An inherited Codex model catalog or unreadable configuration is present. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
+  const p = paths();
+  const requestedHome = process.env.CODEX_HOME ? resolve(process.env.CODEX_HOME) : undefined;
+  const defaultHome = resolve(join(homedir(), ".codex"));
+  const initialHome = requestedHome ?? defaultHome;
+  // Host policy is independent of a retained binding. On first setup, also
+  // reject personal catalogs before creating the managed integration directory.
+  if (await hasInheritedCodexCatalog("opper-conductor", {codexHome: initialHome, includeUserConfig: false}) ||
+      (!existsSync(join(p.directory, "state.json")) && await hasInheritedCodexCatalog("opper-conductor", {codexHome: initialHome}))) {
+    throw conflict("An inherited Codex model catalog or unreadable configuration is present. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
+  }
   let model = opts.model ?? DEFAULT_MODELS.opus;
   let modelCount = 0, nativeDiscovery = false;
-  const p = paths(), binding = {configPath: resolve(configPath()), keyName, host, org: slot.orgId === undefined ? null : String(slot.orgId)};
+  const binding = {configPath: resolve(configPath()), keyName, host, org: slot.orgId === undefined ? null : String(slot.orgId)};
   await locked(async () => {
     await regular(p.directory, true);
     const previous = await snapshot(p.directory), state = stateOf(previous);
+    const codexHome = requestedHome ?? state?.codexHome ?? defaultHome;
+    if (await hasInheritedCodexCatalog("opper-conductor", {codexHome})) throw conflict("An inherited Codex model catalog or unreadable configuration is present in the selected Codex home. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
     const previousCatalog = previous.get("catalog.json");
     if (opts.model === undefined && state) {
       if (state.model) model = state.model;
@@ -227,7 +239,7 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
         } catch { throw conflict("The existing Conductor model selection is invalid; its files were preserved."); }
       }
     }
-    const configPath = join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml");
+    const configPath = join(codexHome, "config.toml");
     const personalConfig = await readPersonalConfig(configPath);
     const personal = readDesktopConfig(personalConfig ?? "");
     if (Object.hasOwn(personal, "model_catalog_json")) throw conflict("Conductor has a personal Codex model_catalog_json. Existing settings were preserved; reconcile that catalog before configuring Conductor.");
@@ -235,7 +247,7 @@ async function configure(opts: ConfigureOptions = {}): Promise<void> {
     if (customProvider?.model_catalog_url !== undefined) throw conflict("Conductor's Codex provider has a manually configured model_catalog_url. Its settings and integration were preserved; reconcile that URL before configuring managed discovery.");
     const projectUuid = opts.projectUuid ?? previousProject(previous, state);
     const kinds = nativeCodexRefreshKinds(model, opts.modelKinds, state?.catalogUrl, previousCatalog !== undefined);
-    const native = supportsNativeCodexCatalog(runtime.path)
+    const native = supportsNativeCodexCatalog(runtime.path, codexHome)
       ? await nativeCodexCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model, kinds) : undefined;
     const catalog = native ? undefined : await fetchConductorModelCatalog({apiKey: slot.apiKey, baseUrl: host, ...(projectUuid ? {projectUuid} : {})}, model,
       kinds);
@@ -268,8 +280,14 @@ try {
       auth: {command: node, args: [join(p.directory, "auth.mjs"), JSON.stringify(binding)], refresh_interval_ms: 300_000}};
     const overrides = ["-c", 'model_provider="opper-conductor"', "-c", `model_providers.opper-conductor=${toml(provider)}`, ...(!native ? ["-c", `model_catalog_json=${toml(join(p.directory, "catalog.json"))}`] : []), "-c", `model=${toml(model)}`, "-c", 'web_search="disabled"'];
     const launcher = `import {readdirSync} from "node:fs";
-import {join} from "node:path";
+import {join,resolve} from "node:path";
 import {spawn, spawnSync} from "node:child_process";
+const codexHome = ${JSON.stringify(codexHome)};
+if (process.env.CODEX_HOME && resolve(process.env.CODEX_HOME)!==codexHome) {
+  process.stderr.write("Conductor supplied a different CODEX_HOME from the home verified during setup. Preserve that workspace setting and reconfigure Conductor with its CODEX_HOME, or launch with the configured home.\\n");
+  process.exit(1);
+}
+process.env.CODEX_HOME=codexHome;
 const directory = ${JSON.stringify(binaryRoot())};
 const featureFlags=[];
 for(let i=2;i<process.argv.length;i++) {
@@ -308,7 +326,7 @@ try {
     if (catalog) add("catalog.json", JSON.stringify(catalog, null, 2) + "\n");
     add("settings.json", JSON.stringify(configured.backup, null, 2) + "\n");
     if (bundled) { add("node", await readFile(process.execPath), 0o700); add("NODE-LICENSE", await readFile(join(dirname(process.execPath), "NODE-LICENSE"))); }
-    const next: State = {version: 1, files: Object.fromEntries([...generated].map(([name, artifact]) => [name, {sha256: digest(artifact.data), mode: artifact.mode}])), ...(native ? {catalogUrl: native.url, model} : {}), ...(projectUuid ? {projectUuid} : {})};
+    const next: State = {version: 1, codexHome, files: Object.fromEntries([...generated].map(([name, artifact]) => [name, {sha256: digest(artifact.data), mode: artifact.mode}])), ...(native ? {catalogUrl: native.url, model} : {}), ...(projectUuid ? {projectUuid} : {})};
     add("state.json", JSON.stringify(next, null, 2) + "\n");
     const changes: Change[] = FILES.filter(name => name !== "state.json" && (generated.has(name) || state?.files[name])).map(name => ({path: join(p.directory, name), previous: previous.get(name) ?? null, next: generated.get(name) ?? null}));
     changes.push({path: settings, previous: originalSettings, next: {data: Buffer.from(configured.text), mode: originalSettings?.mode ?? 0o600}});

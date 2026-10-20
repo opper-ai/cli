@@ -67,7 +67,7 @@ async function stopSetupLockOwner(child: ReturnType<typeof spawn>) {
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "opper conductor "));mocks.home=home;managed=join(home,".opper/conductor");
-  mocks.platform="darwin";mocks.failRename="";mocks.failRemove="";mocks.beforeRename=undefined;vi.stubEnv("OPPER_HOME", join(home,".opper"));vi.stubEnv("OPPER_API_KEY", undefined);vi.stubEnv("OPPER_BASE_URL", undefined);vi.stubEnv("OPPER_DISTRIBUTION", undefined);
+  mocks.platform="darwin";mocks.failRename="";mocks.failRemove="";mocks.beforeRename=undefined;vi.stubEnv("OPPER_HOME", join(home,".opper"));vi.stubEnv("OPPER_API_KEY", undefined);vi.stubEnv("OPPER_BASE_URL", undefined);vi.stubEnv("OPPER_DISTRIBUTION", undefined);vi.stubEnv("CODEX_HOME",undefined);
   mocks.run.mockReset();mocks.run.mockImplementation((cmd: string) => ({code: 0,stdout: cmd.endsWith("plutil") ? "com.conductor.app" : "codex-cli 0.162.1",stderr:""}));
   mocks.catalog.mockReset();mocks.catalog.mockImplementation(async (_context, selected, kinds) => toConductorModelCatalog([{id:model,opper:{kind:"dynamic_route",capabilities:["tools"]}},{id:"synthetic/extra",opper:{kind:"model",type:"llm",capabilities:["tools"]}}],selected,kinds));
   await setSlot("test",{apiKey:key,baseUrl:host,orgId:42});runtime();vi.spyOn(console,"log").mockImplementation(()=>{});
@@ -82,6 +82,58 @@ describe.skipIf(process.platform === "win32")("Conductor Codex integration",()=>
   function nativeMetadata() {
     return toConductorModelCatalog([{id:model,opper:{kind:"dynamic_route",capabilities:["tools"]}}], model);
   }
+  function homeAwareRuntime() {
+    const target=runtime();
+    writeFileSync(target,`#!${process.execPath}\nconst {readFileSync}=require('node:fs'),{join}=require('node:path');const home=process.env.CODEX_HOME||join(process.env.HOME,'.codex');let text='';try{text=readFileSync(join(home,'config.toml'),'utf8')}catch{}if(process.argv.includes('--version'))console.log('codex-cli 0.162.1');else if(process.argv.includes('features'))console.log('api_key_model_discovery stable '+(!/api_key_model_discovery\\s*=\\s*false/.test(text)));else console.log(JSON.stringify({home,args:process.argv.slice(2)}));\n`,{mode:0o700});
+    const previous=mocks.run.getMockImplementation()!;
+    mocks.run.mockImplementation((command:string,args:string[],options?:Parameters<typeof spawnSync>[2])=>{
+      if(args[0]!=="features")return previous(command,args,options);
+      const output=spawnSync(command,args,{...options,encoding:"utf8"});return{code:output.status??-1,stdout:output.stdout??"",stderr:output.stderr??""};
+    });
+  }
+  function guiLaunch(codexHome?:string) {
+    return spawnSync(join(managed,"codex"),["app-server"],{encoding:"utf8",timeout:5000,env:{PATH:process.env.PATH,HOME:home,...(codexHome===undefined?{}:{CODEX_HOME:codexHome})}});
+  }
+  function homeConfig(name:string,text:string) {
+    const path=join(home,name);mkdirSync(path,{recursive:true});writeFileSync(join(path,"config.toml"),text);return path;
+  }
+  it("keeps a custom discovery opt-out effective when Conductor launches without CODEX_HOME",async()=>{
+    const selected=homeConfig("custom-codex",'[features]\napi_key_model_discovery=false\n');vi.stubEnv("CODEX_HOME",selected);homeAwareRuntime();
+    await conductor.configure(options());expect(mocks.catalog).toHaveBeenCalledTimes(1);
+    const launched=guiLaunch();expect(launched.status,launched.stderr).toBe(0);
+    const result=JSON.parse(launched.stdout);expect(result.home).toBe(selected);expect(result.args.some((arg:string)=>arg.startsWith("model_catalog_json="))).toBe(true);
+  });
+  it("pins native discovery to its verified home and rejects a different workspace home before runtime startup",async()=>{
+    const selected=homeConfig("custom-codex",'[features]\napi_key_model_discovery=true\n');homeConfig(".codex",'[features]\napi_key_model_discovery=false\n');
+    vi.stubEnv("CODEX_HOME",selected);homeAwareRuntime();vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>Promise.resolve(Response.json(nativeMetadata()))));
+    await conductor.configure(options());
+    for(const incoming of [undefined,selected]) {
+      const launched=guiLaunch(incoming);expect(launched.status,launched.stderr).toBe(0);expect(JSON.parse(launched.stdout).home).toBe(selected);
+    }
+    const other=homeConfig("workspace-codex",'model_catalog_json="/workspace/catalog.json"\n');
+    const mismatch=guiLaunch(other);expect(mismatch.status).toBe(1);expect(mismatch.stderr).toContain("CODEX_HOME");expect(mismatch.stderr).toContain("reconfigure");expect(mismatch.stdout).toBe("");
+    expect(JSON.parse(readFileSync(join(managed,"state.json"),"utf8")).codexHome).toBe(selected);
+  });
+  it("retains the verified home on refresh and preserves personal homes on conflict and removal",async()=>{
+    const selected=homeConfig("custom-codex",'[features]\napi_key_model_discovery=true\n');vi.stubEnv("CODEX_HOME",selected);homeAwareRuntime();vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>Promise.resolve(Response.json(nativeMetadata()))));
+    await conductor.configure(options());
+    const other=homeConfig(".codex",'model_catalog_json="/personal/catalog.json"\n');vi.stubEnv("CODEX_HOME",undefined);
+    await conductor.configure(options());expect(JSON.parse(readFileSync(join(managed,"state.json"),"utf8")).codexHome).toBe(selected);
+    const before=contents();vi.stubEnv("CODEX_HOME",other);await expect(conductor.configure(options())).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});expect(contents()).toEqual(before);
+    await conductor.unconfigure();expect(readFileSync(join(selected,"config.toml"),"utf8")).toBe('[features]\napi_key_model_discovery=true\n');expect(readFileSync(join(other,"config.toml"),"utf8")).toBe('model_catalog_json="/personal/catalog.json"\n');
+  });
+  it("allows an explicit new Codex home binding without modifying either home's settings",async()=>{
+    const first=homeConfig("first-codex",'[features]\napi_key_model_discovery=true\n'), second=homeConfig("second-codex",'[features]\napi_key_model_discovery=true\n');
+    vi.stubEnv("CODEX_HOME",first);homeAwareRuntime();vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>Promise.resolve(Response.json(nativeMetadata()))));
+    await conductor.configure(options());vi.stubEnv("CODEX_HOME",second);await conductor.configure(options());
+    expect(JSON.parse(readFileSync(join(managed,"state.json"),"utf8")).codexHome).toBe(second);
+    const launched=guiLaunch();expect(launched.status,launched.stderr).toBe(0);expect(JSON.parse(launched.stdout).home).toBe(second);expect(guiLaunch(first).status).toBe(1);
+    await conductor.unconfigure();for(const path of [first,second])expect(readFileSync(join(path,"config.toml"),"utf8")).toBe('[features]\napi_key_model_discovery=true\n');
+  });
+  it.each(["relative-home",42])("preserves owned state with an invalid Codex home binding: %s",async invalid=>{
+    await conductor.configure(options());const statePath=join(managed,"state.json"), state=JSON.parse(readFileSync(statePath,"utf8"));state.codexHome=invalid;writeFileSync(statePath,JSON.stringify(state));
+    const before=contents();await expect(conductor.configure(options())).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});await expect(conductor.unconfigure()).rejects.toMatchObject({code:"AGENT_CONFIG_CONFLICT"});expect(contents()).toEqual(before);
+  });
   it("uses native URL discovery on fresh supported setups without a static catalog and removes it safely", async () => {
     nativeRuntime(); vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json(nativeMetadata())));
     await conductor.configure(options());

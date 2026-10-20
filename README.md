@@ -251,6 +251,14 @@ previous values for removal. If an earlier manual setup already selected this
 generated executable, removal clears that path to return to Conductor's bundled
 Codex. The executable uses invocation-specific provider and catalog settings;
 ordinary Codex settings in `~/.codex/config.toml` remain unchanged.
+
+Setup records the selected `CODEX_HOME` (default `~/.codex`) so GUI launches use
+the same verified catalog and feature settings. Refresh retains that home when
+the environment variable is absent. To select another home, rerun your configure
+command with `CODEX_HOME=/absolute/path` and the same key/project options. If a launch supplies
+a different `CODEX_HOME`, the wrapper stops with guidance instead of overriding
+that workspace setting. Removal preserves both homes' personal files.
+
 The API key stays in the CLI credential store and is
 read from the selected slot when Codex refreshes credentials. Renewing that slot
 within the same organization and API host works without copying another key

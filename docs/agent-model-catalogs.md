@@ -115,6 +115,12 @@ provider selections cannot disappear. Broad native policy stays broad; changing 
 narrow native selection also broadens it to preserve the prior selection. Claude
 Desktop upgrades from an existing explicit list also use `all`.
 
+Conductor records the Codex home verified during setup, retaining it on refresh
+unless `CODEX_HOME` explicitly selects another home. Its wrapper uses that home
+for capability checks and Codex children when no different home is supplied.
+A differing GUI/workspace `CODEX_HOME` causes a clear error before starting Codex;
+the wrapper preserves that setting rather than silently overriding it.
+
 ## Local validation
 
 Run the focused unit suites and `npm test`, `npm run typecheck`, `npm run build`.

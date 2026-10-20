@@ -73,7 +73,9 @@ const originalConductorSettings = '# Existing Conductor preferences\n' +
   'wrap_lines = true # Preserve this preference\nterminal_font_size = "14"\n' +
   '[git]\nbranch_prefix_custom = "keep-this-prefix"\n';
 const normalCodex = join(home, ".codex");
-const normalConfig = 'model = "synthetic-normal-codex"\nmodel_provider = "openai"\nweb_search = "cached"\n';
+const selectedCodex = join(home, "selected-codex");
+const selectedConfig = "[features]\napi_key_model_discovery = true\n";
+const normalConfig = 'model = "synthetic-normal-codex"\nmodel_provider = "openai"\nweb_search = "cached"\n[features]\napi_key_model_discovery = false\n';
 const normalAuth = '{"OPENAI_API_KEY":"synthetic-normal-auth"}\n';
 const requests = [];
 const children = new Set();
@@ -86,7 +88,7 @@ let nativeNewRoute = false;
 const env = {
   PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin`,
   HOME: home, ZDOTDIR: home, SHELL: "/bin/zsh", TMPDIR: temporary,
-  OPPER_HOME: opperHome, CODEX_HOME: normalCodex,
+  OPPER_HOME: opperHome, CODEX_HOME: selectedCodex,
   XDG_CONFIG_HOME: join(home, ".config"), XDG_CACHE_HOME: join(home, ".cache"),
   XDG_DATA_HOME: join(home, ".local", "share"), XDG_STATE_HOME: join(home, ".local", "state"),
   HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9", ALL_PROXY: "http://127.0.0.1:9",
@@ -94,6 +96,9 @@ const env = {
   NO_PROXY: "127.0.0.1,localhost", no_proxy: "127.0.0.1,localhost", OTEL_SDK_DISABLED: "true",
   CONDUCTOR_INTERNAL_BIN_DIR: dirname(runtime),
 };
+
+const guiEnv = {...env};
+delete guiEnv.CODEX_HOME;
 
 function responseEvents(model) {
   const item = { id: "msg_synthetic", type: "message", status: "completed", role: "assistant",
@@ -195,7 +200,7 @@ async function stop(child) {
 }
 
 async function withSidecar(operation) {
-  const child = spawn(runtime, ["sidecar"], { cwd: home, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(runtime, ["sidecar"], { cwd: home, env: guiEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let stdout = "", stderr = "", socket;
   const events = [], waiters = new Set();
@@ -309,6 +314,8 @@ try {
   const baseUrl = `http://127.0.0.1:${address.port}`;
   await mkdir(normalCodex, { recursive: true });
   await writeFile(join(normalCodex, "config.toml"), normalConfig);
+  await mkdir(selectedCodex);
+  await writeFile(join(selectedCodex, "config.toml"), selectedConfig);
   await writeFile(join(normalCodex, "auth.json"), normalAuth, { mode: 0o600 });
   await mkdir(dirname(conductorSettingsPath), { recursive: true });
   await writeFile(conductorSettingsPath, originalConductorSettings);
@@ -334,6 +341,10 @@ try {
     ...(modelKinds ? ["--model-kinds", modelKinds] : [])]);
   const configured = await configure(poolID);
   assert.ok(configured.stdout.includes(wrapper), "the operator receives the actual generated executable path");
+  assert.equal(JSON.parse(await readFile(join(dirname(wrapper),"state.json"),"utf8")).codexHome,selectedCodex);
+  // Subsequent refreshes and actual GUI sidecars omit the shell's selected home.
+  // The managed binding must persist while the normal home opts out of native discovery.
+  delete env.CODEX_HOME;
   await access(wrapper, constants.X_OK);
   await selectedExecutable();
   const configuredSettings = await readFile(conductorSettingsPath, "utf8");
@@ -401,6 +412,9 @@ try {
   assert.ok(managedState.catalogUrl.includes("format=codex"));
   assert.equal(new URL(managedState.catalogUrl).searchParams.has("type"),false);
   await assert.rejects(access(join(dirname(wrapper),"catalog.json")),{code:"ENOENT"});
+  const beforeMismatch=requests.length;
+  await assert.rejects(run(wrapper,["app-server"],{...cliOptions,env:{...env,CODEX_HOME:normalCodex}}),error=>/different CODEX_HOME/.test(error.stderr));
+  assert.equal(requests.length,beforeMismatch,"a different workspace home is preserved and rejected before Codex discovery");
   const beforeDisabled=requests.length;
   await assert.rejects(run(wrapper,["--disable","api_key_model_discovery","--version"],cliOptions),error=>/reconfigure/.test(error.stderr));
   assert.equal(requests.length,beforeDisabled,"a disabled native wrapper fails before starting catalog discovery");
@@ -427,7 +441,9 @@ try {
   // A fresh native installation can safely use the compact policy plus one
   // exact selected deployment exception. Removal restores the same preferences.
   await invokeCLI(["--no-telemetry","agents","remove","conductor"]);
+  env.CODEX_HOME=selectedCodex; // A fresh installation explicitly selects its home.
   await configure(additionalID);
+  delete env.CODEX_HOME;
   managedState=JSON.parse(await readFile(managedStatePath,"utf8"));
   assert.equal(new URL(managedState.catalogUrl).searchParams.get("type"),"pool,dynamic_route");
   const freshNative=await listModels();
@@ -447,8 +463,9 @@ try {
     "remove restores the previous provider/executable and preserves unrelated comments and edits");
   assert.equal(await readFile(join(normalCodex, "config.toml"), "utf8"), normalConfig);
   assert.equal(await readFile(join(normalCodex, "auth.json"), "utf8"), normalAuth);
+  assert.equal(await readFile(join(selectedCodex,"config.toml"),"utf8"),selectedConfig);
   assert.ifError(fixtureError);
-  console.log(`Conductor ${runtimeVersion}; Codex ${version}: legacy fallback; native API discovery, fresh/upgrade catalog policy, runtime refresh, exact SSE completion, provider exception/all, key rotation, auth failure preservation, project headers, removal restoration and normal Codex preservation passed. Fake keys and loopback only.`);
+  console.log(`Conductor ${runtimeVersion}; Codex ${version}: legacy fallback; native API discovery, fresh/upgrade catalog policy, runtime refresh, pinned home without GUI env, workspace-home conflict, exact SSE completion, provider exception/all, key rotation, auth failure preservation, project headers, removal restoration and normal Codex preservation passed. Fake keys and loopback only.`);
 } finally {
   await Promise.all([...children].map(stop));
   server.closeAllConnections();
