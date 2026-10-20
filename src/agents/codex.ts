@@ -1,7 +1,10 @@
 import { spawnSync } from "../util/spawn.js";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
+import { fetchCodexModelCatalog } from "../setup/codex-models.js";
+import { run } from "../util/run.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
 import type { AgentAdapter, DetectResult, OpperRouting } from "./types.js";
@@ -88,9 +91,31 @@ function hasNativeModelSelection(args: string[]): boolean {
       ? args[++i]
       : arg.startsWith("--config=") ? arg.slice(9)
       : arg.startsWith("-c") ? arg.slice(2) : undefined;
-    if (config && /^model\s*=/.test(config)) return true;
+    if (config && /^(?:model|model_provider)\s*=/.test(config)) return true;
   }
   return false;
+}
+
+// Native profiles/config/session files can carry an opaque selected model or
+// catalog. Let Codex resolve those unchanged, rather than hiding a saved ID.
+function hasOpaqueCatalogSelection(args: string[]): boolean {
+  if (hasNativeModelSelection(args)) return true;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") break;
+    if (arg === "resume" || arg === "fork") return true;
+    if (arg === "-c" || arg === "--config" || arg.startsWith("--config=") || arg.startsWith("-c")) return true;
+  }
+  return false;
+}
+
+function supportsInvocationCatalog(): boolean {
+  const version = run("codex", ["--version"], { timeout: 5_000 });
+  const match = version.stdout.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
+  if (version.code !== 0 || !match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  // The generated ModelInfo schema is verified from this runtime onward.
+  return major! > 0 || minor! > 153 || (minor === 153 && patch! >= 4);
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
@@ -106,11 +131,26 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     "-c", 'web_search="disabled"',
   ];
   const modelArgs = hasNativeModelSelection(args) ? [] : ["--model", routing.model];
-  const result = spawnSync("codex", [...overrides, ...modelArgs, ...args], {
-    stdio: "inherit",
-    env: { ...process.env, OPPER_API_KEY: routing.apiKey },
-  });
-  return result.status ?? -1;
+  let directory: string | undefined;
+  try {
+    if (!hasOpaqueCatalogSelection(args) && !await hasInheritedCodexCatalog(PROVIDER) && supportsInvocationCatalog()) {
+      const catalog = await fetchCodexModelCatalog({
+        apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl,
+        ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}),
+      }, routing.model, { ...(routing.modelKinds ? { modelKinds: routing.modelKinds } : {}) });
+      directory = await mkdtemp(join(tmpdir(), "opper-codex-catalog-"));
+      const path = join(directory, "catalog.json");
+      await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
+      overrides.push("-c", `model_catalog_json=${JSON.stringify(path)}`);
+    }
+    const result = spawnSync("codex", [...overrides, ...modelArgs, ...args], {
+      stdio: "inherit",
+      env: { ...process.env, OPPER_API_KEY: routing.apiKey },
+    });
+    return result.status ?? -1;
+  } finally {
+    if (directory) await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export const codex: AgentAdapter = {

@@ -232,17 +232,17 @@ describe("agentsConfigureCommand", () => {
     expect(configure).not.toHaveBeenCalled();
   });
 
-  it.each(["all", "pools,routes"])("forwards Conductor catalog selection %s", async (modelKinds) => {
-    getAdapterMock.mockReturnValue({ name: "conductor", displayName: "Conductor", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
+  it.each(["conductor", "codex-desktop", "opencode", "pi"].flatMap(agent => ["all", "pools,routes"].map(modelKinds => [agent, modelKinds])))("forwards %s catalog selection %s", async (agent, modelKinds) => {
+    getAdapterMock.mockReturnValue({ name: agent, displayName: "Conductor", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
     await setSlot("prod", { apiKey: "fixture-prod" });
     const { agentsConfigureCommand } = await import("../../src/commands/agents.js");
-    await agentsConfigureCommand("conductor", "prod", undefined, undefined, undefined, { modelKinds });
+    await agentsConfigureCommand(agent, "prod", undefined, undefined, undefined, { modelKinds });
     expect(configure).toHaveBeenCalledExactlyOnceWith({ keyName: "prod", apiKey: "fixture-prod", baseUrl: "https://api.opper.ai", modelKinds });
   });
 
   it.each([
     ["conductor", "models"], ["conductor", ""], ["conductor", "pools"],
-    ["codex-desktop", "all"], ["pi", "pools,routes"],
+    ["claude", "all"], ["hermes", "pools,routes"],
   ])("rejects unsupported catalog selection for %s (%s) before credentials or writes", async (agent, modelKinds) => {
     getAdapterMock.mockReturnValue({ name: agent, displayName: agent, docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
     const { agentsConfigureCommand } = await import("../../src/commands/agents.js");

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { OpperApi, type OpperApiConfig } from "../api/client.js";
 import { OpperError } from "../errors.js";
+import { selectCatalogEntries, type CatalogSelection } from "./model-catalog.js";
 import { compatDisplayName, displayName } from "./opencode-models.js";
 
 const compatModelSchema = z.object({
@@ -78,10 +79,11 @@ function reasoningFor(entry: CodexCompatModel, metadata: Map<string, CodexModelM
   const efforts = members.length === 0 ? [] : REASONING_EFFORTS.filter((effort) =>
     members.every((member) => member?.supported.includes(effort)),
   );
+  // Supported efforts are choices, not evidence of a default. Every possible
+  // pool member must explicitly agree before we advertise one to Codex.
   const commonDefault = members[0]?.default;
   const defaultEffort = efforts.find((effort) => effort === commonDefault &&
-    members.every((member) => member?.default === commonDefault)) ??
-    efforts.find((effort) => effort === "medium") ?? efforts[0];
+    members.every((member) => member?.default === commonDefault));
   return {
     supported_reasoning_levels: efforts.map((effort) => ({
       effort,
@@ -103,6 +105,7 @@ export function toCodexModelCatalog(
   entries: CodexCompatModel[],
   selectedModel: string,
   modelMetadata: CodexModelMetadata[] = [],
+  selection?: CatalogSelection,
 ): CodexModelCatalog {
   const metadata = new Map(modelMetadata.map((entry) => [entry.id, entry]));
   const usable = entries.filter((entry) =>
@@ -127,7 +130,7 @@ export function toCodexModelCatalog(
     ...unique.filter((entry) => entry.id !== selectedModel),
   ];
   return {
-    models: ordered.map((entry, priority) => {
+    models: (selection ? selectCatalogEntries(unique, { ...selection, selectedModel }) : ordered).map((entry, priority) => {
       const context = Number.isFinite(entry.context_length) && entry.context_length! > 0
         ? Math.floor(entry.context_length!)
         : FALLBACK_CONTEXT;
@@ -161,6 +164,7 @@ export function toCodexModelCatalog(
 export async function fetchCodexModelCatalog(
   context: OpperApiConfig,
   selectedModel: string,
+  selection: CatalogSelection = {},
 ): Promise<CodexModelCatalog> {
   const api = new OpperApi(context);
   const response = await api.get<unknown>("/v3/compat/models");
@@ -175,5 +179,5 @@ export async function fetchCodexModelCatalog(
   if (!metadata.success) {
     throw new OpperError("API_ERROR", "Opper returned invalid model reasoning metadata.");
   }
-  return toCodexModelCatalog(parsed.data.data, selectedModel, metadata.data.models);
+  return toCodexModelCatalog(parsed.data.data, selectedModel, metadata.data.models, selection);
 }

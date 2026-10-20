@@ -49,6 +49,11 @@ describe("agent command options", () => {
     );
   });
 
+  it.each(["codex", "codex-desktop", "opencode", "pi"])("consumes catalog selection for %s launch", async (agent) => {
+    await program().parseAsync(["launch",agent,"--model-kinds","all","--model","vendor/selected"],{from:"user"});
+    expect(commands.launch).toHaveBeenCalledExactlyOnceWith({agent,key:"default",modelKinds:"all",model:"vendor/selected",passthrough:[]});
+  });
+
   it("parses --codex-home for removal", async () => {
     await program().parseAsync(["agents", "remove", "codex-desktop", "--codex-home=/tmp/Codex Home"], { from: "user" });
     expect(commands.remove).toHaveBeenCalledExactlyOnceWith("codex-desktop", "/tmp/Codex Home");

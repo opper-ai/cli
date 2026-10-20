@@ -38,7 +38,7 @@ const register: RegisterFn = (program, ctx) => {
     .command("configure <name>")
     .description("Configure an agent to use the selected Opper key without launching it")
     .option("--model <id>", "Opper model identifier (where supported)")
-    .option("--model-kinds <kinds>", "Conductor catalog: pools,routes (default) or all (includes provider-specific models)")
+    .option("--model-kinds <kinds>", "Catalog: pools,routes (fresh setup default) or all, for Conductor, Codex Desktop, OpenCode and Pi")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--proxy", "configure the local desktop session proxy (codex-desktop or claude-desktop)")
     .option("--state-dir <path>", "local proxy state directory (requires --proxy)")
@@ -82,6 +82,7 @@ const register: RegisterFn = (program, ctx) => {
     )
     .argument("<agent>", "agent name (e.g. hermes)")
     .option("--model <id>", "Opper model identifier")
+    .option("--model-kinds <kinds>", "Catalog: pools,routes or all, for Codex, Codex Desktop, OpenCode and Pi")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--install", "install the agent if missing", false)
     .option("--proxy", "use the local desktop session proxy (codex-desktop or claude-desktop)")
@@ -105,6 +106,7 @@ const register: RegisterFn = (program, ctx) => {
         agentName: string,
         cmdOpts: {
           model?: string;
+          modelKinds?: string;
           codexHome?: string;
           install?: boolean;
           project?: boolean;
@@ -121,6 +123,7 @@ const register: RegisterFn = (program, ctx) => {
           key: ctx.key(),
           ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+          ...(cmdOpts.modelKinds !== undefined ? { modelKinds: cmdOpts.modelKinds } : {}),
           ...(cmdOpts.codexHome !== undefined ? { codexHome: cmdOpts.codexHome } : {}),
           ...(cmdOpts.proxy ? { proxy: true } : {}),
           ...(cmdOpts.stateDir !== undefined ? { stateDir: cmdOpts.stateDir } : {}),

@@ -61,3 +61,17 @@ it("exposes max effort on the legacy Pi xhigh selector", async () => {
  })]})));
  expect((await fetchPiModels(ctx, {legacyMaxLevel:true}))[0]?.thinkingLevelMap.xhigh).toBe("max");
 });
+
+it("narrows only when requested and retains explicitly selected and previously available provider IDs", async () => {
+ const data = [model("vendor/new-model",{opper:{kind:"model",capabilities:["tools"],max_output_tokens:4096}}), model("pool",{opper:{kind:"pool",capabilities:["tools"],max_output_tokens:4096}}), model("dynamic/team",{opper:{kind:"dynamic_route",capabilities:["tools"],max_output_tokens:4096}})];
+ vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>Promise.resolve(Response.json({data}))));
+ expect((await fetchPiModels(ctx,{modelKinds:"pools,routes"})).map(model=>model.id)).toEqual(["dynamic/team","pool"]);
+ expect((await fetchPiModels(ctx,{modelKinds:"pools,routes",selectedModel:"vendor/new-model"})).map(model=>model.id)).toEqual(["vendor/new-model","dynamic/team","pool"]);
+ expect((await fetchPiModels(ctx,{modelKinds:"pools,routes",preserveIds:["vendor/new-model","withdrawn"]})).map(model=>model.id)).toContain("vendor/new-model");
+ await expect(fetchPiModels(ctx,{modelKinds:"pools,routes",selectedModel:"withdrawn"})).rejects.toThrow(/selected model/);
+});
+
+it("cannot preserve a selected deployment that is no longer agent capable", async () => {
+ vi.stubGlobal("fetch",vi.fn().mockResolvedValue(Response.json({data:[model("pool"),model("vendor/unusable",{opper:{kind:"model",capabilities:[],max_output_tokens:4096}})]})));
+ await expect(fetchPiModels(ctx,{modelKinds:"all",selectedModel:"vendor/unusable"})).rejects.toThrow(/selected model/);
+});

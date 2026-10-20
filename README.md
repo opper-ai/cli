@@ -987,7 +987,7 @@ provider initialization versus extension/hook startup before offering equivalent
 automatic credential and model refresh. No shell aliases or background services
 are installed by `opper launch copilot`.
 
-### Pi and OpenCode model discovery
+### Codex, Pi and OpenCode model discovery
 
 Pi fetches the credential-scoped catalog at setup and launch, including pools and
 dynamic routes with tool support and valid context limits. An explicit
@@ -998,3 +998,11 @@ remain available.
 OpenCode deployment labels include the full model ID to distinguish providers.
 Pools and dynamic routes are marked separately. Existing one-time OpenCode login
 bridges need setup rerun to receive the updated labels.
+
+Fresh generated catalogs default to pools and account dynamic routes. Add
+`--model-kinds all` to supported launch/setup commands to include provider
+specific deployments. Explicit model IDs and previously configured authorized
+entries remain available during refresh; narrowing never silently removes an
+older selection. Existing native endpoint discovery remains in use where its
+response contract is compatible. See [agent model discovery](docs/agent-model-catalogs.md)
+for adapter support, compatibility boundaries and runtime validation.

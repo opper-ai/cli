@@ -54,7 +54,7 @@ try {
   await mkdir(dirname(configPath), { recursive: true });
   await writeFile(configPath, JSON.stringify({ provider: {
     other: { name: "Keep", npm: "@ai-sdk/openai-compatible", models: {} },
-    opper: { name: "Opper", models: { [routeID]: { name: "Stale route", cost: { input: 0, output: 0 } } } },
+    opper: { name: "Opper", models: { "vendor/regular": { name: "Saved deployment" }, [routeID]: { name: "Stale route", cost: { input: 0, output: 0 } } } },
   } }));
   const setup = () => run(process.execPath, [cli, "--no-telemetry", "editors", "opencode", "--overwrite"], options);
   const debug = async (pure = false) => {

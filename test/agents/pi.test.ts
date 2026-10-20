@@ -143,6 +143,113 @@ describe("pi adapter", () => {
     expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
   });
 
+  it("fresh setup narrows the catalog while explicit all restores provider deployments", async () => {
+    await pi.configure({ apiKey: "synthetic" });
+    const ids = () => (readModels(sandbox).providers?.opper as any).models.map((model: any) => model.id);
+    expect(ids()).toEqual(["dynamic/coding", "claude-opus-4-7"]);
+    await pi.configure({ apiKey: "synthetic", modelKinds: "all" });
+    expect(ids()).toContain("provider/new-model");
+    // A later ordinary upgrade preserves models potentially selected by saved sessions.
+    await pi.configure({ apiKey: "synthetic" });
+    expect(ids()).toContain("provider/new-model");
+  });
+
+  it("upgrade keeps authorized provider models and custom settings unchanged", async () => {
+    mkdirSync(agentDir(sandbox), { recursive: true });
+    writeFileSync(modelsPath(sandbox), JSON.stringify({ providers: { opper: { models: [
+      { id: "provider/new-model", samplingParams: { temperature: 0.2 } },
+    ] } } }));
+    await pi.configure({ apiKey: "synthetic" });
+    const provider = readModels(sandbox).providers?.opper as any;
+    expect(provider.models.find((model: any) => model.id === "provider/new-model").samplingParams).toEqual({ temperature: 0.2 });
+    const before = readFileSync(modelsPath(sandbox), "utf8");
+    runMock.mockImplementation((_cmd: string, args: string[], opts: any) => {
+      if (args[0] === "--version") return { code: 0, stdout: "1.2.0" };
+      expect(JSON.parse(readFileSync(opts.env.OPPER_PI_CATALOG_PATH, "utf8")).some((model: any) => model.id === "provider/new-model")).toBe(true);
+      return { code: 0, stdout: "" };
+    });
+    await pi.spawn!([], ROUTING);
+    expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
+  });
+
+  it("preserves Pi's saved Opper default in settings during refresh and launch", async () => {
+    mkdirSync(agentDir(sandbox), { recursive: true });
+    const settingsPath = join(agentDir(sandbox), "settings.json");
+    const settings = JSON.stringify({ defaultProvider: "opper", defaultModel: "provider/new-model", theme: "light" });
+    writeFileSync(settingsPath, settings);
+    await pi.configure({ apiKey: "synthetic" });
+    expect((readModels(sandbox).providers?.opper as any).models.some((model: any) => model.id === "provider/new-model")).toBe(true);
+    await pi.spawn!([], ROUTING);
+    const launch = runMock.mock.calls.find(call => call[1]?.[0] !== "--version");
+    expect(launch![1]).toContain("provider/new-model");
+    expect(readFileSync(settingsPath, "utf8")).toBe(settings);
+    writeFileSync(settingsPath, settings.replace("provider/new-model", "withdrawn"));
+    const before = readFileSync(modelsPath(sandbox), "utf8");
+    await expect(pi.configure({ apiKey: "synthetic" })).rejects.toThrow(/selected model/);
+    await expect(pi.spawn!([], ROUTING)).rejects.toThrow(/selected model/);
+    expect(readFileSync(modelsPath(sandbox), "utf8")).toBe(before);
+  });
+
+  it("keeps ordinary Opper launch routing when project settings are present", async () => {
+    mkdirSync(join(sandbox, ".pi"), { recursive: true });
+    writeFileSync(join(sandbox, ".pi", "settings.json"), JSON.stringify({ defaultProvider: "opper", defaultModel: "withdrawn-untrusted" }));
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(sandbox);
+    try {
+      await pi.configure({ apiKey: "synthetic" });
+      expect((readModels(sandbox).providers?.opper as any).models.some((model: any) => model.id === "provider/new-model")).toBe(false);
+      runMock.mockImplementation((_cmd: string, args: string[], opts: any) => {
+        if (args[0] === "--version") return { code: 0, stdout: "1.2.0" };
+        expect(args).toContain("--model");
+        expect(args).toContain("--provider");
+        expect(args[args.indexOf("--provider") + 1]).toBe("opper");
+        return { code: 0, stdout: "" };
+      });
+      await pi.spawn!(["--no-approve"], ROUTING);
+    } finally { cwd.mockRestore(); }
+  });
+
+  it("native scoped models override an unavailable saved Pi default", async () => {
+    mkdirSync(agentDir(sandbox), { recursive: true });
+    writeFileSync(join(agentDir(sandbox), "settings.json"), JSON.stringify({ defaultProvider: "opper", defaultModel: "withdrawn" }));
+    await expect(pi.spawn!(["--models", "opper/provider/*"], ROUTING)).resolves.toBe(0);
+    const launch = runMock.mock.calls.find(call => call[1]?.[0] !== "--version");
+    expect(launch![1]).not.toContain("--model");
+    expect(launch![1]).not.toContain("--provider");
+  });
+
+  it("explicit Opper provider model stays selected and unavailable selections fail before launch", async () => {
+    runMock.mockImplementation((_cmd: string, args: string[], opts: any) => {
+      if (args[0] === "--version") return { code: 0, stdout: "1.2.0" };
+      expect(args[args.indexOf("--model") + 1]).toBe("provider/new-model");
+      expect(JSON.parse(readFileSync(opts.env.OPPER_PI_CATALOG_PATH, "utf8")).some((model: any) => model.id === "provider/new-model")).toBe(true);
+      return { code: 0, stdout: "" };
+    });
+    await pi.spawn!([], { ...ROUTING, model: "provider/new-model", modelOverride: "provider/new-model" });
+    runMock.mockClear();
+    await expect(pi.spawn!([], { ...ROUTING, model: "provider/withdrawn", modelOverride: "provider/withdrawn" })).rejects.toThrow(/selected model/);
+    expect(runMock.mock.calls.every(call => call[1]?.[0] === "--version")).toBe(true);
+  });
+
+  it.each([["--model", "provider/new-model"], ["--model=provider/new-model"], ["-m", "provider/new-model"], ["--models", "provider/*"]])("native model arguments preserve full authorized access: %j", async (...args) => {
+    runMock.mockImplementation((_cmd: string, launchArgs: string[], opts: any) => {
+      if (launchArgs[0] === "--version") return { code: 0, stdout: "1.2.0" };
+      expect(JSON.parse(readFileSync(opts.env.OPPER_PI_CATALOG_PATH, "utf8")).some((model: any) => model.id === "provider/new-model")).toBe(true);
+      return { code: 0, stdout: "" };
+    });
+    await pi.spawn!(args, ROUTING);
+  });
+
+  it.each(["--continue", "-c", "--resume", "-r", "--session=fixture", "--session", "--fork", "--session-id"]) ("resuming with %s keeps the saved model available without overriding it", async (flag) => {
+    runMock.mockImplementation((_cmd: string, args: string[], opts: any) => {
+      if (args[0] === "--version") return { code: 0, stdout: "1.2.0" };
+      expect(args).not.toContain("--model");
+      expect(args).not.toContain("--provider");
+      expect(JSON.parse(readFileSync(opts.env.OPPER_PI_CATALOG_PATH, "utf8")).some((model: any) => model.id === "provider/new-model")).toBe(true);
+      return { code: 0, stdout: "" };
+    });
+    await pi.spawn!([flag], ROUTING);
+  });
+
   it("spawn supplies its catalog via a private temporary extension without user config writes", async () => {
     let launchDir: string | undefined;
     runMock.mockImplementation((_cmd: string, args: string[], opts: any) => {
@@ -152,7 +259,7 @@ describe("pi adapter", () => {
       launchDir = join(extension, "..");
       expect(args).toContain("--extension");
       expect(readFileSync(extension, "utf8")).toContain("registerProvider");
-      expect(JSON.parse(readFileSync(catalogPath, "utf8")).map((m: any) => m.id)).toEqual(["claude-opus-4-7", "dynamic/coding", "provider/new-model"]);
+      expect(JSON.parse(readFileSync(catalogPath, "utf8")).map((m: any) => m.id)).toEqual(["dynamic/coding", "claude-opus-4-7"]);
       expect(readFileSync(catalogPath, "utf8")).not.toContain(ROUTING.apiKey);
       if (process.platform !== "win32") {
         expect(statSync(catalogPath).mode & 0o777).toBe(0o600);
@@ -491,7 +598,7 @@ describe("pi adapter", () => {
     try {
       await pi.configure({ apiKey: "synthetic-secret" });
       const provider = readModels(sandbox).providers?.opper as any;
-      expect(provider.models.map((model: any) => model.id).sort()).toEqual(["claude-opus-4-7", "dynamic/coding", "provider/new-model"].sort());
+      expect(provider.models.map((model: any) => model.id).sort()).toEqual(["claude-opus-4-7", "dynamic/coding"].sort());
       expect(provider.models.find((model: any) => model.id === "dynamic/coding").samplingParams).toEqual({ temperature: 0.4 });
       expect(readFileSync(modelsPath(sandbox), "utf8")).toContain("// keep allowed model");
       expect(output.mock.calls.map(call => call[0]).join("")).toMatch(/removed.*withdrawn-model/i);

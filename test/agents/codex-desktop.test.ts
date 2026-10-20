@@ -57,7 +57,7 @@ const KEY = "fixture-prod-key-not-a-real-credential";
 const ORIGINAL_EXEC_PATH = process.execPath;
 const NODE_NAME = process.platform === "win32" ? "node.exe" : "node";
 // Windows fixtures run native ACL checks and copy/restore the full Node binary.
-// Budget those integration steps without changing any subprocess deadline.
+// Budget native fixture steps separately from production command deadlines.
 const NATIVE_FIXTURE_TIMEOUT = process.platform === "win32" ? 30_000 : undefined;
 const NATIVE_FIXTURE_OPTIONS = NATIVE_FIXTURE_TIMEOUT === undefined ? {} : {timeout: NATIVE_FIXTURE_TIMEOUT};
 const ORIGINAL = '# personal defaults\nmodel = "gpt-5.5" # chosen model\nmodel_provider = "openai"\n\n[features]\nmulti_agent = true\n\n[projects."/personal/project"]\ntrust_level = "trusted"\n\n[mcp_servers.notes]\ncommand = "notes"\n';
@@ -157,10 +157,10 @@ beforeEach(async () => {
     return ok();
   });
   mocks.fetchCatalog.mockReset();
-  mocks.fetchCatalog.mockImplementation(async (_context, selected) => toCodexModelCatalog([
+  mocks.fetchCatalog.mockImplementation(async (_context, selected, selection) => toCodexModelCatalog([
     { id: MODEL, opper: { kind: "pool", type: "llm", capabilities: ["tools", "vision"] } },
     { id: "claude-opus-5", opper: { kind: "pool", type: "llm", capabilities: ["tools"] } },
-  ], selected));
+  ], selected, [], selection));
   await setSlot("default", { apiKey: "fixture-other-key", baseUrl: "https://api.opper.ai" });
   await setSlot("prod", { apiKey: KEY, baseUrl: API_ROOT });
 }, NATIVE_FIXTURE_TIMEOUT);
@@ -186,10 +186,64 @@ describe("Codex desktop detection", NATIVE_FIXTURE_OPTIONS, () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await codexDesktop.configure(options({ projectUuid }));
-      expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT, projectUuid }, MODEL);
+      expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT, projectUuid }, MODEL, { preserveIds: [] });
       expect(provider().http_headers).toEqual({ "X-Opper-Project": projectUuid });
       expect(log.mock.calls.flat().join(" ")).toContain(`'--project-uuid' '${projectUuid}'`);
     } finally { log.mockRestore(); }
+  });
+
+  it("keeps the current managed model and authorized prior deployments when refreshing", async () => {
+    const deployment = { id: "provider/saved", opper: { kind: "model" as const, type: "llm", capabilities: ["tools"] } };
+    const hidden = { ...deployment, id: "provider/hidden" };
+    const route = { id: "dynamic/engineering", opper: { kind: "dynamic_route" as const, capabilities: ["tools"] } };
+    mocks.fetchCatalog.mockImplementation(async (_context, selected, selection) => toCodexModelCatalog([
+      { id: MODEL, opper: { kind: "pool", type: "llm", capabilities: ["tools"] } }, deployment, hidden, route,
+    ], selected, [], selection));
+    await codexDesktop.configure(options({ model: "provider/saved" }));
+    // The app picker changes the selected ID outside the integration.
+    writeFileSync(join(codexHome, "config.toml"), configText().replace('model = "provider/saved"', 'model = "dynamic/engineering"'));
+    await codexDesktop.configure(options({ model: undefined }));
+    expect(readDesktopConfig(configText()).model).toBe("dynamic/engineering");
+    const path = join(codexHome, "opper-desktop", "catalog.json");
+    expect(JSON.parse(readFileSync(path, "utf8")).models.map((entry: any) => entry.slug))
+      .toEqual(["dynamic/engineering", MODEL, "provider/saved"]);
+    await codexDesktop.spawn!([], routing());
+    expect(readDesktopConfig(configText()).model).toBe("dynamic/engineering");
+    await codexDesktop.spawn!([], routing({ model: "provider/hidden", modelOverride: "provider/hidden" }));
+    expect(readDesktopConfig(configText()).model).toBe("provider/hidden");
+  });
+
+  it("retains the old full catalog on refresh and removes revoked entries", async () => {
+    let revoked = false;
+    mocks.fetchCatalog.mockImplementation(async (_context, selected, selection) => toCodexModelCatalog([
+      { id: MODEL, opper: { kind: "pool", type: "llm", capabilities: ["tools"] } },
+      { id: "provider/retained", opper: { kind: "model", type: "llm", capabilities: ["tools"] } },
+      ...(!revoked ? [{ id: "provider/revoked", opper: { kind: "model" as const, type: "llm", capabilities: ["tools"] } }] : []),
+    ], selected, [], selection));
+    await codexDesktop.configure(options({ modelKinds: "all" }));
+    revoked = true;
+    await codexDesktop.configure(options({ model: undefined }));
+    expect(JSON.parse(readFileSync(join(codexHome, "opper-desktop", "catalog.json"), "utf8")).models.map((entry: any) => entry.slug))
+      .toEqual([MODEL, "provider/retained"]);
+  });
+
+  it("fails safely if the saved selected model is no longer authorized", async () => {
+    await codexDesktop.configure(options());
+    writeFileSync(join(codexHome, "config.toml"), configText().replace(`model = "${MODEL}"`, 'model = "provider/revoked"'));
+    const before = allText(codexHome);
+    await expect(codexDesktop.configure(options({ model: undefined }))).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(allText(codexHome)).toBe(before);
+  });
+
+  it("does not overwrite a settings edit made while discovery is in flight", async () => {
+    await codexDesktop.configure(options());
+    const prior = mocks.fetchCatalog.getMockImplementation()!;
+    mocks.fetchCatalog.mockImplementation(async (...args) => {
+      appendFileSync(join(codexHome, "config.toml"), "\n# simultaneous user edit\n");
+      return prior(...args);
+    });
+    await expect(codexDesktop.configure(options({ model: undefined }))).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(configText()).toContain("# simultaneous user edit");
   });
 
   it("refreshes a renewed key in the same organization but rejects expiry and organization changes", async () => {
@@ -395,12 +449,17 @@ describe("Codex desktop configuration and credentials", NATIVE_FIXTURE_OPTIONS, 
     expect(readFileSync(join(codexHome, "opper-desktop", "NODE-LICENSE"), "utf8")).toBe(license);
     expect(configText()).toBe(config);
     expect(readFileSync(join(codexHome, "opper-desktop", "state.json"), "utf8")).toBe(state);
-    expect(spawnSync(auth.command, auth.args, { encoding: "utf8", timeout: 5_000, env: { PATH: "", HOME: home } })).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
+    // A freshly restored Windows executable can start slowly on a hosted
+    // runner. Reuse this fixture's bounded native budget for this probe only.
+    const executed = spawnSync(auth.command, auth.args, { encoding: "utf8", timeout: NATIVE_FIXTURE_TIMEOUT ?? 5_000, env: { PATH: "", HOME: home } });
+    const diagnostics = JSON.stringify({ error: executed.error?.message, code: executed.error?.code, signal: executed.signal, status: executed.status });
+    expect(executed.error, diagnostics).toBeUndefined();
+    expect(executed, diagnostics).toMatchObject({ status: 0, stdout: KEY, stderr: "" });
   });
 
   it("uses the selected slot and host for discovery and writes persistent keyless configuration", async () => {
     await codexDesktop.configure(options());
-    expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT }, MODEL);
+    expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: API_ROOT }, MODEL, { preserveIds: [] });
     const config = readDesktopConfig(configText());
     expect(config).toMatchObject({ model_provider: "opper-desktop", model: MODEL });
     expect(config.model_catalog_json).toBe(join(codexHome, "opper-desktop", "catalog.json"));
@@ -492,7 +551,7 @@ describe("Codex desktop configuration and credentials", NATIVE_FIXTURE_OPTIONS, 
 
   it("uses an explicit API root consistently for discovery and the provider", async () => {
     await codexDesktop.configure(options({ baseUrl: "https://override.example/api/" }));
-    expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: "https://override.example/api" }, MODEL);
+    expect(mocks.fetchCatalog).toHaveBeenCalledWith({ apiKey: KEY, baseUrl: "https://override.example/api" }, MODEL, { preserveIds: [] });
     expect(provider().base_url).toBe("https://override.example/api/v3/compat");
     expect(configuredHelper()().stdout.trim()).toBe(KEY);
   });
@@ -633,7 +692,7 @@ export function execFile(executable, args, options, callback) {
     const {proxy, write} = await desktopProxy();
     const projectUuid = "11111111-1111-4111-8111-111111111111";
     await codexDesktop.spawn!([], routing({desktopProxy: proxy, projectUuid}));
-    expect(mocks.fetchCatalog).toHaveBeenCalledWith({apiKey: KEY, baseUrl: API_ROOT, projectUuid}, MODEL);
+    expect(mocks.fetchCatalog).toHaveBeenCalledWith({apiKey: KEY, baseUrl: API_ROOT, projectUuid}, MODEL, { preserveIds: [] });
     expect(provider()).toMatchObject({base_url: `${proxy.baseUrl}/v3/compat`, wire_api: "responses", supports_websockets: false});
     expect(provider().http_headers).toBeUndefined();
     expect(allText(codexHome)).not.toContain(KEY);

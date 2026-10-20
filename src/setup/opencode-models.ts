@@ -21,10 +21,13 @@
 import { OpperApi } from "../api/client.js";
 import { resolveApiContext, type ApiContext } from "../api/resolve.js";
 import { OpperError } from "../errors.js";
+import { selectCatalogEntries, type CatalogSelection } from "./model-catalog.js";
 
 /** One entry of `/v3/compat/models`. Only the fields this mapping reads. */
 export interface CompatModel {
   id: string;
+  display_name?: string;
+  name?: string;
   context_length?: number;
   pricing?: {
     prompt?: string;
@@ -203,14 +206,11 @@ export function compatDisplayName(entry: CompatDisplayMetadata, fallback = displ
 
 /** Keep deployment IDs and pool badges alongside centrally configured names. */
 export function compatPickerDisplayName(entry: CompatModel): string {
-  const configured = typeof entry.opper?.display_name === "string" ? entry.opper.display_name.trim() : "";
-  if (entry.opper?.kind === "dynamic_route" || entry.id.startsWith("dynamic/")) {
-    return compatDisplayName(entry, pickerDisplayName(entry.id));
-  }
-  const name = configured
-    ? entry.id.includes("/") ? `${configured} · ${entry.id}` : `${configured} (pool)`
-    : pickerDisplayName(entry.id);
-  return entry.opper?.pricing?.kind === "variable" ? `${name} · Variable pricing` : name;
+  const kind = entry.opper?.kind ?? (entry.id.startsWith("dynamic/") ? "dynamic_route" : entry.id.includes("/") ? "model" : "pool");
+  const name = entry.opper?.display_name?.trim() || entry.display_name?.trim() || entry.name?.trim() || displayName(entry.id.slice(entry.id.lastIndexOf("/") + 1));
+  if (kind === "dynamic_route") return `${name} (route) · Variable pricing`;
+  const suffix = kind === "pool" ? ` (pool)${entry.id.includes("/") ? ` · ${entry.id}` : ""}` : ` · ${entry.id}`;
+  return name + suffix + (entry.opper?.pricing?.kind === "variable" ? " · Variable pricing" : "");
 }
 
 function prettify(s: string): string {
@@ -310,29 +310,35 @@ function routeEntry(e: CompatModel): OpenCodeModel {
  * credentials uses the bundled template. Authenticated failures propagate
  * before config is written, and an empty allowed catalog remains empty.
  */
-export function resolveOpenCodeModels(context: ApiContext): Promise<Record<string, OpenCodeModel>>;
+export function resolveOpenCodeModels(context: ApiContext, selection?: CatalogSelection): Promise<Record<string, OpenCodeModel>>;
 export function resolveOpenCodeModels(key?: string, projectUuid?: string): Promise<Record<string, OpenCodeModel> | undefined>;
-export async function resolveOpenCodeModels(contextOrKey: ApiContext | string = "default", projectUuid?: string): Promise<
+export async function resolveOpenCodeModels(contextOrKey: ApiContext | string = "default", projectOrSelection?: string | CatalogSelection): Promise<
   Record<string, OpenCodeModel> | undefined
 > {
   let context: ApiContext;
   try {
     context = typeof contextOrKey === "string"
-      ? await resolveApiContext(contextOrKey, { projectUuid })
+      ? await resolveApiContext(contextOrKey, { projectUuid: typeof projectOrSelection === "string" ? projectOrSelection : undefined })
       : contextOrKey;
   } catch (error) {
     if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
     throw error;
   }
-  return fetchOpenCodeModels(new OpperApi(context));
+  return fetchOpenCodeModels(new OpperApi(context), typeof projectOrSelection === "object" ? projectOrSelection : undefined);
 }
 
 export async function fetchOpenCodeModels(
-  api: OpperApi,
+  api: OpperApi, selection?: CatalogSelection,
 ): Promise<Record<string, OpenCodeModel>> {
   const res = await api.get<{ data?: CompatModel[] }>("/v3/compat/models");
   if (!Array.isArray(res?.data)) {
     throw new OpperError("API_ERROR", "Invalid model catalog response: expected a data array.");
   }
-  return toOpenCodeModels(res.data);
+  const mapped = toOpenCodeModels(res.data);
+  if (!selection) return mapped;
+  if (selection.selectedModel && !Object.hasOwn(mapped, selection.selectedModel)) {
+    throw new OpperError("INVALID_ARGUMENT", `Model "${selection.selectedModel}" is not available in this credential's OpenCode catalog.`);
+  }
+  const eligible = res.data.filter(entry => Object.hasOwn(mapped, entry.id));
+  return Object.fromEntries(selectCatalogEntries(eligible, selection).map(entry => [entry.id, mapped[entry.id]!]));
 }

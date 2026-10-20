@@ -1,4 +1,5 @@
 import { OpperApi, type OpperApiConfig } from "../api/client.js";
+import { selectCatalogEntries, type CatalogSelection } from "./model-catalog.js";
 import { OpperError } from "../errors.js";
 import { compatPickerDisplayName, type CompatModel } from "./opencode-models.js";
 
@@ -38,20 +39,31 @@ function piReasoning(entry: CompatModel, legacyMaxLevel: boolean): Pick<PiModel,
   const reasoning = Object.entries(thinkingLevelMap).some(([level, effort]) => level !== "off" && effort !== null);
   return { reasoning, thinkingLevelMap, compat: { supportsReasoningEffort: reasoning } };
 }
-export async function fetchPiModels(context: OpperApiConfig, options: {legacyMaxLevel?: boolean} = {}): Promise<PiModel[]> {
+export async function fetchPiModels(context: OpperApiConfig, options: CatalogSelection & {legacyMaxLevel?: boolean} = {}): Promise<PiModel[]> {
   const response = await new OpperApi(context).get<{ data?: CompatModel[] }>("/v3/compat/models");
   if (!Array.isArray(response.data)) throw new OpperError("API_ERROR", "Invalid model catalog response: expected a data array.");
-  const models = response.data.flatMap((entry): PiModel[] => {
+  const eligible = response.data.filter((entry) => {
     const caps = entry.opper?.capabilities ?? [];
     const context = entry.context_length;
     const output = entry.opper?.max_output_tokens;
     if (!entry.id || (entry.opper?.type && entry.opper.type !== "llm") || !caps.includes("tools") ||
-        !Number.isSafeInteger(context) || !Number.isSafeInteger(output) || !context || !output || output <= 0 || context <= output) return [];
-    return [{ id: entry.id, name: compatPickerDisplayName(entry), contextWindow: context, maxTokens: output,
+        !Number.isSafeInteger(context) || !Number.isSafeInteger(output) || !context || !output || output <= 0 || context <= output) return false;
+    return true;
+  });
+  // The low-level helper retains its full-catalog default for existing callers.
+  // Agent adapters supply a narrower policy only when they can preserve selections.
+  const hasSelection = options.modelKinds !== undefined || options.selectedModel !== undefined || options.preserveIds !== undefined;
+  const selected = hasSelection ? selectCatalogEntries(eligible, { ...options, modelKinds: options.modelKinds ?? "all" }) : eligible;
+  const models = selected.map((entry): PiModel => {
+    const caps = entry.opper?.capabilities ?? [];
+    return { id: entry.id, name: compatPickerDisplayName(entry), contextWindow: entry.context_length!, maxTokens: entry.opper!.max_output_tokens!,
       input: caps.includes("vision") ? ["text", "image"] : ["text"], ...piReasoning(entry, options.legacyMaxLevel ?? false),
       cost: { input: piPrice(entry.pricing?.prompt), output: piPrice(entry.pricing?.completion),
-        cacheRead: piPrice(entry.pricing?.input_cache_read), cacheWrite: piPrice(entry.pricing?.input_cache_write) } }];
+        cacheRead: piPrice(entry.pricing?.input_cache_read), cacheWrite: piPrice(entry.pricing?.input_cache_write) } };
   });
+  if (options.selectedModel && !models.some(model => model.id === options.selectedModel)) {
+    throw new OpperError("API_ERROR", "The selected model is not in this credential's allowed Pi catalog.");
+  }
   if (!models.length) throw new OpperError("API_ERROR", "No allowed tool-capable models with valid context limits are available for Pi.");
   return models;
 }

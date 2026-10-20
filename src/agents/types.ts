@@ -23,6 +23,8 @@ export interface OpperRouting {
   model: string;
   /** Model explicitly selected with `opper launch --model`, if any. */
   modelOverride?: string;
+  /** Catalog breadth for adapters without native endpoint discovery. */
+  modelKinds?: ConductorModelKinds;
   compatShape: "openai" | "anthropic" | "responses";
 }
 
@@ -36,7 +38,7 @@ export interface ConfigureOptions {
   keyName?: string;
   baseUrl?: string;
   model?: string;
-  /** Conductor catalog breadth. Other adapters keep their existing behavior. */
+  /** Catalog breadth for adapters without native endpoint discovery. */
   modelKinds?: ConductorModelKinds;
   /** Explicit Codex desktop configuration directory; does not change process.env. */
   codexHome?: string;

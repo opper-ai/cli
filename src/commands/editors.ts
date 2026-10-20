@@ -1,3 +1,5 @@
+import { openCodeCatalogSelection } from "../setup/opencode-catalog-selection.js";
+import { validateModelKinds, type ModelKinds } from "../setup/model-catalog.js";
 import { configureOpenCode, readProjectConfigState } from "../setup/opencode.js";
 import { resolveOpenCodeModels } from "../setup/opencode-models.js";
 import {
@@ -17,6 +19,7 @@ import { resolveApiContext, validateProjectUuid } from "../api/resolve.js";
 export interface EditorsOpenCodeOptions {
   location: Location;
   overwrite: boolean;
+  modelKinds?: ModelKinds;
   key?: string;
   projectUuid?: string | undefined;
   mcp?: boolean;
@@ -53,6 +56,8 @@ export async function editorsOpenCodeCommand(
   opts: EditorsOpenCodeOptions,
 ): Promise<void> {
   if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+  if (opts.modelKinds !== undefined) validateModelKinds(opts.modelKinds);
+  if (opts.modelKinds !== undefined && (opts.mcp || opts.removeLoginBridge)) throw new OpperError("INVALID_ARGUMENT", "--model-kinds is only supported for inference setup.");
   if (opts.loginBridge || opts.removeLoginBridge) {
     if (opts.loginBridge && opts.removeLoginBridge) {
       throw new OpperError("INVALID_ARGUMENT", "Choose either --login-bridge or --remove-login-bridge.");
@@ -66,7 +71,7 @@ export async function editorsOpenCodeCommand(
       return;
     }
     const selectedSlot = opts.key ?? "default";
-    const result = await installOpenCodeLoginBridge(selectedSlot, opts.projectUuid);
+    const result = await installOpenCodeLoginBridge(selectedSlot, opts.projectUuid, opts.modelKinds);
     console.log(brand.accent(`✓ Installed OpenCode login bridge at ${result.path}.`));
     console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot}. Restart OpenCode after renewing that slot.`);
     return;
@@ -95,7 +100,7 @@ export async function editorsOpenCodeCommand(
       if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
       throw error;
     });
-  const models = context ? await resolveOpenCodeModels(context) : opts.projectUuid ? await resolveOpenCodeModels(opts.key, opts.projectUuid) : await resolveOpenCodeModels(opts.key);
+  const models = context ? await resolveOpenCodeModels(context, openCodeCatalogSelection(opts.modelKinds)) : opts.projectUuid ? await resolveOpenCodeModels(opts.key, opts.projectUuid) : await resolveOpenCodeModels(opts.key);
   const result = await configureOpenCode({
     location: opts.location,
     ...(opts.overwrite ? { overwrite: true } : {}),

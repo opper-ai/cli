@@ -101,7 +101,7 @@ process.exit(Number(process.env.OPPER_FIXTURE_EXIT || 0));
         res.writeHead(403, { "Content-Type": "application/json" }).end(JSON.stringify({ message: "Fixture catalog denied" }));
       } else {
         res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify({ data: [{
-          id: model, context_length: 128000,
+          id: model, context_length: 128000, pricing: { prompt: "0.000001", completion: "0.000002" },
           opper: { kind: "model", type: "llm", capabilities: ["tools"], max_output_tokens: 8192 },
         }] }));
       }

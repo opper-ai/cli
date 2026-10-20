@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { assetPath } from "../util/assets.js";
 import { opencodeConfigPath } from "../util/editor-paths.js";
+import { validateModelKinds, type ModelKinds } from "./model-catalog.js";
 import { OpperError } from "../errors.js";
 
 const FILE = "opper-login.js";
@@ -20,7 +21,8 @@ async function existingManaged(path: string): Promise<boolean | null> {
   }
 }
 
-export async function installOpenCodeLoginBridge(slot = "default", projectUuid?: string): Promise<{ path: string }> {
+export async function installOpenCodeLoginBridge(slot = "default", projectUuid?: string, modelKinds?: ModelKinds): Promise<{ path: string }> {
+  if (modelKinds !== undefined) validateModelKinds(modelKinds);
   const path = openCodeLoginBridgePath();
   const managed = await existingManaged(path);
   if (managed === false) {
@@ -34,7 +36,11 @@ export async function installOpenCodeLoginBridge(slot = "default", projectUuid?:
   if (!template.includes(marker)) {
     throw new OpperError("API_ERROR", "OpenCode login bridge template is missing its slot marker.");
   }
-  const source = template.replace(marker, `const DEFAULT_SLOT = ${JSON.stringify(slot)};`)
+  const previous = managed ? await readFile(path, "utf8") : "";
+  // A legacy plugin may back saved sessions without a persistent provider map.
+  const priorKinds = /const DEFAULT_MODEL_KINDS = "(all|pools,routes)";/.exec(previous)?.[1];
+  const kinds = modelKinds ?? (managed ? priorKinds ?? "all" : "pools,routes");
+  const source = template.replace('const DEFAULT_MODEL_KINDS = "all";', `const DEFAULT_MODEL_KINDS = ${JSON.stringify(kinds)};`).replace(marker, `const DEFAULT_SLOT = ${JSON.stringify(slot)};`)
     .replace("const DEFAULT_PROJECT_UUID = undefined;", `const DEFAULT_PROJECT_UUID = ${projectUuid ? JSON.stringify(projectUuid) : "undefined"};`);
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.tmp.${process.pid}`;

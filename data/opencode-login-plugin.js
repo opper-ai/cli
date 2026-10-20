@@ -8,6 +8,7 @@ const FALLBACK_CONTEXT = 128_000;
 const FALLBACK_OUTPUT = 8_192;
 const DEFAULT_SLOT = "default";
 const DEFAULT_PROJECT_UUID = undefined;
+const DEFAULT_MODEL_KINDS = "all";
 
 function expired(value) {
   if (!value) return false;
@@ -18,16 +19,15 @@ function expired(value) {
 // Keep label policy in sync with compatPickerDisplayName; parity is tested.
 function label(entry) {
   const id = entry.id;
-  const route = entry.opper?.kind === "dynamic_route" || id.startsWith("dynamic/");
-  const configured = typeof entry.opper?.display_name === "string" ? entry.opper.display_name.trim() : "";
-  const name = route ? id.slice(8) : id.slice(id.lastIndexOf("/") + 1);
-  const text = name.split(/[-_]/).map((word) =>
+  const kind = entry.opper?.kind ?? (id.startsWith("dynamic/") ? "dynamic_route" : id.includes("/") ? "model" : "pool");
+  const tail = id.slice(id.lastIndexOf("/") + 1);
+  const fallback = tail.split(/[-_]/).map(word =>
     /^[0-9]/.test(word) || word.length <= 2 ? word : word[0].toUpperCase() + word.slice(1),
   ).join(" ");
-  const display = configured || text;
-  if (route) return `${display} (route) · Variable pricing`;
-  const qualified = id.includes("/") ? `${display} · ${id}` : `${display} (pool)`;
-  return entry.opper?.pricing?.kind === "variable" ? `${qualified} · Variable pricing` : qualified;
+  const name = entry.opper?.display_name?.trim() || entry.display_name?.trim() || entry.name?.trim() || fallback;
+  if (kind === "dynamic_route") return `${name} (route) · Variable pricing`;
+  const suffix = kind === "pool" ? ` (pool)${id.includes("/") ? ` · ${id}` : ""}` : ` · ${id}`;
+  return name + suffix + (entry.opper?.pricing?.kind === "variable" ? " · Variable pricing" : "");
 }
 
 function price(value) {
@@ -211,6 +211,28 @@ export const OpperLoginPlugin = async () => {
       }
       const host = (current.baseUrl || "https://api.opper.ai").replace(/\/$/, "");
       let models;
+      // Native first-use model/agent/resume choices can live outside saved
+      // config. Let OpenCode resolve them against the full authorized catalog.
+      const nativeSelection = process.argv.some(arg => /^(?:--(?:model|session|continue|agent)(?:=|$)|-[msca])/.test(arg));
+      let opaqueState = false;
+      const preserved = new Set(Object.keys(config.provider?.opper?.models ?? {}));
+      for (const id of config.provider?.opper?.whitelist ?? []) preserved.add(id);
+      const visit = (value) => {
+        if (typeof value === "string" && value.startsWith("opper/")) preserved.add(value.slice(6));
+        else if (value && typeof value === "object") {
+          if (value.providerID === "opper" && typeof value.modelID === "string") preserved.add(value.modelID);
+          Object.values(value).forEach(visit);
+        }
+      };
+      visit(config);
+      try {
+        const stateHome = process.env.XDG_STATE_HOME || join(process.env.OPPER_EDITOR_HOME || homedir(), ".local", "state");
+        visit(JSON.parse(await readFile(join(stateHome, "opencode", "model.json"), "utf8")));
+      } catch (error) {
+        // Malformed saved selection state is opaque: keep the full authorized
+        // catalog rather than silently dropping an unknown recent selection.
+        if (error.code !== "ENOENT") opaqueState = true;
+      }
       try {
         const response = await fetch(`${host}/v3/compat/models`, {
           headers: { Authorization: `Bearer ${current.apiKey}`, ...(current.projectUuid ? { "X-Opper-Project": current.projectUuid } : {}) },
@@ -219,7 +241,13 @@ export const OpperLoginPlugin = async () => {
         if (!response.ok) throw new Error("catalog unavailable");
         const body = await response.json();
         if (!Array.isArray(body?.data)) throw new Error("invalid catalog");
-        models = modelsFromCatalog(body.data);
+        const full = modelsFromCatalog(body.data);
+        const kind = entry => entry.opper?.kind ?? (entry.id.startsWith("dynamic/") ? "dynamic_route" : entry.id.includes("/") ? "model" : "pool");
+        const rank = entry => kind(entry) === "dynamic_route" ? 0 : kind(entry) === "pool" ? 1 : 2;
+        const entries = body.data.filter(entry => Object.hasOwn(full, entry.id) &&
+          (nativeSelection || opaqueState || DEFAULT_MODEL_KINDS === "all" || preserved.has(entry.id) || ["pool", "dynamic_route"].includes(kind(entry))));
+        entries.sort((a,b) => rank(a) - rank(b));
+        models = Object.fromEntries(entries.map(entry => [entry.id, full[entry.id]]));
         if (Object.keys(models).length === 0) throw new Error("empty catalog");
       } catch {
         // Keep unrelated OpenCode providers usable. The gateway still enforces

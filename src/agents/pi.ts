@@ -131,6 +131,30 @@ async function readConfig(options: { configure?: boolean; routing?: OpperRouting
   }
 }
 
+/** IDs from existing installations may also be referenced by saved Pi sessions. */
+async function previousModelIds(): Promise<string[]> {
+  const cfg = await readConfig();
+  const prior = cfg.value.providers?.[PROVIDER_KEY] as { models?: { id: string }[] } | undefined;
+  return (prior?.models ?? []).map(model => model.id);
+}
+
+/** Respect Pi's own saved Opper default without rewriting its settings. */
+async function savedOpperModel(): Promise<string | undefined> {
+  // Project settings remain Pi's responsibility. Reading them here would bypass
+  // version-specific trust checks and change the launcher's existing precedence.
+  const path = join(piAgentDir(), "settings.json");
+  if (!existsSync(path)) return undefined;
+  let settings: Record<string, unknown>;
+  try {
+    settings = parseJsoncObject(await readFile(path, "utf8"));
+  } catch {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", `Cannot safely read Pi settings at ${path}. Existing settings were preserved.`,
+      "Correct the invalid settings before retrying.");
+  }
+  return settings.defaultProvider === PROVIDER_KEY && typeof settings.defaultModel === "string" && settings.defaultModel
+    ? settings.defaultModel : undefined;
+}
+
 async function writeConfig(text: string): Promise<void> {
   const cfg = piConfigPath();
   await mkdir(dirname(cfg), { recursive: true });
@@ -257,8 +281,12 @@ async function configure(opts: ConfigureOptions): Promise<void> {
     );
   }
   const version = (await detect()).version;
-  const catalog = await fetchPiModels({apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, projectUuid: opts.projectUuid}, {legacyMaxLevel:legacyMaxLevel(version)});
-  await setOpperProvider(apiKeyEnvReference(version), DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid, catalog);
+  const selectedModel = opts.model ?? await savedOpperModel();
+  const catalog = await fetchPiModels({apiKey: opts.apiKey, baseUrl: opts.baseUrl ?? OPPER_HOST, projectUuid: opts.projectUuid}, {
+    legacyMaxLevel: legacyMaxLevel(version), modelKinds: opts.modelKinds ?? "pools,routes",
+    preserveIds: await previousModelIds(), ...(selectedModel ? { selectedModel } : {}),
+  });
+  await setOpperProvider(apiKeyEnvReference(version), selectedModel ?? DEFAULT_MODELS.opus, opts.baseUrl ? `${opts.baseUrl}/v3/compat` : OPPER_COMPAT_URL, opts.projectUuid, catalog);
   process.stdout.write("Plain `pi` requires OPPER_API_KEY in its environment; `opper launch pi` supplies your selected Opper key automatically.\n");
 }
 
@@ -271,11 +299,22 @@ async function unconfigure(): Promise<void> {
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   const version = (await detect()).version;
-  const catalog = await fetchPiModels({apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl, projectUuid: routing.projectUuid}, {legacyMaxLevel:legacyMaxLevel(version)});
-  const model = catalog.some(m => m.id === routing.model) ? routing.model : catalog[0]!.id;
-  if (routing.modelOverride && !catalog.some(m => m.id === routing.modelOverride)) {
-    throw new OpperError("API_ERROR", "The selected model is not in this credential's allowed Pi catalog.");
-  }
+  // Native model patterns and saved sessions are opaque to the launcher. Keep
+  // their complete authorized catalog and let Pi resolve the exact selection.
+  const flags = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"));
+  const hasFlag = (...names: string[]): boolean => flags.some(arg => names.some(name => arg === name || arg.startsWith(`${name}=`)));
+  const userPicked = hasFlag("--model", "-m");
+  const scopedModels = hasFlag("--models");
+  const resuming = hasFlag("--continue", "-c", "--resume", "-r", "--session", "--session-id", "--fork");
+  const savedModel = !routing.modelOverride && !userPicked && !resuming && !scopedModels ? await savedOpperModel() : undefined;
+  const selectedModel = routing.modelOverride ?? savedModel;
+  const catalog = await fetchPiModels({apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl, projectUuid: routing.projectUuid}, {
+    legacyMaxLevel: legacyMaxLevel(version),
+    modelKinds: userPicked || scopedModels || resuming ? "all" : routing.modelKinds ?? "pools,routes",
+    preserveIds: await previousModelIds(), ...(selectedModel ? { selectedModel } : {}),
+  });
+  const preferredModel = selectedModel ?? routing.model;
+  const model = catalog.some(m => m.id === preferredModel) ? preferredModel : catalog[0]!.id;
   // Pi can load this provider directly from an explicit extension. Keep all
   // launch-only files in a private temporary directory so user configuration,
   // custom providers, and discovered extensions are never rewritten.
@@ -288,12 +327,11 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     const catalogPath = join(launchDir, "catalog.json");
     await copyFile(assetPath(join("pi-opper-extension", "opper-session.ts")), extension);
     await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
-    const userPicked = args.some(
-      (a) => a === "--model" || a === "-m" || a.startsWith("--model="),
-    );
-    // Pi needs both provider and model to resolve a non-default provider.
-    const piArgs = ["--provider", PROVIDER_KEY,
-      ...(userPicked ? [] : ["--model", model]), "--extension", extension, ...args];
+    // A bare --provider is invalid in current Pi. Resume and scoped models
+    // must reach Pi without an injected model overriding their own selection.
+    const useDefault = !userPicked && ((!resuming && !scopedModels) || Boolean(routing.modelOverride));
+    const piArgs = [...(useDefault || userPicked ? ["--provider", PROVIDER_KEY] : []),
+      ...(useDefault ? ["--model", model] : []), "--extension", extension, ...args];
     return run("pi", piArgs, {
       inherit: true,
       env: {

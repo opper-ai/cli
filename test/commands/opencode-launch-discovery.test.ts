@@ -75,7 +75,7 @@ describe("OpenCode launch model discovery", () => {
           id,
           context_length: 128_000,
           pricing: { prompt: "0.000001", completion: "0.000002" },
-          opper: { kind: "model", type: "llm", capabilities: ["tools"] },
+          opper: { kind: "pool", type: "llm", capabilities: ["tools"] },
         }],
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
@@ -123,7 +123,7 @@ describe("OpenCode launch model discovery", () => {
           agent: "opencode",
           key: "team",
           configScope: scope,
-          model: "allowed/selected-model",
+          model: expectedKey === selectedKey ? "allowed/selected-model" : "other/foreign-model",
           tags: { customer: "acme", team: "eu" },
           passthrough: ["models", "opper"],
         });
@@ -306,7 +306,7 @@ describe("OpenCode launch model discovery", () => {
           opper: { kind: "model", type: "llm", capabilities: ["tools"] },
         }));
         fetchMock.mockResolvedValue(new Response(JSON.stringify({ data })));
-        await launchCommand({ agent: "opencode", key: "team", configScope: scope });
+        await launchCommand({ agent: "opencode", key: "team", configScope: scope, modelKinds: "all" });
         expect(Object.keys(child!.config.provider.opper.models)).toHaveLength(800);
         expect(child!.inline.provider.opper.whitelist).toHaveLength(800);
         // Linux limits each environment string to 128 KiB on 4 KiB pages.
