@@ -143,7 +143,6 @@ describe("fetchCodexModelCatalog", () => {
       default: entry.default_reasoning_level,
     }))).toEqual([
       { id: "claude-sonnet-5", efforts: ["medium", "high"], default: "medium" },
-      { id: "provider/a", efforts: ["none", "low", "medium", "high"], default: "none" },
     ]);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("https://gateway.example/api/v3/models?limit=0", {
@@ -152,6 +151,23 @@ describe("fetchCodexModelCatalog", () => {
     expect(request).toHaveBeenCalledWith("https://gateway.example/api/v3/compat/models", {
       method: "GET", headers: { Authorization: "Bearer selected-key" },
     });
+  });
+
+  it("filters fresh catalogs but retains explicitly selected and previously available deployments", async () => {
+    const entries = [model(), model({ id: "provider/selected", opper: { kind: "model", type: "llm", capabilities: ["tools"] } }),
+      model({ id: "provider/prior", opper: { kind: "model", type: "llm", capabilities: ["tools"] } }),
+      model({ id: "provider/hidden", opper: { kind: "model", type: "llm", capabilities: ["tools"] } }),
+      model({ id: "dynamic/coding", opper: { kind: "dynamic_route", capabilities: ["tools"] } })];
+    for (const [selected, options, expected] of [
+      ["claude-sonnet-5", {}, ["claude-sonnet-5", "dynamic/coding"]],
+      ["provider/selected", { preserveIds: ["provider/prior", "denied"] }, ["provider/selected", "dynamic/coding", "claude-sonnet-5", "provider/prior"]],
+      ["claude-sonnet-5", { modelKinds: "all" }, ["claude-sonnet-5", "dynamic/coding", "provider/selected", "provider/prior", "provider/hidden"]],
+    ] as const) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: entries })))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ models: [] }))));
+      const result = await fetchCodexModelCatalog({ apiKey: "fixture", baseUrl: "https://gateway.example" }, selected, options);
+      expect(result.models.map((entry) => entry.slug)).toEqual(expected);
+    }
   });
 
   it("accepts absent, null and empty reasoning metadata without enabling effort", async () => {

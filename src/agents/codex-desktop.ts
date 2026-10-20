@@ -246,7 +246,7 @@ async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
 
 interface ConfiguredDesktop { home: string; credentialHome: string; keyName: string; baseUrl: string; model: string; projectUuid?: string | undefined; proxyStateDir?: string; }
 
-async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
+async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MODELS.opus): Promise<ConfiguredDesktop> {
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Codex Desktop requires a stored Opper credential so Finder launches can refresh it.", "Store the key in its own CLI slot and unset OPPER_API_KEY before configuring or launching Codex Desktop.");
   const home = codexHome(opts.codexHome);
   requireApp();
@@ -257,13 +257,19 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
   const proxy = opts.desktopProxy ? proxySettings(opts.desktopProxy) : undefined;
-  const model = opts.model ?? DEFAULT_MODELS.opus;
-  const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model);
+  let model = opts.model ?? fallbackModel;
   await locked(home, async () => {
     await checkConfigPaths(home);
     const p = paths(home);
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
+    const current = readDesktopConfig(existing ?? "");
+    if (previous && opts.model === undefined) {
+      // The app picker may change model without updating our installation
+      // snapshot. Preserve that choice on refresh and ordinary relaunch.
+      model = current.model_provider === DESKTOP_PROVIDER && typeof current.model === "string"
+        ? current.model : previous.config.settings.model;
+    }
     const bundled = process.env.OPPER_DISTRIBUTION === "bundle";
     if (!previous?.bundledRuntime && (existsSync(p.runtime) || existsSync(p.runtimeLicense))) {
       throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged Node runtime files already exist in the Opper desktop configuration directory.");
@@ -276,6 +282,24 @@ async function setup(opts: ConfigureOptions): Promise<ConfiguredDesktop> {
     };
     const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
+    const previousCatalog = previous ? await readOptional(p.catalog) : null;
+    let preserveIds: string[] = [];
+    if (previousCatalog !== null) {
+      try {
+        const parsed = JSON.parse(previousCatalog) as { models?: { slug?: unknown }[] };
+        if (!Array.isArray(parsed.models) || parsed.models.some((entry) => !entry || typeof entry.slug !== "string")) throw new Error("invalid catalog");
+        preserveIds = parsed.models.map((entry) => entry.slug as string);
+      } catch {
+        throw new OpperError("AGENT_CONFIG_CONFLICT", "The existing Opper desktop catalog is invalid. Preserve it and restore a valid catalog before refreshing.");
+      }
+    }
+    // Only the freshly authorized gateway entries can be retained. Revoked
+    // deployments never survive merely because a previous picker listed them.
+    const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model,
+      { ...(opts.modelKinds ? { modelKinds: opts.modelKinds } : {}), preserveIds });
+    if (await readOptional(p.config) !== existing || (previous && await readOptional(p.catalog) !== previousCatalog)) {
+      throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during discovery. Retry to preserve those edits.");
+    }
     if (process.platform === "win32") await ensurePrivateStateDirectory(p.directory, true);
     else {
       await mkdir(p.directory, { recursive: true, mode: 0o700 });
@@ -376,7 +400,7 @@ async function spawn(args: string[], routing: OpperRouting, opts?: SpawnOptions)
   if (args.length) throw new OpperError("INVALID_ARGUMENT", "codex-desktop does not accept passthrough arguments.");
   const app = requireApp();
   const baseUrl = routing.apiBaseUrl ?? routing.baseUrl.replace(/\/v3\/(?:compat|session\/[^/]+)(?:\/.*)?$/, "");
-  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, model: routing.model, ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) });
+  const settings = await setup({ apiKey: routing.apiKey, keyName: routing.keyName ?? "default", baseUrl, ...(routing.modelOverride ? { model: routing.modelOverride } : {}), ...(routing.modelKinds ? { modelKinds: routing.modelKinds } : {}), ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}), ...(routing.desktopProxy ? { desktopProxy: routing.desktopProxy } : {}), ...(opts?.codexHome !== undefined ? { codexHome: opts.codexHome } : {}) }, routing.model);
   const userData = process.env.CODEX_ELECTRON_USER_DATA_PATH;
   if (platform() === "win32") {
     const processState = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; (Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1).Id"], {timeout: 5_000});

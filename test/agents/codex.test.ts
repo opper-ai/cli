@@ -30,12 +30,16 @@ vi.mock("../../src/util/spawn.js", async () => {
   return { ...actual, spawnSync: spawnSyncMock };
 });
 
+const fetchCatalogMock = vi.fn();
+vi.mock("../../src/setup/codex-models.js", () => ({ fetchCodexModelCatalog: fetchCatalogMock }));
+
 const { codex } = await import("../../src/agents/codex.js");
 
 const SESSION_URL =
   "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme";
 
 const ROUTING = {
+  apiBaseUrl: "https://api.opper.ai",
   baseUrl: SESSION_URL,
   apiKey: "op_test_selected",
   model: "claude-sonnet-5",
@@ -65,8 +69,11 @@ describe("codex adapter", () => {
   let cfgPath: string;
 
   beforeEach(() => {
+    fetchCatalogMock.mockReset();
+    fetchCatalogMock.mockResolvedValue({ models: [{ slug: ROUTING.model }] });
     whichMock.mockReset();
     runMock.mockReset();
+    runMock.mockReturnValue({ code: 0, stdout: "codex-cli 0.153.4", stderr: "" });
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue({ status: 0 });
     sandbox = mkdtempSync(join(tmpdir(), "opper-codex-"));
@@ -126,6 +133,56 @@ describe("codex adapter", () => {
     expect(args.join(" ")).toContain('env_key = "OPPER_API_KEY"');
     expect(args.join(" ")).toContain("requires_openai_auth = false");
     expect(args.join(" ")).not.toContain(ROUTING.apiKey);
+  });
+
+  it("provides a private invocation catalog and removes it after exit", async () => {
+    let catalogPath = "";
+    spawnSyncMock.mockImplementation((_command, args: string[]) => {
+      const override = args.find((arg) => arg.startsWith("model_catalog_json="))!;
+      catalogPath = JSON.parse(override.slice("model_catalog_json=".length));
+      expect(JSON.parse(readFileSync(catalogPath, "utf8"))).toEqual({ models: [{ slug: ROUTING.model }] });
+      return { status: 0 };
+    });
+    await codex.spawn!(["exec", "hello"], ROUTING);
+    expect(fetchCatalogMock).toHaveBeenCalledWith({ apiKey: ROUTING.apiKey, baseUrl: ROUTING.apiBaseUrl }, ROUTING.model, {});
+    expect(catalogPath).not.toBe("");
+    expect(existsSync(catalogPath)).toBe(false);
+  });
+
+  it("forwards an explicit full catalog choice and project scope", async () => {
+    await codex.spawn!([], { ...ROUTING, modelKinds: "all", projectUuid: "project" });
+    expect(fetchCatalogMock).toHaveBeenCalledWith({ apiKey: ROUTING.apiKey, baseUrl: ROUTING.apiBaseUrl, projectUuid: "project" }, ROUTING.model, { modelKinds: "all" });
+  });
+
+  it.each([
+    ["resume", "session"], ["exec", "resume", "session"], ["fork", "session"],
+    ["--profile", "saved"], ["-c", 'model_catalog_json="/saved/catalog.json"'],
+    ["-c", 'model="provider/saved"'], ["--model", "provider/saved"],
+  ])("keeps native saved-selection workflows intact without discovery: %j", async (...args: string[]) => {
+    await codex.spawn!(args, ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    expect(spawnedArgs().filter((arg) => arg.startsWith("model_catalog_json="))).toEqual(args.filter((arg) => arg.startsWith("model_catalog_json=")));
+    if (args.includes("resume") || args.includes("fork")) expect(spawnedArgs()).toContain(ROUTING.model);
+  });
+
+  it("preserves an existing native model catalog", async () => {
+    writeConfig('model_catalog_json = "/my/catalog.json"\n' + DESKTOP);
+    await codex.spawn!([], ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    expect(spawnedArgs().some((arg) => arg.startsWith("model_catalog_json="))).toBe(false);
+  });
+
+  it("aborts before spawning when discovery rejects the selected credential", async () => {
+    fetchCatalogMock.mockRejectedValue(new Error("credential rejected"));
+    await expect(codex.spawn!([], ROUTING)).rejects.toThrow("credential rejected");
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["codex-cli 0.147.0", "codex-cli 0.153.3", "unknown build"])("retains legacy launch support for unverified runtime %s", async (version) => {
+    runMock.mockReturnValue({ code: 0, stdout: version, stderr: "" });
+    await codex.spawn!([], ROUTING);
+    expect(fetchCatalogMock).not.toHaveBeenCalled();
+    expect(spawnedArgs()).toContain(ROUTING.model);
   });
 
   it("injects the selected credential only into the child", async () => {
