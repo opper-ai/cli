@@ -109,12 +109,22 @@ function catalogHeaders(profile: JsonObject): Record<string, string> {
   return headers;
 }
 
-function nativeProfile(profile: JsonObject): boolean {
+function hasManagedCatalogHeaders(profile: JsonObject): boolean {
   const headers = catalogHeaders(profile);
-  return profile.modelDiscoveryEnabled === true && profile.inferenceModels === undefined &&
-    headers[CATALOG_HEADERS[0]] === CATALOG_PROFILE &&
+  return headers[CATALOG_HEADERS[0]] === CATALOG_PROFILE &&
     ["pools,routes", "all"].includes(headers[CATALOG_HEADERS[1]] ?? "") &&
     isClaudeDesktopModelId(headers[CATALOG_HEADERS[2]] ?? "");
+}
+
+function nativeProfile(profile: JsonObject): boolean {
+  return profile.modelDiscoveryEnabled === true && profile.inferenceModels === undefined && hasManagedCatalogHeaders(profile);
+}
+
+function removeManagedCatalogHeaders(profile: JsonObject): void {
+  if (!hasManagedCatalogHeaders(profile) || !object(profile.inferenceCustomHeaders)) return;
+  const remaining = Object.fromEntries(Object.entries(profile.inferenceCustomHeaders).filter(([key]) => !CATALOG_HEADERS.some(name => name.toLowerCase() === key.toLowerCase())));
+  if (Object.keys(remaining).length) profile.inferenceCustomHeaders = remaining;
+  else delete profile.inferenceCustomHeaders;
 }
 
 function legacyModels(profile: JsonObject): JsonObject[] {
@@ -401,6 +411,7 @@ async function writeGatewayProfile(
       .filter(([key]) => !CATALOG_HEADERS.some(name => name.toLowerCase() === key.toLowerCase()))) : {};
     cfg.inferenceCustomHeaders = {...unrelated, ...nativeHeaders};
   } else {
+    removeManagedCatalogHeaders(cfg);
     const existing = legacyModels(prior);
     // Retain saved selections and per-entry preferences on old/unknown apps or
     // servers. A fresh legacy setup keeps the historical curated fallback.
@@ -549,13 +560,9 @@ async function blankGatewayProfile(target: ThirdPartyPaths): Promise<void> {
   delete cfg.inferenceGatewayApiKey;
   delete cfg.inferenceGatewayAuthScheme;
   delete cfg.inferenceModels;
-  if (nativeProfile(cfg)) {
-    delete cfg.modelDiscoveryEnabled;
-    if (object(cfg.inferenceCustomHeaders)) {
-      const remaining = Object.fromEntries(Object.entries(cfg.inferenceCustomHeaders).filter(([key]) => !CATALOG_HEADERS.some(name => name.toLowerCase() === key.toLowerCase())));
-      if (Object.keys(remaining).length) cfg.inferenceCustomHeaders = remaining;
-      else delete cfg.inferenceCustomHeaders;
-    }
+  if (hasManagedCatalogHeaders(cfg)) {
+    if (cfg.modelDiscoveryEnabled === true) delete cfg.modelDiscoveryEnabled;
+    removeManagedCatalogHeaders(cfg);
   }
   const ownership = await readJsonOrNull(target.ownership);
   if (ownership?.version === 3 && typeof ownership.projectHeader === "string" && object(cfg.inferenceCustomHeaders)) {

@@ -57,6 +57,25 @@ try {
   assert.ok(!Object.hasOwn(JSON.parse(cliProfile),"inferenceModels"));
   await assert.rejects(run(process.execPath,[cliPath,"agents","configure","claude-desktop","--model","gpt-5.5","--model-kinds","all"],{env:cliEnv,cwd:cliHome,timeout:20000,maxBuffer:100000}),error=>error.stderr.includes('does not support model "gpt-5.5"'));
   assert.equal(await readFile(cliProfilePath,"utf8"),cliProfile);
+  const optedOut=JSON.parse(cliProfile);
+  optedOut.modelDiscoveryEnabled=false;
+  optedOut.inferenceModels=[{name:"claude-haiku-4-5",labelOverride:"My saved model",maxEffort:"high"}];
+  optedOut.customMetadata={keep:true};
+  delete optedOut.inferenceCustomHeaders["X-Opper-Project"];
+  optedOut.inferenceCustomHeaders["x-opper-project"]=projectUuid;
+  optedOut.inferenceCustomHeaders["X-Custom"]="keep";
+  await writeFile(cliProfilePath,JSON.stringify(optedOut));
+  await run(process.execPath,[cliPath,"agents","configure","claude-desktop"],{env:cliEnv,cwd:cliHome,timeout:20000,maxBuffer:100000});
+  const optedOutRefreshed=JSON.parse(await readFile(cliProfilePath,"utf8"));
+  assert.equal(optedOutRefreshed.modelDiscoveryEnabled,false);
+  assert.deepEqual(optedOutRefreshed.inferenceModels,optedOut.inferenceModels);
+  assert.deepEqual(optedOutRefreshed.inferenceCustomHeaders,{"x-opper-project":projectUuid,"X-Custom":"keep"});
+  await run(process.execPath,[cliPath,"agents","remove","claude-desktop"],{env:cliEnv,cwd:cliHome,timeout:20000,maxBuffer:100000});
+  const removed=JSON.parse(await readFile(cliProfilePath,"utf8"));
+  assert.equal(removed.modelDiscoveryEnabled,false);
+  assert.deepEqual(removed.customMetadata,{keep:true});
+  assert.deepEqual(removed.inferenceCustomHeaders,{"x-opper-project":projectUuid,"X-Custom":"keep"});
+  assert.ok(!Object.hasOwn(removed,"inferenceGatewayApiKey"));
   const adapterURL=pathToFileURL(join(process.cwd(),"dist","agents","claude-desktop.js")).href;
   const driver=join(directory,"configure.mjs");
   await writeFile(driver,`import {claudeDesktop} from ${JSON.stringify(adapterURL)}; await claudeDesktop.configure(JSON.parse(process.argv[2])); if(!await claudeDesktop.isConfigured()) throw Error("configured profile not recognized");`);
@@ -130,7 +149,7 @@ try {
   assert.equal(requests.at(-1).path,"/v3/compat/v1/messages");
   assert.equal(requests.at(-1).headers["x-opper-project"],projectUuid);
   assert.ok(requests.every(request=>request.headers.authorization==="Bearer synthetic"&&request.headers["x-opper-project"]===projectUuid));
-  console.log("Claude Desktop: built CLI configured exact Claude model and catalog policy, rejecting incompatible models unchanged. Real installed version gate and isolated native config passed; native bundled discovery/parser/composition fixture fetched synthetic catalog, retained provider selection, and proved explicit lists pin the picker. Native gateway wire resolution kept the same project on the synthetic message request. Auth failure/downgrade preserved configuration. App UI and real inference were not launched.");
+  console.log("Claude Desktop: built CLI configured exact Claude model and catalog policy, rejected incompatible models unchanged, and cleaned native opt-out headers through configure/remove while retaining user settings. Real installed version gate and isolated native config passed; native bundled discovery/parser/composition fixture fetched synthetic catalog, retained provider selection, and proved explicit lists pin the picker. Native gateway wire resolution kept the same project on the synthetic message request. Auth failure/downgrade preserved configuration. App UI and real inference were not launched.");
 } finally {
   server.closeAllConnections();
   await new Promise(resolve=>server.close(resolve));

@@ -75,6 +75,41 @@ describe("Claude Desktop native gateway discovery", () => {
     expect(await claudeDesktop.isConfigured()).toBe(true);
   });
 
+  it("cleans owned catalog headers when a native profile opts out, preserving user preferences through configure/remove", async () => {
+    mkdirSync(dirname(profilePath),{recursive:true});
+    writeFileSync(profilePath,JSON.stringify({inferenceCustomHeaders:{"x-opper-project":"project-user","X-Custom":"keep"},customMetadata:{keep:true}}));
+    await claudeDesktop.configure({apiKey:"synthetic",baseUrl:apiBase,model:selected});
+    const models=[{name:selected,labelOverride:"Saved deployment",maxEffort:"high"}];
+    writeFileSync(profilePath,JSON.stringify({...read(profilePath),modelDiscoveryEnabled:false,inferenceModels:models}));
+    await claudeDesktop.configure({apiKey:"synthetic",baseUrl:apiBase});
+    expect(read(profilePath)).toMatchObject({modelDiscoveryEnabled:false,inferenceModels:models,customMetadata:{keep:true}});
+    expect(read(profilePath).inferenceCustomHeaders).toEqual({"x-opper-project":"project-user","X-Custom":"keep"});
+    expect(await claudeDesktop.isConfigured()).toBe(true);
+    await claudeDesktop.configure({apiKey:"synthetic",baseUrl:apiBase});
+    expect(read(profilePath).inferenceModels).toEqual(models);
+    await claudeDesktop.unconfigure();
+    expect(read(profilePath)).toMatchObject({modelDiscoveryEnabled:false,customMetadata:{keep:true},inferenceCustomHeaders:{"x-opper-project":"project-user","X-Custom":"keep"}});
+    expect(read(profilePath).inferenceGatewayApiKey).toBeUndefined();
+    expect(existsSync(ownership)).toBe(false);
+  });
+
+  it("removes catalog headers from an owned opt-out profile persisted by the previous CLI", async () => {
+    mkdirSync(dirname(profilePath),{recursive:true});
+    writeFileSync(profilePath,JSON.stringify({
+      inferenceProvider:"gateway",inferenceGatewayBaseUrl:`${apiBase}/v3/compat`,inferenceGatewayApiKey:"synthetic",inferenceGatewayAuthScheme:"bearer",disableDeploymentModeChooser:true,
+      inferenceModels:[{name:selected,labelOverride:"Saved"}],modelDiscoveryEnabled:false,customMetadata:{keep:true},
+      inferenceCustomHeaders:{"x-opper-model-catalog":"claude-desktop","x-opper-catalog-model-kinds":"all","x-opper-catalog-selected-model":selected,"x-opper-project":"project-user","X-Custom":"keep"},
+    }));
+    // Version 3 ownership captured from the old native -> opt-out -> configure flow.
+    writeFileSync(ownership,JSON.stringify({version:3,fingerprint:"d218551bc5c8f9fc8c91ecbbb0dda280f7cfc0c36e397b7169c4b81b4df3d3bf"}));
+    expect(await claudeDesktop.isConfigured()).toBe(false); // No active metadata entry in this fixture.
+    await claudeDesktop.unconfigure();
+    expect(read(profilePath).inferenceCustomHeaders).toEqual({"x-opper-project":"project-user","X-Custom":"keep"});
+    expect(read(profilePath)).toMatchObject({modelDiscoveryEnabled:false,customMetadata:{keep:true}});
+    expect(read(profilePath).inferenceGatewayApiKey).toBeUndefined();
+    expect(existsSync(ownership)).toBe(false);
+  });
+
   it("preserves exact selected IDs from native string-form legacy model lists", async () => {
     mkdirSync(dirname(profilePath),{recursive:true});
     writeFileSync(profilePath,JSON.stringify({inferenceModels:[selected,"claude-opus-5"]}));
