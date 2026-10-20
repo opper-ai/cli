@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
-import { join, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { readDesktopConfig } from "./codex-desktop-config.js";
 
 export interface CodexCatalogLayers {
@@ -18,7 +18,7 @@ export async function hasInheritedCodexCatalog(providerId: string, options: Code
   const windows = platform() === "win32";
   const home = options.codexHome ?? (process.env.CODEX_HOME || join(homedir(), ".codex"));
   const system = windows ? win32.join(process.env.ProgramData || process.env.PROGRAMDATA || String.raw`C:\ProgramData`, "OpenAI", "Codex") : "/etc/codex";
-  const systemPath = (name: string) => windows ? win32.join(system, name) : join(system, name);
+  const systemPath = (name: string) => windows ? win32.join(system, name) : posix.join(system, name);
   const paths = [
     {path: systemPath("config.toml"), enforced: false},
     ...(options.includeUserConfig === false ? [] : [{path: join(home, "config.toml"), enforced: false}]),
