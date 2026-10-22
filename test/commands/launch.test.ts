@@ -58,11 +58,19 @@ describe("launchCommand", () => {
     desktopOpenMock.mockReset().mockResolvedValue({ url: "http://127.0.0.1:12345/open/fresh-ticket" });
   });
 
-  it.each(["codex","codex-desktop","opencode","pi"])("passes full catalog intent to %s",async (agent)=>{
+  it.each(["codex","codex-desktop","claude-desktop","opencode","pi"])("passes full catalog intent to %s",async (agent)=>{
     await setSlot("default",{apiKey:"synthetic"}); adapter.detect.mockResolvedValue({installed:true}); adapter.spawn.mockResolvedValue(0);
     getAdapterMock.mockReturnValueOnce({...adapter,name:agent});
     await launchCommand({agent,key:"default",modelKinds:"all"});
     expect(adapter.spawn.mock.calls[0]![1]).toMatchObject({modelKinds:"all",apiKey:"synthetic"});
+  });
+
+  it.each(["claude-haiku-4-5", "provider/claude-haiku-4-5"])("passes exact supported Desktop model %s without requiring the curated defaults", async model => {
+    const {claudeDesktop} = await import("../../src/agents/claude-desktop.js");
+    await setSlot("default",{apiKey:"synthetic"}); adapter.detect.mockResolvedValue({installed:true}); adapter.spawn.mockResolvedValue(0);
+    getAdapterMock.mockReturnValueOnce({...adapter,name:"claude-desktop",supportsModel:claudeDesktop.supportsModel} as typeof adapter);
+    await launchCommand({agent:"claude-desktop",key:"default",model,modelKinds:"all"});
+    expect(adapter.spawn.mock.calls[0]![1]).toMatchObject({model,modelOverride:model,modelKinds:"all"});
   });
 
   it.each([["hermes","all"],["pi","models"]])("rejects unsupported catalog policy for %s before login",async(agent,modelKinds)=>{

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
+import { nativeCodexCatalog, supportsNativeCodexCatalog } from "../setup/codex-native-catalog.js";
 import { run } from "../util/run.js";
 import { which } from "../util/which.js";
 import { npmInstallGlobal } from "./npm-install.js";
@@ -109,6 +110,20 @@ function hasOpaqueCatalogSelection(args: string[]): boolean {
   return false;
 }
 
+function featureOverrides(args: string[]): string[] {
+  const flags: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") break;
+    if (arg === "--enable" || arg === "--disable") {
+      flags.push(arg);
+      if (args[i + 1] !== undefined) flags.push(args[++i]!);
+    } else if (/^--(?:enable|disable)=/.test(arg)) flags.push(arg);
+  }
+  return flags;
+}
+
+
 function supportsInvocationCatalog(): boolean {
   const version = run("codex", ["--version"], { timeout: 5_000 });
   const match = version.stdout.match(/codex-cli\s+(\d+)\.(\d+)\.(\d+)/);
@@ -133,15 +148,20 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
   const modelArgs = hasNativeModelSelection(args) ? [] : ["--model", routing.model];
   let directory: string | undefined;
   try {
-    if (!hasOpaqueCatalogSelection(args) && !await hasInheritedCodexCatalog(PROVIDER) && supportsInvocationCatalog()) {
-      const catalog = await fetchCodexModelCatalog({
+    if (!hasOpaqueCatalogSelection(args) && !await hasInheritedCodexCatalog(PROVIDER)) {
+      const context = {
         apiKey: routing.apiKey, baseUrl: routing.apiBaseUrl,
         ...(routing.projectUuid ? { projectUuid: routing.projectUuid } : {}),
-      }, routing.model, { ...(routing.modelKinds ? { modelKinds: routing.modelKinds } : {}) });
-      directory = await mkdtemp(join(tmpdir(), "opper-codex-catalog-"));
-      const path = join(directory, "catalog.json");
-      await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
-      overrides.push("-c", `model_catalog_json=${JSON.stringify(path)}`);
+      };
+      const native = supportsNativeCodexCatalog("codex", undefined, featureOverrides(args)) ? await nativeCodexCatalog(context, routing.model, routing.modelKinds) : undefined;
+      if (native) overrides.push("-c", `model_providers.${PROVIDER}.model_catalog_url=${JSON.stringify(native.url)}`);
+      else if (supportsInvocationCatalog()) {
+        const catalog = await fetchCodexModelCatalog(context, routing.model, { ...(routing.modelKinds ? { modelKinds: routing.modelKinds } : {}) });
+        directory = await mkdtemp(join(tmpdir(), "opper-codex-catalog-"));
+        const path = join(directory, "catalog.json");
+        await writeFile(path, JSON.stringify(catalog), { mode: 0o600 });
+        overrides.push("-c", `model_catalog_json=${JSON.stringify(path)}`);
+      }
     }
     const result = spawnSync("codex", [...overrides, ...modelArgs, ...args], {
       stdio: "inherit",

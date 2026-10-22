@@ -232,7 +232,7 @@ describe("agentsConfigureCommand", () => {
     expect(configure).not.toHaveBeenCalled();
   });
 
-  it.each(["conductor", "codex-desktop", "opencode", "pi"].flatMap(agent => ["all", "pools,routes"].map(modelKinds => [agent, modelKinds])))("forwards %s catalog selection %s", async (agent, modelKinds) => {
+  it.each(["conductor", "codex-desktop", "claude-desktop", "opencode", "pi"].flatMap(agent => ["all", "pools,routes"].map(modelKinds => [agent, modelKinds])))("forwards %s catalog selection %s", async (agent, modelKinds) => {
     getAdapterMock.mockReturnValue({ name: agent, displayName: "Conductor", docsUrl: "https://example.com", detect: vi.fn(), isConfigured: vi.fn(), configure, unconfigure });
     await setSlot("prod", { apiKey: "fixture-prod" });
     const { agentsConfigureCommand } = await import("../../src/commands/agents.js");

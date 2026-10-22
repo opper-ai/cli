@@ -143,7 +143,7 @@ opper launch claude --resume
 
 `opper launch <agent> --install` runs the upstream agent's installer if it's missing (where supported). Claude Desktop is GUI-only on macOS/Windows and has no scripted installer — install it from <https://claude.ai/download> first.
 
-The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default. Claude Desktop's picker is restricted to Claude-backed routes because its third-party gateway rejects non-Anthropic models; the generated profile defaults to Claude Opus 5 and also includes Sonnet 5, Haiku 4.5, and Fable 5.1.
+The CLI also offers a per-agent submenu (`opper` → Agents → *agent* → Launch with model…) that lets you pick a specific Opper model from the catalog instead of the default. Claude Desktop's picker is restricted to supported Claude models and pools because its third-party gateway rejects other models. Supported versions use native discovery once the server's Claude-only response is verified; older versions, older servers and customized model lists retain the explicit-list fallback.
 
 For OpenCode, each launch fetches `/v3/compat/models` using the same key and API host as the launched session, including when you select a different slot with `--key`. The generated model map and whitelist limit Opper's picker entries to the returned models supported by the CLI. These settings also apply at runtime so an older project configuration cannot restore removed entries or override the launch URL. Unrelated inline `OPENCODE_CONFIG_CONTENT` settings are preserved. Inherited inline authorization headers are removed. Before updating the Opper provider, launch checks OpenCode's merged settings and stops if provider or allowed-model authorization headers could override the selected key. Existing JSONC configuration files are edited narrowly so unrelated settings and comments survive setup and launch; malformed files are left unchanged with an error.
 
@@ -199,7 +199,7 @@ opper agents remove codex-desktop
 
 If the app is already running, the CLI saves the configuration and reports that a restart is required. Quit and reopen the app, then create a new **local Codex task**. Existing tasks keep their provider. This integration covers local Codex tasks; ordinary ChatGPT conversations and cloud tasks are separate.
 
-Setup refreshes the model picker from the selected key's authorized, tool-capable Opper catalog, using the same API root as inference. Run the launch or configure command again to refresh the catalog or change keys/models. Models without confirmed tool support are excluded.
+Setup verifies the selected key's authorized, tool-capable Opper catalog using the same API root and project as inference. Supported runtimes and servers use a native `model_catalog_url`, which Codex refreshes directly. Older runtimes/servers retain the local catalog fallback. Run launch or configure again to change keys/models or refresh fallback catalogs. Models without confirmed tool support are excluded.
 
 The effort slider uses each model's advertised reasoning levels. Pools offer only levels supported by every permitted member; models or pools without confirmed effort metadata keep the slider disabled. Rerun configure and restart the app to refresh an existing installation's effort choices.
 
@@ -251,6 +251,14 @@ previous values for removal. If an earlier manual setup already selected this
 generated executable, removal clears that path to return to Conductor's bundled
 Codex. The executable uses invocation-specific provider and catalog settings;
 ordinary Codex settings in `~/.codex/config.toml` remain unchanged.
+
+Setup records the selected `CODEX_HOME` (default `~/.codex`) so GUI launches use
+the same verified catalog and feature settings. Refresh retains that home when
+the environment variable is absent. To select another home, rerun your configure
+command with `CODEX_HOME=/absolute/path` and the same key/project options. If a launch supplies
+a different `CODEX_HOME`, the wrapper stops with guidance instead of overriding
+that workspace setting. Removal preserves both homes' personal files.
+
 The API key stays in the CLI credential store and is
 read from the selected slot when Codex refreshes credentials. Renewing that slot
 within the same organization and API host works without copying another key
@@ -259,7 +267,7 @@ changing its organization or API host requires running setup again. An
 environment-only `OPPER_API_KEY` cannot configure this persistent integration.
 
 Setup fetches the selected key's authorized, tool-capable catalog. By default,
-Conductor lists providerless pools (such as `gpt-5-mini`) and `dynamic/...` routes,
+Conductor lists model pools (such as `gpt-5-mini`) and `dynamic/...` routes,
 so each provider deployment does not crowd the picker. An exact model selected
 with `--model` is also retained, including a provider-specific ID; it is never
 rewritten to a pool. Pools and providers have distinct labels.
@@ -270,10 +278,10 @@ To include every eligible provider-specific model, opt into the full catalog:
 opper --key default agents configure conductor --model-kinds all
 ```
 
-Run configure again without `--model-kinds all` (or with
-`--model-kinds pools,routes`) to return to the compact catalog. Existing generated
-catalogs stay as they are until you configure again. These defaults apply only
-to Conductor; other agents' catalogs are unchanged.
+Supported runtimes and servers use authenticated native discovery. Older
+runtimes/servers retain the generated catalog. Existing local catalogs migrate
+to native `all` so saved provider selections cannot disappear; broad native
+policy stays broad during refresh. Fresh native setups use the compact default.
 
 Run the same configure command again to refresh models or change the selected
 login, model, or project. Built-in Codex web search is
@@ -999,7 +1007,7 @@ OpenCode deployment labels include the full model ID to distinguish providers.
 Pools and dynamic routes are marked separately. Existing one-time OpenCode login
 bridges need setup rerun to receive the updated labels.
 
-Fresh generated catalogs default to pools and account dynamic routes. Add
+Fresh native and generated catalogs default to pools and account dynamic routes. Add
 `--model-kinds all` to supported launch/setup commands to include provider
 specific deployments. Explicit model IDs and previously configured authorized
 entries remain available during refresh; narrowing never silently removes an

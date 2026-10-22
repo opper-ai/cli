@@ -60,6 +60,17 @@ describe("OpperApi", () => {
     expect(result.items).toEqual([]);
   });
 
+  it("allows bounded redirect-free GET probes without changing other callers", async () => {
+    const fetchMock=vi.fn().mockImplementation(()=>Promise.resolve(Response.json({items:[]})));globalThis.fetch=fetchMock;
+    const api=new OpperApi({baseUrl:"https://api.opper.ai",apiKey:"synthetic"});
+    const signal=AbortSignal.timeout(10_000);
+    await api.get("/v3/models",{format:"codex"},{redirect:"error",signal});
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({method:"GET",redirect:"error",signal,headers:{Authorization:"Bearer synthetic"}});
+    await api.get("/v3/models");
+    expect(fetchMock.mock.calls[1]![1]).not.toHaveProperty("redirect");
+    expect(fetchMock.mock.calls[1]![1]).not.toHaveProperty("signal");
+  });
+
   it("handles 204 No Content on DELETE", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response(null, { status: 204 }),

@@ -10,6 +10,8 @@ import { OpperError } from "../errors.js";
 import { run } from "../util/run.js";
 import { windowsDesktopApps, powerShellLiteral } from "../util/windows-desktop.js";
 import { fetchCodexModelCatalog } from "../setup/codex-models.js";
+import { hasInheritedCodexCatalog } from "../setup/codex-inherited-catalog.js";
+import { codexCatalogUrl, nativeCodexCatalog, nativeCodexRefreshKinds, supportsNativeCodexCatalog } from "../setup/codex-native-catalog.js";
 import { applyDesktopConfig, removeDesktopConfig, readDesktopConfig, DESKTOP_PROVIDER, type DesktopConfigState } from "../setup/codex-desktop-config.js";
 import type { AgentAdapter, ConfigureOptions, OpperRouting, SpawnOptions, UnconfigureOptions } from "./types.js";
 import { POWERSHELL_PRIVATE_STATE_SCRIPT, ensurePrivateStateDirectory } from "../desktop/private-state.js";
@@ -223,15 +225,20 @@ function proxySettings(proxy: NonNullable<ConfigureOptions["desktopProxy"]>) {
   return {baseUrl: endpoint.origin, stateDir: resolve(proxy.stateDir)};
 }
 
-interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; bundledRuntime?: boolean; }
+interface StoredState { version: 1; configExisted: boolean; config: DesktopConfigState; bundledRuntime?: boolean; projectUuid?: string; }
 async function readState(path: string): Promise<StoredState | undefined> {
   const raw = await readOptional(path);
   if (raw === null) return undefined;
   const state = JSON.parse(raw) as StoredState;
-  if (state.version !== 1 || state.config?.version !== 1 || typeof state.config.originalText !== "string" || typeof state.config.appliedText !== "string" || (state.bundledRuntime !== undefined && typeof state.bundledRuntime !== "boolean")) {
+  if (state.version !== 1 || state.config?.version !== 1 || typeof state.config.originalText !== "string" || typeof state.config.appliedText !== "string" || (state.bundledRuntime !== undefined && typeof state.bundledRuntime !== "boolean") || (state.projectUuid !== undefined && typeof state.projectUuid !== "string")) {
     throw new OpperError("AGENT_CONFIG_CONFLICT", "Invalid Opper desktop backup. Preserve it and restore the previous Codex configuration before retrying.");
   }
   return state;
+}
+function checkCatalogOwnership(path: string, state?: StoredState): boolean {
+  const owned = state?.config.settings.model_catalog_json === path;
+  if (!owned && existsSync(path)) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged catalog.json exists in the Opper desktop configuration directory. It and the existing settings were preserved.");
+  return owned;
 }
 async function locked<T>(home: string, fn: () => Promise<T>): Promise<T> {
   const p = paths(home);
@@ -249,20 +256,25 @@ interface ConfiguredDesktop { home: string; credentialHome: string; keyName: str
 async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MODELS.opus): Promise<ConfiguredDesktop> {
   if (process.env.OPPER_API_KEY) throw new OpperError("AUTH_REQUIRED", "Codex Desktop requires a stored Opper credential so Finder launches can refresh it.", "Store the key in its own CLI slot and unset OPPER_API_KEY before configuring or launching Codex Desktop.");
   const home = codexHome(opts.codexHome);
-  requireApp();
+  const app = requireApp();
   await checkConfigPaths(home);
   const keyName = opts.keyName ?? "default";
   const slot = await getSlot(keyName);
   if (!slot) throw new OpperError("AUTH_REQUIRED", `No API key stored for slot "${keyName}"`, "Run `opper login` first.");
   if (opts.apiKey && opts.apiKey !== slot.apiKey) throw new OpperError("AGENT_CONFIG_CONFLICT", "The selected Opper key changed while configuring the desktop app. Retry the command.");
+  if (await hasInheritedCodexCatalog(DESKTOP_PROVIDER, {codexHome: home, includeUserConfig: false})) {
+    throw new OpperError("AGENT_CONFIG_CONFLICT", "An inherited Codex model catalog or unreadable managed configuration is present. Existing settings were preserved; reconcile the host configuration before configuring Codex Desktop.");
+  }
   const baseUrl = apiRoot(opts.baseUrl ?? process.env.OPPER_BASE_URL ?? slot.baseUrl ?? OPPER_HOST);
   const proxy = opts.desktopProxy ? proxySettings(opts.desktopProxy) : undefined;
   let model = opts.model ?? fallbackModel;
+  let projectUuid = opts.projectUuid;
   await locked(home, async () => {
     await checkConfigPaths(home);
     const p = paths(home);
     const existing = await readOptional(p.config);
     const previous = await readState(p.state);
+    const ownedCatalog = checkCatalogOwnership(p.catalog, previous);
     const current = readDesktopConfig(existing ?? "");
     if (previous && opts.model === undefined) {
       // The app picker may change model without updating our installation
@@ -270,19 +282,30 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
       model = current.model_provider === DESKTOP_PROVIDER && typeof current.model === "string"
         ? current.model : previous.config.settings.model;
     }
+    projectUuid ??= previous?.projectUuid;
+    if (projectUuid === undefined) {
+      const headers = previous?.config.settings.provider.http_headers;
+      if (headers && typeof headers === "object") {
+        const saved = Object.entries(headers).find(([name]) => name.toLowerCase() === "x-opper-project")?.[1];
+        if (typeof saved === "string") projectUuid = saved;
+      }
+    }
+    if (proxy && projectUuid !== opts.projectUuid) throw new OpperError("AGENT_CONFIG_CONFLICT", "The existing Codex Desktop project differs from the new proxy scope. Repeat --project-uuid for that project when configuring the proxy; existing settings were preserved.");
     const bundled = process.env.OPPER_DISTRIBUTION === "bundle";
     if (!previous?.bundledRuntime && (existsSync(p.runtime) || existsSync(p.runtimeLicense))) {
       throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged Node runtime files already exist in the Opper desktop configuration directory.");
     }
-    const provider = {
+    const provider: Record<string, unknown> = {
       name: "Opper", base_url: `${proxy?.baseUrl ?? baseUrl}/v3/compat`, wire_api: "responses",
       ...(proxy ? {supports_websockets: false} : {}),
-      ...(!proxy && opts.projectUuid ? { http_headers: { "X-Opper-Project": opts.projectUuid } } : {}),
+      ...(!proxy && projectUuid ? { http_headers: { "X-Opper-Project": projectUuid } } : {}),
       auth: { command: bundled ? p.runtime : await nodeLauncher(), args: proxy ? [p.auth, proxy.stateDir, proxy.baseUrl] : [p.auth, resolve(opperConfigPath()), keyName, apiRoot(slot.baseUrl ?? OPPER_HOST), slot.orgId ? String(slot.orgId) : ""], refresh_interval_ms: 300_000 },
     };
-    const applied = applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
+    // Validate ownership before discovery; never replace an independently
+    // edited provider or manually configured native URL.
+    applyDesktopConfig(existing ?? "", { model, model_catalog_json: p.catalog, provider }, previous?.config);
     if (!previous && (existsSync(p.auth) || existsSync(p.catalog))) throw new OpperError("AGENT_CONFIG_CONFLICT", "Unmanaged files already exist in the Opper desktop configuration directory.");
-    const previousCatalog = previous ? await readOptional(p.catalog) : null;
+    const previousCatalog = ownedCatalog ? await readOptional(p.catalog) : null;
     let preserveIds: string[] = [];
     if (previousCatalog !== null) {
       try {
@@ -295,8 +318,14 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
     }
     // Only the freshly authorized gateway entries can be retained. Revoked
     // deployments never survive merely because a previous picker listed them.
-    const catalog = await fetchCodexModelCatalog({ apiKey: slot.apiKey, baseUrl, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) }, model,
-      { ...(opts.modelKinds ? { modelKinds: opts.modelKinds } : {}), preserveIds });
+    const context = { apiKey: slot.apiKey, baseUrl, ...(projectUuid ? { projectUuid } : {}) };
+    const previousUrl = previous?.config.settings.provider.model_catalog_url;
+    const kinds = nativeCodexRefreshKinds(model, opts.modelKinds, typeof previousUrl === "string" ? previousUrl : undefined, previousCatalog !== null);
+    const native = supportsNativeCodexCatalog(app.runtime, home) ? await nativeCodexCatalog(context, model, kinds) : undefined;
+    if (native) provider.model_catalog_url = proxy ? codexCatalogUrl(proxy.baseUrl, model, kinds) : native.url;
+    const catalog = native ? undefined : await fetchCodexModelCatalog(context, model,
+      { ...(opts.modelKinds ? { modelKinds: opts.modelKinds } : {}), ...(typeof previousUrl === "string" ? { modelKinds: kinds } : {}), preserveIds });
+    const applied = applyDesktopConfig(existing ?? "", { model, ...(!native ? { model_catalog_json: p.catalog } : {}), provider }, previous?.config);
     if (await readOptional(p.config) !== existing || (previous && await readOptional(p.catalog) !== previousCatalog)) {
       throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during discovery. Retry to preserve those edits.");
     }
@@ -305,9 +334,9 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
       await mkdir(p.directory, { recursive: true, mode: 0o700 });
       await chmod(p.directory, 0o700);
     }
-    const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state, ...((bundled || previous?.bundledRuntime) ? { bundledRuntime: true } : {}) };
+    const state: StoredState = { version: 1, configExisted: previous?.configExisted ?? existing !== null, config: applied.state, ...(projectUuid ? {projectUuid} : {}), ...((bundled || previous?.bundledRuntime) ? { bundledRuntime: true } : {}) };
     const backups = new Map<string, { contents: Buffer; mode: number } | null>();
-    for (const file of [p.auth, p.catalog, p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
+    for (const file of [p.auth, ...(!native || ownedCatalog ? [p.catalog] : []), p.state, ...(bundled ? [p.runtime, p.runtimeLicense] : [])]) {
       try { backups.set(file, { contents: await readFile(file), mode: (await stat(file)).mode & 0o777 }); }
       catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; backups.set(file, null); }
     }
@@ -319,7 +348,8 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
         await atomicWrite(p.runtimeLicense, await readFile(join(dirname(process.execPath), "NODE-LICENSE")));
       }
       await atomicWrite(p.auth, proxy ? PROXY_AUTH_HELPER : AUTH_HELPER);
-      await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
+      if (native) { if (ownedCatalog) await rm(p.catalog, { force: true }); }
+      else await atomicWrite(p.catalog, JSON.stringify(catalog, null, 2) + "\n");
       await atomicWrite(p.state, JSON.stringify(state, null, 2) + "\n");
       if (await readOptional(p.config) !== existing) throw new OpperError("AGENT_CONFIG_CONFLICT", "Codex settings changed during setup. Retry to preserve those edits.");
       const mode = existing === null ? 0o600 : (await stat(p.config)).mode & 0o777;
@@ -331,7 +361,7 @@ async function setup(opts: ConfigureOptions, fallbackModel: string = DEFAULT_MOD
       throw e;
     }
   });
-  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid: opts.projectUuid, ...(proxy ? {proxyStateDir: proxy.stateDir} : {}) };
+  return { home, credentialHome: dirname(resolve(opperConfigPath())), keyName, baseUrl, model, projectUuid, ...(proxy ? {proxyStateDir: proxy.stateDir} : {}) };
 }
 
 function customHome(settings: ConfiguredDesktop): boolean { return settings.home !== resolve(join(homedir(), ".codex")); }
@@ -371,6 +401,7 @@ async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
     await checkConfigPaths(home);
     const state = await readState(p.state);
     if (!state) return;
+    const ownedCatalog = checkCatalogOwnership(p.catalog, state);
     const existing = await readOptional(p.config);
     if (existing !== null) {
       const restored = removeDesktopConfig(existing, state.config);
@@ -378,7 +409,7 @@ async function unconfigure(opts?: UnconfigureOptions): Promise<void> {
       if (!state.configExisted && restored.trim() === "") await rm(p.config);
       else await atomicWrite(p.config, restored, (await stat(p.config)).mode & 0o777);
     }
-    for (const file of [p.auth, p.catalog, p.state, ...(state.bundledRuntime ? [p.runtime, p.runtimeLicense] : [])]) await rm(file, { force: true });
+    for (const file of [p.auth, ...(ownedCatalog ? [p.catalog] : []), p.state, ...(state.bundledRuntime ? [p.runtime, p.runtimeLicense] : [])]) await rm(file, { force: true });
     // Keep independently added files; only remove the directory when empty.
     try { const { rmdir } = await import("node:fs/promises"); await rmdir(p.directory); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw e; }
@@ -390,9 +421,12 @@ async function isConfigured(): Promise<boolean> {
     const p = paths();
     const state = await readState(p.state);
     const text = await readOptional(p.config);
-    if (!state || !text || !existsSync(p.auth) || !existsSync(p.catalog)) return false;
+    if (!state || !text || !existsSync(p.auth) || (state.config.settings.model_catalog_json !== undefined && !existsSync(p.catalog))) return false;
     const config = readDesktopConfig(text);
-    return config.model_provider === DESKTOP_PROVIDER && config.model_catalog_json === p.catalog;
+    const provider = (config.model_providers as Record<string, Record<string, unknown>> | undefined)?.[DESKTOP_PROVIDER];
+    return config.model_provider === DESKTOP_PROVIDER && (state.config.settings.model_catalog_json === undefined
+      ? config.model_catalog_json === undefined && provider?.model_catalog_url === state.config.settings.provider.model_catalog_url
+      : config.model_catalog_json === p.catalog);
   } catch { return false; }
 }
 

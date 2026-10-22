@@ -7,7 +7,7 @@ const ROOT_KEYS = ["model", "model_provider", "model_catalog_json", "web_search"
 type RootKey = (typeof ROOT_KEYS)[number];
 export interface DesktopSettings {
   model: string;
-  model_catalog_json: string;
+  model_catalog_json?: string;
   provider: Record<string, unknown>;
 }
 export interface DesktopConfigState {
@@ -89,7 +89,7 @@ export function applyDesktopConfig(text: string, settings: DesktopSettings, prev
     if (node) originalValues[key] = text.slice(...node.value.range);
   }
   text = patchRoot(text, {
-    model: toml(settings.model), model_provider: toml(DESKTOP_PROVIDER), model_catalog_json: toml(settings.model_catalog_json),
+    model: toml(settings.model), model_provider: toml(DESKTOP_PROVIDER), model_catalog_json: settings.model_catalog_json === undefined ? null : toml(settings.model_catalog_json),
     // Codex defaults to OpenAI's cached-only web search. Opper cannot honor
     // that service's semantics across providers; do not turn it into live search.
     web_search: toml("disabled"),

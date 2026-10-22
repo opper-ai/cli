@@ -43,8 +43,8 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
   if (opts.codexHome !== undefined && adapter.name !== "codex-desktop") {
     throw new OpperError("INVALID_ARGUMENT", "--codex-home is only supported for codex-desktop.");
   }
-  if (opts.modelKinds !== undefined && (!["codex", "codex-desktop", "opencode", "pi"].includes(adapter.name) || !["pools,routes", "all"].includes(opts.modelKinds))) {
-    throw new OpperError("INVALID_ARGUMENT", "--model-kinds accepts pools,routes or all and is supported for codex, codex-desktop, opencode and pi.");
+  if (opts.modelKinds !== undefined && (!["codex", "codex-desktop", "claude-desktop", "opencode", "pi"].includes(adapter.name) || !["pools,routes", "all"].includes(opts.modelKinds))) {
+    throw new OpperError("INVALID_ARGUMENT", "--model-kinds accepts pools,routes or all and is supported for codex, codex-desktop, claude-desktop, opencode and pi.");
   }
   validateDesktopRoutingOptions(adapter.name, opts);
   if (!isLaunchable(adapter)) {

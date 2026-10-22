@@ -315,7 +315,7 @@ describe("claude-desktop adapter — configure", () => {
     expect(names).not.toContain("gemini-3.1-pro-preview");
   });
 
-  it("reconfigure repairs a stale model list", async () => {
+  it("reconfigure preserves existing supported model selections on legacy installations", async () => {
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     const profilePath = join(
       home,
@@ -336,8 +336,7 @@ describe("claude-desktop adapter — configure", () => {
     expect(await claudeDesktop.isConfigured()).toBe(false);
     await claudeDesktop.configure({ apiKey: "op_test_key" });
     const repaired = readJSON(profilePath);
-    expect(repaired.inferenceModels.map((model: { name: string }) => model.name))
-      .toEqual(CURRENT_CLAUDE_MODELS);
+    expect(repaired.inferenceModels).toEqual(profile.inferenceModels);
     expect(await claudeDesktop.isConfigured()).toBe(true);
   });
 
