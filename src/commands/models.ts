@@ -3,17 +3,48 @@ import { resolveApiContext } from "../api/resolve.js";
 import { printTable } from "../ui/table.js";
 import { brand } from "../ui/colors.js";
 
-export interface ModelsListOptions {
+/**
+ * Server-side filters on GET /v3/models. Each is a comma-separated list of
+ * alternatives and they combine, the same way a model access rule on the
+ * Rules page does.
+ */
+export interface ModelsListFilters {
+  inferenceLocation?: string;
+  storageLocation?: string;
+  training?: string;
+  logging?: string;
+  moderation?: string;
+}
+
+export interface ModelsListOptions extends ModelsListFilters {
   key: string;
   projectUuid?: string | undefined;
   filter?: string;
+  json?: boolean;
+}
+
+export interface ModelCompliance {
+  inference_location?: string;
+  storage_location?: string;
+  training?: string;
+  logging?: string;
+  moderation?: string;
 }
 
 export interface OpperModel {
   id: string;
   name?: string;
   context_window?: number;
+  compliance?: ModelCompliance;
 }
+
+const FILTER_PARAMS: Array<[keyof ModelsListFilters, string]> = [
+  ["inferenceLocation", "inference_location"],
+  ["storageLocation", "storage_location"],
+  ["training", "training"],
+  ["logging", "logging"],
+  ["moderation", "moderation"],
+];
 
 interface ModelsResponse {
   models: OpperModel[];
@@ -32,21 +63,34 @@ export async function fetchModels(key: string, projectUuid?: string): Promise<Op
 export async function modelsListCommand(opts: ModelsListOptions): Promise<void> {
   const ctx = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid });
   const api = new OpperApi(ctx);
-  const resp = await api.get<ModelsResponse>("/v3/models");
+  // limit=0 returns every row; the default page is 50 of a catalog of 1000+.
+  const params = new URLSearchParams({ limit: "0" });
+  for (const [opt, param] of FILTER_PARAMS) {
+    const value = opts[opt];
+    if (value) params.set(param, value);
+  }
+  const resp = await api.get<ModelsResponse>(`/v3/models?${params.toString()}`);
   const filter = opts.filter?.toLowerCase();
-  const rows = resp.models
-    .filter((m) =>
-      filter
-        ? (m.name ?? "").toLowerCase().includes(filter) ||
-          m.id.toLowerCase().includes(filter)
-        : true,
-    )
-    .map((m) => [
-      m.name ?? "",
-      m.id,
-      m.context_window ? m.context_window.toString() : "",
-    ]);
-  printTable(["NAME", "ID", "CONTEXT"], rows);
+  const models = resp.models.filter((m) =>
+    filter
+      ? (m.name ?? "").toLowerCase().includes(filter) ||
+        m.id.toLowerCase().includes(filter)
+      : true,
+  );
+  if (opts.json) {
+    console.log(JSON.stringify(models, null, 2));
+    return;
+  }
+  const rows = models.map((m) => [
+    m.name ?? "",
+    m.id,
+    m.context_window ? m.context_window.toString() : "",
+    m.compliance?.inference_location ?? "",
+    m.compliance?.training ?? "",
+    m.compliance?.logging ?? "",
+    m.compliance?.moderation ?? "",
+  ]);
+  printTable(["NAME", "ID", "CONTEXT", "LOCATION", "TRAINING", "LOGGING", "MODERATION"], rows);
 }
 
 export interface ModelsCreateOptions {
