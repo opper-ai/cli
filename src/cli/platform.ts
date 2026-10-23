@@ -5,6 +5,7 @@ import {
   modelsCreateCommand,
   modelsGetCommand,
   modelsDeleteCommand,
+  type ModelsListFilters,
 } from "../commands/models.js";
 import {
   functionsListCommand,
@@ -87,8 +88,15 @@ const register: RegisterFn = (program, ctx) => {
     .command("list")
     .description("List available models")
     .argument("[filter]", "optional substring filter on name or id")
-    .action(async (filter: string | undefined) => {
+    .option("--inference-location <list>", "where inference runs, e.g. EU, SE, GLOBAL (comma-separated)")
+    .option("--storage-location <list>", "where retained content is stored, e.g. EU (comma-separated)")
+    .option("--training <list>", "training stance: no, opt_in, opt_out, yes (comma-separated)")
+    .option("--logging <list>", "logging stance: none, abuse_monitoring, limited_debug, other (comma-separated)")
+    .option("--moderation <list>", "moderation stance: none, optional, default_on, mandatory (comma-separated)")
+    .option("--json", "print the full model objects as JSON", false)
+    .action(async (filter: string | undefined, cmdOpts: ModelsListFilters & { json: boolean }) => {
       await modelsListCommand({
+        ...cmdOpts,
         key: ctx.key(),
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(filter ? { filter } : {}),

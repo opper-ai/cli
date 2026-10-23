@@ -689,7 +689,7 @@ Direct access to the platform endpoints:
 | `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
 | `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
 | `opper functions list [filter]` / `get <name>` / `delete <name>` | Manage functions. |
-| `opper models list [filter]` | List available models (built-in + custom). |
+| `opper models list [filter] [--inference-location] [--storage-location] [--training] [--logging] [--moderation] [--json]` | List available models (built-in + custom) with where they run and their training, logging and moderation stances. The flags filter the way a model access rule on the Rules page does, e.g. `--inference-location EU --storage-location EU --training no --logging none --moderation none`. Values are comma-separated alternatives. |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
 | `opper models get <name>` / `delete <name>` | Inspect / remove a custom model. |
 | `opper indexes list [--limit] [--offset]` | List knowledge-base indexes. |

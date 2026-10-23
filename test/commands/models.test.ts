@@ -28,7 +28,7 @@ describe("modelsListCommand", () => {
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("anthropic/claude-opus-4-7");
       expect(out).toContain("openai/gpt-4o");
-      expect(getMock).toHaveBeenCalledWith("/v3/models");
+      expect(getMock).toHaveBeenCalledWith("/v3/models?limit=0");
     } finally {
       log.mockRestore();
     }
@@ -48,6 +48,57 @@ describe("modelsListCommand", () => {
       const out = log.mock.calls.map((c) => String(c[0])).join("\n");
       expect(out).toContain("anthropic/claude-opus-4-7");
       expect(out).not.toContain("openai/gpt-4o");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+describe("modelsListCommand compliance filters", () => {
+  beforeEach(() => {
+    getMock.mockReset();
+  });
+
+  it("passes the Rules filters to /v3/models and fetches every page", async () => {
+    await setSlot("default", { apiKey: "k" });
+    getMock.mockResolvedValue({ models: [] });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await modelsListCommand({
+        key: "default",
+        inferenceLocation: "EU",
+        storageLocation: "EU",
+        training: "no",
+        logging: "none",
+        moderation: "none,optional",
+      });
+      expect(getMock).toHaveBeenCalledWith(
+        "/v3/models?limit=0&inference_location=EU&storage_location=EU&training=no&logging=none&moderation=none%2Coptional",
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("shows location and stances, and prints JSON with --json", async () => {
+    await setSlot("default", { apiKey: "k" });
+    const model = {
+      name: "Claude Haiku 4.5",
+      id: "aws/claude-haiku-4-5-eu",
+      context_window: 200000,
+      compliance: { inference_location: "EU", training: "no", logging: "none", moderation: "mandatory" },
+    };
+    getMock.mockResolvedValue({ models: [model] });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await modelsListCommand({ key: "default" });
+      const out = log.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(out).toContain("MODERATION");
+      expect(out).toMatch(/aws\/claude-haiku-4-5-eu\s+200000\s+EU\s+no\s+none\s+mandatory/);
+
+      log.mockClear();
+      await modelsListCommand({ key: "default", json: true });
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual([model]);
     } finally {
       log.mockRestore();
     }
