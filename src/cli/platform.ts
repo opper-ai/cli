@@ -27,6 +27,7 @@ import {
 } from "../commands/indexes.js";
 import { usageListCommand } from "../commands/usage.js";
 import { imageGenerateCommand } from "../commands/image.js";
+import { videoGenerateCommand } from "../commands/video.js";
 import { projectsListCommand } from "../commands/projects.js";
 import type { RegisterFn } from "./types.js";
 
@@ -360,10 +361,16 @@ const register: RegisterFn = (program, ctx) => {
     .argument("<prompt>", "text prompt")
     .option("-o, --output <path>", "output file path (default: image_<ts>.<ext> in cwd)")
     .option("--base64", "print raw base64 to stdout instead of saving a file")
-    .option("-m, --model <id>", "image model identifier")
+    .option("-m, --model <id>", "image model id from `opper models list image`")
+    .option("--size <WxH>", "pixel size, e.g. 1024x1536 or 2048x2048 (see the model's params.image)")
+    .option("--quality <tier>", "quality tier, e.g. low, medium, high (Gemini image: high is 2K, 4k is 4K)")
+    .option("--aspect-ratio <ratio>", "aspect ratio for models that take one, e.g. 16:9")
+    .option("--image <src>", "image to edit: a path, URL or file_<id>")
+    .option("--reference-image <src>", "further input image (repeatable)", collect, [])
+    .option("--param <key=value>", "provider setting forwarded in parameters (repeatable)", collect, [])
     .action(async (
       prompt: string,
-      cmdOpts: { output?: string; base64?: boolean; model?: string },
+      cmdOpts: { output?: string; base64?: boolean; model?: string; size?: string; quality?: string; aspectRatio?: string; image?: string; referenceImage: string[]; param: string[] },
     ) => {
       await imageGenerateCommand({
         prompt,
@@ -372,8 +379,68 @@ const register: RegisterFn = (program, ctx) => {
         ...(cmdOpts.output ? { output: cmdOpts.output } : {}),
         ...(cmdOpts.base64 ? { base64: true } : {}),
         ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+        ...(cmdOpts.size ? { size: cmdOpts.size } : {}),
+        ...(cmdOpts.quality ? { quality: cmdOpts.quality } : {}),
+        ...(cmdOpts.aspectRatio ? { aspectRatio: cmdOpts.aspectRatio } : {}),
+        ...(cmdOpts.image ? { image: cmdOpts.image } : {}),
+        ...(cmdOpts.referenceImage.length ? { referenceImages: cmdOpts.referenceImage } : {}),
+        ...(cmdOpts.param.length ? { params: cmdOpts.param } : {}),
+      });
+    });
+
+  // ---- video -------------------------------------------------------------
+  const video = program.command("video").description("Video generation");
+
+  video
+    .command("generate")
+    .description("Generate a video and save it (submits, waits, downloads)")
+    .argument("<prompt>", "text prompt")
+    .option("-o, --output <path>", "output file path (default: video_<ts>.mp4 in cwd)")
+    .option("-m, --model <id>", "video model id from `opper models list video`, e.g. bytedance:ap/seedance-2.5")
+    .option("--seconds <n>", "clip length in seconds", (v) => parseInt(v, 10))
+    .option("--resolution <tier>", "output tier, e.g. 480p, 720p, 1080p, 4k")
+    .option("--aspect-ratio <ratio>", "e.g. 16:9 or 9:16")
+    .option("--image <src>", "first frame (image-to-video): a path, URL or file_<id>")
+    .option("--last-image <src>", "ending frame; needs --image")
+    .option("--video <src>", "clip to edit, extend or re-animate")
+    .option("--audio <src>", "audio the character speaks (lip-sync models)")
+    .option("--reference-image <src>", "subject or character image (repeatable)", collect, [])
+    .option("--reference-video <src>", "further source video after --video (repeatable)", collect, [])
+    .option("--no-audio", "ask for a silent clip (parameters.generate_audio=false; bills less where audio is priced)")
+    .option("--param <key=value>", "provider setting forwarded in parameters (repeatable)", collect, [])
+    .action(async (
+      prompt: string,
+      cmdOpts: {
+        output?: string; model?: string; seconds?: number; resolution?: string; aspectRatio?: string;
+        image?: string; lastImage?: string; video?: string; audio: string | boolean;
+        referenceImage: string[]; referenceVideo: string[]; param: string[];
+      },
+    ) => {
+      // commander turns --no-audio into audio=false next to --audio <src>.
+      const audioSource = typeof cmdOpts.audio === "string" ? cmdOpts.audio : undefined;
+      await videoGenerateCommand({
+        prompt,
+        key: ctx.key(),
+        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
+        ...(cmdOpts.output ? { output: cmdOpts.output } : {}),
+        ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
+        ...(cmdOpts.seconds ? { seconds: cmdOpts.seconds } : {}),
+        ...(cmdOpts.resolution ? { resolution: cmdOpts.resolution } : {}),
+        ...(cmdOpts.aspectRatio ? { aspectRatio: cmdOpts.aspectRatio } : {}),
+        ...(cmdOpts.image ? { image: cmdOpts.image } : {}),
+        ...(cmdOpts.lastImage ? { lastImage: cmdOpts.lastImage } : {}),
+        ...(cmdOpts.video ? { video: cmdOpts.video } : {}),
+        ...(audioSource ? { audio: audioSource } : {}),
+        ...(cmdOpts.audio === false ? { generateAudio: false } : {}),
+        ...(cmdOpts.referenceImage.length ? { referenceImages: cmdOpts.referenceImage } : {}),
+        ...(cmdOpts.referenceVideo.length ? { referenceVideos: cmdOpts.referenceVideo } : {}),
+        ...(cmdOpts.param.length ? { params: cmdOpts.param } : {}),
       });
     });
 };
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
 
 export default register;

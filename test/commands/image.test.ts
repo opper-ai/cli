@@ -77,6 +77,35 @@ describe("imageGenerateCommand", () => {
     }
   });
 
+  it("sends size, quality and an edit source", async () => {
+    await setSlot("default", { apiKey: "k" });
+    postMock.mockResolvedValue(imagesResponse("x"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await imageGenerateCommand({
+        prompt: "put it on marble",
+        output: join(outDir, "out.png"),
+        key: "default",
+        model: "openai/gpt-image-2.5-flare",
+        size: "2048x2048",
+        quality: "high",
+        image: "file_abc",
+        params: ["background=opaque"],
+      });
+      expect(postMock).toHaveBeenCalledWith("/v3/images", {
+        model: "openai/gpt-image-2.5-flare",
+        prompt: "put it on marble",
+        store: false,
+        size: "2048x2048",
+        quality: "high",
+        image: "file_abc",
+        parameters: { background: "opaque" },
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("prints base64 to stdout when --base64 is set", async () => {
     await setSlot("default", { apiKey: "k" });
     postMock.mockResolvedValue({ data: [{ b64_json: "BASE64BYTES==" }] });

@@ -25,6 +25,12 @@ export const DEFAULT_MODELS = {
    * retired one was EU.
    */
   image: "gemini/gemini-3.1-flash-lite-image",
+  /**
+   * Video default for `opper video generate` (POST /v3/videos). Gemini Omni
+   * 1.1 Flash: text, image and video input, native audio, ~$0.10/s at 720p.
+   * US-region.
+   */
+  video: "gemini/gemini-omni-1.1-flash",
 } as const;
 
 /**
