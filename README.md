@@ -699,7 +699,8 @@ Direct access to the platform endpoints:
 | `opper traces list [--limit] [--offset] [--name <substring>]` | List traces. |
 | `opper traces get <id>` / `delete <id>` | Inspect / remove a trace. |
 | `opper usage list [--from-date] [--to-date] [--granularity] [--fields] [--group-by] [--out csv]` | Token / cost analytics. |
-| `opper image generate <prompt> [-o <file>] [--base64] [-m <model>]` | Generate an image. |
+| `opper image generate <prompt> [-o <file>] [--base64] [-m <model>] [--size] [--quality] [--image] [--param k=v]` | Generate or edit an image. |
+| `opper video generate <prompt> [-o <file>] [-m <model>] [--seconds] [--resolution] [--aspect-ratio] [--image] [--video] [--audio] [--no-audio]` | Generate a video: submits, waits, downloads. |
 
 ## Recipes
 
@@ -842,10 +843,39 @@ opper image generate "logo concept" -o ./out/logo.png \
 
 # Print raw base64 (for piping)
 opper image generate "icon" --base64 | base64 -d > icon.png
+
+# Edit a local image at 2K (sizes and qualities: the model's params.image)
+opper image generate "put it on a marble shelf" --image ./product.png \
+  -m openai/gpt-image-2.5-flare --size 2048x2048 --quality high
 ```
 
-Generated images are not persisted to `/v3/files` — you get the bytes and
+Generated images are not persisted to `/v3/files`: you get the bytes and
 nothing counts against the org's storage quota.
+
+### Generate a video
+
+Runs against `POST /v3/videos`: it submits the job, polls until the clip is
+ready and saves it. Any model from `opper models list video` works; ids name
+the provider (`bytedance:ap/seedance-2.5`, `fal/kling-3.0-pro`). The default is
+`gemini/gemini-omni-1.1-flash`. Inputs take a local path, a URL or a
+`file_<id>`.
+
+```bash
+# 5 s vertical clip, silent (a silent clip bills less where audio is priced)
+opper video generate "a serum bottle turning on a marble shelf" \
+  -m bytedance:ap/seedance-2.5 --seconds 5 --resolution 720p --aspect-ratio 9:16 --no-audio
+
+# Animate a still
+opper video generate "she smiles and holds up the bottle" --image ./still.png \
+  -m fal/kling-3.0-pro-i2v --seconds 5
+
+# Edit a clip
+opper video generate "change her shirt to a red sweater" --video ./clip.mp4 \
+  -m bytedance:ap/seedance-2.5
+```
+
+A model refuses an input or value it does not take with a 400 naming what it
+accepts; `opper models list video` shows each model's capabilities.
 
 ### Routing an agent through Opper for a one-shot job
 

@@ -42,6 +42,7 @@ const GROUPS: HelpGroup[] = [
       "traces",
       "usage",
       "image",
+      "video",
     ],
   },
   {

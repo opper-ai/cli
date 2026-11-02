@@ -5,6 +5,7 @@ import { resolveApiContext } from "../api/resolve.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
+import { mediaSource, parseParams } from "./media-source.js";
 
 const DEFAULT_IMAGE_MODEL = DEFAULT_MODELS.image;
 
@@ -15,6 +16,14 @@ export interface ImageGenerateOptions {
   model?: string;
   output?: string;
   base64?: boolean;
+  /** Pixel size WxH, e.g. 2048x2048; a model's params.image lists what it takes. */
+  size?: string;
+  quality?: string;
+  aspectRatio?: string;
+  /** Image to edit: a path, URL or file_<id>. */
+  image?: string;
+  referenceImages?: string[];
+  params?: string[];
 }
 
 /** One entry of POST /v3/images' `data[]`. */
@@ -67,11 +76,19 @@ export async function imageGenerateCommand(
   // (openai/gpt-image-2 et al., type "image") fails model resolution there
   // with a 500. `store: false` keeps a throwaway CLI generation out of the
   // org's /v3/files quota — we hand the caller the bytes right here.
-  const result = await api.post<ImagesResponse>("/v3/images", {
+  const body: Record<string, unknown> = {
     model: opts.model ?? DEFAULT_IMAGE_MODEL,
     prompt: opts.prompt,
     store: false,
-  });
+  };
+  if (opts.size) body.size = opts.size;
+  if (opts.quality) body.quality = opts.quality;
+  if (opts.aspectRatio) body.aspect_ratio = opts.aspectRatio;
+  if (opts.image) body.image = await mediaSource(opts.image);
+  if (opts.referenceImages?.length) body.reference_images = await Promise.all(opts.referenceImages.map(mediaSource));
+  const parameters = parseParams(opts.params);
+  if (parameters) body.parameters = parameters;
+  const result = await api.post<ImagesResponse>("/v3/images", body);
 
   const image = result.data?.[0];
   const b64 = image?.b64_json;
