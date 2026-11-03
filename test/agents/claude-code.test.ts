@@ -101,7 +101,8 @@ describe("claude-code adapter", () => {
       "https://api.opper.ai/v3/session/sess_aa11bb22-cccc-4ddd-8eee-ffff00001111/customer:acme",
     );
     expect(init.env.ANTHROPIC_AUTH_TOKEN).toBe("op_live_run");
-    expect(init.env.ANTHROPIC_MODEL).toBe("claude-sonnet-4-6");
+    // No --model: Claude Code keeps the user's /model choice or its own default.
+    expect(init.env.ANTHROPIC_MODEL).toBeUndefined();
     // Stops Claude Code from pinging api.anthropic.com directly when
     // routing is supposed to be Opper-only.
     expect(init.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1");
@@ -164,8 +165,30 @@ describe("claude-code adapter", () => {
   });
 });
 
+describe("claude-code model selection", () => {
+  beforeEach(() => {
+    spawnSyncMock.mockReset();
+    spawnSyncMock.mockReturnValue({ status: 0 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("pins ANTHROPIC_MODEL only for an explicit --model", async () => {
+    await claudeCode.spawn([], { ...ROUTING, modelOverride: "claude-sonnet-5-5" });
+    expect(spawnSyncMock.mock.calls[0]![2].env.ANTHROPIC_MODEL).toBe("claude-sonnet-5-5");
+  });
+
+  it("keeps an ANTHROPIC_MODEL the user exported when no --model is given", async () => {
+    vi.stubEnv("ANTHROPIC_MODEL", "claude-haiku-5-5");
+    await claudeCode.spawn([], ROUTING);
+    expect(spawnSyncMock.mock.calls[0]![2].env.ANTHROPIC_MODEL).toBe("claude-haiku-5-5");
+  });
+});
+
 describe("claude-code context window", () => {
-  const GLM = { ...ROUTING, apiBaseUrl: "https://api.opper.ai", model: "sference/zai-org/GLM-5.3" };
+  const GLM = { ...ROUTING, apiBaseUrl: "https://api.opper.ai", model: "sference/zai-org/GLM-5.3", modelOverride: "sference/zai-org/GLM-5.3" };
   const catalog = (data: unknown[]) => vi.fn(async () => new Response(JSON.stringify({ data }), { headers: { "Content-Type": "application/json" } }));
 
   beforeEach(() => {
@@ -190,7 +213,7 @@ describe("claude-code context window", () => {
   it("leaves Claude models to Claude Code's own windows", async () => {
     const fetchMock = catalog([]);
     vi.stubGlobal("fetch", fetchMock);
-    await claudeCode.spawn([], { ...GLM, model: "claude-sonnet-5" });
+    await claudeCode.spawn([], { ...GLM, model: "claude-sonnet-5-5", modelOverride: "claude-sonnet-5-5" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("");
   });
@@ -200,6 +223,13 @@ describe("claude-code context window", () => {
     vi.stubGlobal("fetch", catalog([{ id: GLM.model, context_length: 1048576 }]));
     await claudeCode.spawn([], GLM);
     expect(spawnSyncMock.mock.calls[0]![2].env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("300000");
+  });
+
+  it("skips the catalog lookup when no --model is given", async () => {
+    const fetchMock = catalog([]);
+    vi.stubGlobal("fetch", fetchMock);
+    await claudeCode.spawn([], { ...ROUTING, apiBaseUrl: "https://api.opper.ai" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("launches with Claude Code's default when the catalog lookup fails or misses", async () => {
