@@ -55,12 +55,12 @@ async function unconfigure(): Promise<void> {
  * (Claude Code knows their windows), as is a value the user set themselves.
  * A failed catalog lookup leaves Claude Code's 200k default in place.
  */
-export async function contextWindowEnv(routing: OpperRouting): Promise<Record<string, string>> {
-  if (process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || /claude/i.test(routing.model)) return {};
+export async function contextWindowEnv(routing: OpperRouting, model: string | undefined): Promise<Record<string, string>> {
+  if (!model || process.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS || /claude/i.test(model)) return {};
   try {
     const api = new OpperApi({ baseUrl: routing.apiBaseUrl, apiKey: routing.apiKey, projectUuid: routing.projectUuid });
     const res = await api.get<{ data?: CompatModel[] }>("/v3/compat/models");
-    const context = res.data?.find((m) => m.id === routing.model)?.context_length;
+    const context = res.data?.find((m) => m.id === model)?.context_length;
     if (!Number.isSafeInteger(context) || !context || context <= 0) return {};
     return { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(context) };
   } catch {
@@ -69,13 +69,17 @@ export async function contextWindowEnv(routing: OpperRouting): Promise<Record<st
 }
 
 async function spawn(args: string[], routing: OpperRouting): Promise<number> {
-  // ANTHROPIC_MODEL pins the initial active selection; opt in to fetching
-  // the picker models from the same authenticated Opper session endpoint.
+  // Only an explicit --model pins ANTHROPIC_MODEL. Without one, Claude Code
+  // keeps the user's saved /model choice or its own current default (a bare
+  // Claude id such as claude-opus-5-5, which the gateway serves), instead of
+  // a CLI default that ages with each release and overrides /model.
+  // Gateway discovery fills the picker from the same Opper session endpoint.
+  const model = routing.modelOverride;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ANTHROPIC_BASE_URL: routing.baseUrl,
     ANTHROPIC_AUTH_TOKEN: routing.apiKey,
-    ANTHROPIC_MODEL: routing.model,
+    ...(model ? { ANTHROPIC_MODEL: model } : {}),
     // Replace a stale target inherited from another invocation. Preserve
     // unrelated user headers while making this launch's selection authoritative.
     ANTHROPIC_CUSTOM_HEADERS: [
@@ -94,13 +98,13 @@ async function spawn(args: string[], routing: OpperRouting): Promise<number> {
     // deferred loading on unless the user chose a setting themselves.
     ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH || "true",
   };
-  const contextEnv = await contextWindowEnv(routing);
+  const contextEnv = await contextWindowEnv(routing, model);
   Object.assign(env, contextEnv);
   if (contextEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS) {
     // The window holds for every non-Claude model this session switches to
     // with /model, so point at the switch that keeps it correct.
     console.log(brand.dim(
-      `Context window: ${Number(contextEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toLocaleString("en-US")} tokens for ${routing.model}. ` +
+      `Context window: ${Number(contextEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toLocaleString("en-US")} tokens for ${model}. ` +
       `To switch to another non-Claude model and keep this conversation: opper launch claude --model <id> -- --continue`,
     ));
   }
