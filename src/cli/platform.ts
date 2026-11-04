@@ -1,4 +1,5 @@
 import { OpperError } from "../errors.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 import { callCommand } from "../commands/call.js";
 import {
   modelsListCommand,
@@ -46,11 +47,11 @@ const register: RegisterFn = (program, ctx) => {
   // ---- call --------------------------------------------------------------
   program
     .command("call")
-    .description("Execute a function by name via the Opper v3 /call endpoint")
-    .argument("<name>", "function name")
-    .argument("<instructions>", "instructions / system prompt")
-    .argument("[input]", "input (or piped via stdin)")
-    .option("--model <id>", "model identifier (e.g. claude-opus-5)")
+    .description("Call a model with instructions and input: the answer goes to stdout, usage and cost to stderr")
+    .argument("<name>", "call name, sent as X-Opper-Name (function-scoped project rules match on it)")
+    .argument("<instructions>", "instructions, sent as the system message")
+    .argument("[input]", "input, sent as the user message (or piped via stdin, for large input)")
+    .option("--model <id>", `model identifier (default: ${DEFAULT_MODELS.sonnet})`)
     .option("--stream", "stream the response token-by-token", false)
     .action(async (
       name: string,
