@@ -74,7 +74,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     options.push({
       value: "platform",
       label: "Opper",
-      hint: "Projects, functions, models, indexes, traces, usage",
+      hint: "Projects, models, indexes, traces, usage",
     });
     options.push({
       value: "account",

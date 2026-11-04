@@ -68,7 +68,7 @@ borrow a stored slot's host, expiry, organization, or resource project.
 
 Organization personal agent credentials have no project binding. Inference,
 models, project discovery, and usage work at organization scope without a target.
-Pass the global `--project-uuid <uuid>` flag to target a project explicitly. Functions, indexes,
+Pass the global `--project-uuid <uuid>` flag to target a project explicitly. Indexes,
 named calls, and SDK `ask` require an explicit project or a resource default.
 Traces without a target use the organization's projectless trace group; a
 configured resource default also applies to trace commands. Resource defaults
@@ -77,9 +77,9 @@ never apply implicitly to inference or agent launches.
 ```bash
 opper projects list                            # names and UUIDs in this organization
 opper projects list research                   # filter by name or UUID
-opper --project-uuid <uuid> functions list
+opper --project-uuid <uuid> traces list
 opper config project work <uuid>
-opper --key work functions list
+opper --key work traces list
 opper --key work launch opencode                  # organization inference
 opper --key work --project-uuid <uuid> launch opencode
 ```
@@ -688,7 +688,6 @@ Direct access to the platform endpoints:
 |---------|-------------|
 | `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
 | `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
-| `opper functions list [filter]` / `get <name>` / `delete <name>` | Manage functions. |
 | `opper models list [filter] [--inference-location] [--storage-location] [--training] [--logging] [--moderation] [--json]` | List available models (built-in + custom) with where they run and their training, logging and moderation stances. The flags filter the way a model access rule on the Rules page does, e.g. `--inference-location EU --storage-location EU --training no --logging none --moderation none`. Values are comma-separated alternatives. |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
 | `opper models get <name>` / `delete <name>` | Inspect / remove a custom model. |

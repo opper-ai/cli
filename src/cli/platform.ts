@@ -8,11 +8,6 @@ import {
   type ModelsListFilters,
 } from "../commands/models.js";
 import {
-  functionsListCommand,
-  functionsGetCommand,
-  functionsDeleteCommand,
-} from "../commands/functions.js";
-import {
   tracesListCommand,
   tracesGetCommand,
   tracesDeleteCommand,
@@ -141,39 +136,6 @@ const register: RegisterFn = (program, ctx) => {
     .argument("<name>", "custom model name")
     .action(async (name: string) => {
       await modelsDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
-    });
-
-  // ---- functions ---------------------------------------------------------
-  const functionsCmd = program
-    .command("functions")
-    .description("Manage Opper functions");
-
-  functionsCmd
-    .command("list")
-    .description("List functions")
-    .argument("[filter]", "optional substring filter on name")
-    .action(async (filter: string | undefined) => {
-      await functionsListCommand({
-        key: ctx.key(),
-        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(filter ? { filter } : {}),
-      });
-    });
-
-  functionsCmd
-    .command("get")
-    .description("Show details of a function")
-    .argument("<name>", "function name")
-    .action(async (name: string) => {
-      await functionsGetCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
-    });
-
-  functionsCmd
-    .command("delete")
-    .description("Delete a function")
-    .argument("<name>", "function name")
-    .action(async (name: string) => {
-      await functionsDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
     });
 
   // ---- traces ------------------------------------------------------------

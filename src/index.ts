@@ -44,7 +44,16 @@ program
   .option("--debug", "enable debug output", false)
   .option("--no-telemetry", "disable anonymous telemetry")
   .option("--no-color", "disable ANSI colors")
-  .action(async () => {
+  // Commander drops its implicit help command when the root has an action.
+  .helpCommand(true)
+  .action(async (_options: unknown, command: Command) => {
+    // Commander hands an unmatched subcommand to this default action as an
+    // operand. Without this check a script calling a removed or misspelled
+    // command gets the help text and exit 0, and a terminal gets the menu.
+    const [unknown] = command.args;
+    if (unknown !== undefined) {
+      throw new OpperError("INVALID_ARGUMENT", `Unknown command "${unknown}".`, "Run `opper --help` to see the commands.");
+    }
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       program.outputHelp();
       return;
