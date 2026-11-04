@@ -124,6 +124,18 @@ describe("menuCommand", () => {
     await setSlot("default", { apiKey: "op_test", source: "manual" });
   });
 
+  it("does not offer functions in the Opper submenu or its hint", async () => {
+    answers.push(() => "platform", () => "back", () => "quit");
+    await menuCommand({key: "default"});
+    const calls = vi.mocked(select).mock.calls;
+    const entry = calls[0]?.[0].options.find((option) => option.value === "platform");
+    expect(entry?.hint).toBeDefined();
+    expect(entry?.hint).not.toMatch(/functions/i);
+    const opper = calls.find(([prompt]) => prompt.message === "Opper");
+    expect(opper?.[0].options.map((option) => option.value)).toContain("models");
+    expect(opper?.[0].options.map((option) => option.value)).not.toContain("functions");
+  });
+
   it("shows the Proxy submenu and returns to the main menu on Back", async () => {
     answers.push(() => "proxy", () => "back", () => "quit");
     await menuCommand({key: "default"});

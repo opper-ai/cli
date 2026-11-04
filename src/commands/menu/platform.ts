@@ -2,11 +2,6 @@ import { callCommand } from "../call.js";
 import { modelsListCommand } from "../models.js";
 import { projectsListCommand } from "../projects.js";
 import {
-  functionsListCommand,
-  functionsGetCommand,
-  functionsDeleteCommand,
-} from "../functions.js";
-import {
   tracesListCommand,
   tracesGetCommand,
   tracesDeleteCommand,
@@ -32,7 +27,6 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
   while (true) {
     const choice = await pickMenuChoice("Opper", [
       { value: "projects", label: "Projects", hint: "Project names and UUIDs" },
-      { value: "functions", label: "Functions", hint: "Saved functions in your project" },
       { value: "models", label: "Models", hint: "Available models" },
       { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
       { value: "traces", label: "Traces", hint: "Execution traces" },
@@ -46,9 +40,6 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
       switch (choice) {
         case "projects":
           await projectsListCommand({ key: opts.key });
-          break;
-        case "functions":
-          await functionsMenu(opts);
           break;
         case "models":
           await modelsListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
@@ -65,41 +56,6 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
         case "call":
           await callWizard(opts);
           break;
-      }
-    } catch (err) {
-      reportError(err);
-    }
-  }
-}
-
-async function functionsMenu(opts: MenuOptions): Promise<void> {
-  while (true) {
-    const choice = await pickMenuChoice("Functions", [
-      { value: "list", label: "List", hint: "Show all functions" },
-      { value: "get", label: "Get…", hint: "Show details of a function" },
-      { value: "delete", label: "Delete…", hint: "Delete a function" },
-      { value: "back", label: brand.dim("← Back") },
-    ]);
-    if (!choice) return;
-
-    try {
-      switch (choice) {
-        case "list":
-          await functionsListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        case "get": {
-          const name = await ask("Function name", { required: true });
-          if (!name) continue;
-          await functionsGetCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
-        case "delete": {
-          const name = await ask("Function name", { required: true });
-          if (!name) continue;
-          if (!(await askConfirm(`Delete function "${name}"?`))) continue;
-          await functionsDeleteCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
       }
     } catch (err) {
       reportError(err);

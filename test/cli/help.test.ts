@@ -72,6 +72,10 @@ describe("addGroupedHelpText", () => {
     expect(help).not.toMatch(/^ {2}launch \[options\] <agent>/m);
   });
 
+  it("does not list the removed functions command", () => {
+    expect(captureHelp(buildProgram())).not.toMatch(/^ *functions\b/m);
+  });
+
   it("every registered command is listed in a group (no orphans)", () => {
     const program = buildProgram();
     const help = captureHelp(program);

@@ -38,26 +38,25 @@ try {
   await run(["models", "list"]);
   await run(["usage", "list"]);
   await run(["traces", "list"]);
-  for (const args of [["functions", "list"], ["indexes", "list"], ["ask", "hello"]]) {
+  for (const args of [["indexes", "list"], ["ask", "hello"]]) {
     assert.match((await run(args, {}, 8)).stderr, /requires a project/);
   }
-  for (const args of [["functions", "list"], ["indexes", "list"], ["traces", "list"], ["models", "list"]]) {
+  for (const args of [["indexes", "list"], ["traces", "list"], ["models", "list"]]) {
     await run(["--project-uuid", fixture.projectUuid, ...args]);
   }
   await run(["config", "project", "default", fixture.projectUuid]);
-  await run(["functions", "list"]);
   await run(["indexes", "list"]);
   await run(["traces", "list"]);
   await run(["config", "project", "default"]);
-  await run(["--project-uuid", "malformed", "functions", "list"], {}, 8);
-  if (fixture.foreignProjectUuid) await run(["--project-uuid", fixture.foreignProjectUuid, "functions", "list"], {}, 6);
+  await run(["--project-uuid", "malformed", "indexes", "list"], {}, 8);
+  if (fixture.foreignProjectUuid) await run(["--project-uuid", fixture.foreignProjectUuid, "indexes", "list"], {}, 6);
 
   // A stored expired slot on another host cannot contaminate an environment key.
   await saveSlot({ baseUrl: "http://localhost:1", expiresAt: "2020-01-01", defaultProjectUuid: fixture.projectUuid });
   const independent = { OPPER_API_KEY: fixture.apiKey, OPPER_BASE_URL: baseUrl };
   await run(["models", "list"], independent);
-  assert.match((await run(["functions", "list"], independent, 8)).stderr, /requires a project/);
-  await run(["--project-uuid", fixture.projectUuid, "functions", "list"], independent);
+  assert.match((await run(["indexes", "list"], independent, 8)).stderr, /requires a project/);
+  await run(["--project-uuid", fixture.projectUuid, "indexes", "list"], independent);
   await saveSlot({ expiresAt: fixture.expiresAt, credentialId: fixture.credentialId });
   if (process.env.OPPER_E2E_ASK === "1") {
     const skills = join(home, ".agents", "skills", "opper-acceptance");

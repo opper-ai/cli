@@ -36,7 +36,6 @@ const GROUPS: HelpGroup[] = [
       "call",
       "keys",
       "projects",
-      "functions",
       "models",
       "indexes",
       "traces",

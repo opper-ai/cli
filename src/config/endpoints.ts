@@ -14,5 +14,5 @@ export const OPPER_HOST = "https://api.opper.ai";
  */
 export const OPPER_COMPAT_URL = `${OPPER_HOST}/v3/compat`;
 
-/** v3 native endpoints (call, models, functions, traces, etc.). */
+/** v3 native endpoints (models, traces, etc.). */
 export const OPPER_V3_BASE = `${OPPER_HOST}/v3`;
