@@ -17,7 +17,7 @@ const SPAWN_TIMEOUT = 60_000;
 interface Request {
   path: string;
   headers: IncomingHttpHeaders;
-  body: { model: string; stream?: boolean; messages: { role: string; content: string }[] };
+  body: { model: string; stream?: boolean; max_tokens?: number; messages: { role: string; content: string }[] };
 }
 
 interface Run {
@@ -165,6 +165,26 @@ describe("opper call", () => {
     expect(result.stdout).toBe(`${partial}\n`);
     expect(result.stderr).toContain("3 tokens");
     expect(result.stderr).toContain("finish_reason: length");
+  }, SPAWN_TIMEOUT);
+
+  it("--max-tokens reaches the request as a number", async () => {
+    respond = json("ok", "stop");
+
+    const result = await run(["my-fn", "be brief", "go", "--max-tokens", "100"]);
+
+    expect(result.code).toBe(0);
+    expect(requests[0]?.body.max_tokens).toBe(100);
+  }, SPAWN_TIMEOUT);
+
+  it.each(["0", "-5", "abc", "1.5", "1e3", "9007199254740993"])("refuses --max-tokens %s before calling the API", async (value) => {
+    respond = json("ok", "stop");
+
+    const result = await run(["my-fn", "be brief", "go", "--max-tokens", value]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("--max-tokens");
+    expect(requests).toEqual([]);
   }, SPAWN_TIMEOUT);
 
   it("--stream prints the deltas and exits zero on a finished answer", async () => {

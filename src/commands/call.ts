@@ -11,6 +11,7 @@ export interface CallOptions {
   projectUuid?: string | undefined;
   model?: string;
   stream?: boolean;
+  maxTokens?: number;
 }
 
 interface Usage {
@@ -81,6 +82,7 @@ export async function callCommand(opts: CallOptions): Promise<void> {
       { role: "system", content: opts.instructions },
       { role: "user", content: opts.input },
     ],
+    ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
   };
   const headers = { "X-Opper-Name": opts.name };
 
@@ -131,8 +133,8 @@ export async function callCommand(opts: CallOptions): Promise<void> {
   if (finishReason === "length") {
     throw new OpperError(
       "API_ERROR",
-      "The answer was cut off at the model's token limit (finish_reason: length).",
-      "What the model wrote before the limit is on stdout. Send less input, or pick a model with a higher limit with --model.",
+      "The answer was cut off at the token limit (finish_reason: length).",
+      `${answered ? "What the model wrote before the limit is on stdout. " : ""}Raise the limit with --max-tokens, send less input, or pick another model with --model.`,
     );
   }
   if (!finishReason) {

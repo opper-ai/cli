@@ -686,7 +686,7 @@ Direct access to the platform endpoints:
 
 | Command | Description |
 |---------|-------------|
-| `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Call a model through chat completions. Reads input from stdin when the positional arg is omitted. The answer goes to stdout, usage and cost to stderr. |
+| `opper call <name> <instructions> [input] [--model <id>] [--stream] [--max-tokens <n>]` | Call a model through chat completions. Reads input from stdin when the positional arg is omitted. The answer goes to stdout, usage and cost to stderr. |
 | `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
 | `opper models list [filter] [--inference-location] [--storage-location] [--training] [--logging] [--moderation] [--json]` | List available models (built-in + custom) with where they run and their training, logging and moderation stances. The flags filter the way a model access rule on the Rules page does, e.g. `--inference-location EU --storage-location EU --training no --logging none --moderation none`. Values are comma-separated alternatives. |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
@@ -778,11 +778,16 @@ opper call myfunction "summarise" < long-report.txt
 # Override the model for one call
 opper call --model claude-opus-5 myfunction "summarise" "long text…"
 
+# Allow a longer answer than the model's default limit
+opper call --stream --max-tokens 16000 myfunction "write the report" < notes.txt
+
 # Keep the answer, see usage and cost on the terminal
 answer="$(opper call myfunction "respond in kind" "what is 2+2?")"
 ```
 
-The answer goes to stdout, and usage and cost go to stderr, so scripts can capture the answer on its own. The exit code is non-zero when the answer did not finish, for example when it was cut off at the model's token limit (`finish_reason: length`). Whatever the model wrote before that point is still on stdout.
+The answer goes to stdout, and usage and cost go to stderr, so scripts can capture the answer on its own. The exit code is non-zero when the answer did not finish, for example when it was cut off at the token limit (`finish_reason: length`). Whatever the model wrote before that point is still on stdout. Raise the limit with `--max-tokens`.
+
+Use `--stream` for an answer that may take more than 5 minutes. Without it nothing arrives until the answer is done, and Node stops waiting for a response after 5 minutes, so the call fails with `fetch failed` (exit code 7).
 
 ### Registering a custom model
 

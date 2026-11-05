@@ -1,3 +1,4 @@
+import { InvalidArgumentError } from "commander";
 import { OpperError } from "../errors.js";
 import { DEFAULT_MODELS } from "../config/models.js";
 import { callCommand } from "../commands/call.js";
@@ -53,11 +54,17 @@ const register: RegisterFn = (program, ctx) => {
     .argument("[input]", "input, sent as the user message (or piped via stdin, for large input)")
     .option("--model <id>", `model identifier (default: ${DEFAULT_MODELS.sonnet})`)
     .option("--stream", "stream the response token-by-token", false)
+    .option("--max-tokens <n>", "most tokens the model may generate (default: the model's own limit)", (value: string) => {
+      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new InvalidArgumentError("max tokens must be a whole number above 0");
+      }
+      return Number(value);
+    })
     .action(async (
       name: string,
       instructions: string,
       input: string | undefined,
-      cmdOpts: { model?: string; stream?: boolean },
+      cmdOpts: { model?: string; stream?: boolean; maxTokens?: number },
     ) => {
       const resolvedInput = input ?? (await readStdinIfPiped());
       if (!resolvedInput) {
@@ -75,6 +82,7 @@ const register: RegisterFn = (program, ctx) => {
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
         ...(cmdOpts.stream ? { stream: true } : {}),
+        ...(cmdOpts.maxTokens !== undefined ? { maxTokens: cmdOpts.maxTokens } : {}),
       });
     });
 

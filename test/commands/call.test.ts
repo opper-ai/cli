@@ -98,6 +98,24 @@ describe("callCommand", () => {
     expect(postMock.mock.calls[1]![1].model).toBe("claude-opus-5");
   });
 
+  it("sends --max-tokens as max_tokens, and leaves the limit to the model without it", async () => {
+    postMock.mockResolvedValue(completion("x"));
+
+    await callCommand(call);
+    await callCommand({ ...call, maxTokens: 100 });
+
+    expect(postMock.mock.calls[0]![1]).not.toHaveProperty("max_tokens");
+    expect(postMock.mock.calls[1]![1].max_tokens).toBe(100);
+  });
+
+  it("--stream sends --max-tokens too", async () => {
+    streamMock.mockReturnValue(frames({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }));
+
+    await callCommand({ ...call, stream: true, maxTokens: 100 });
+
+    expect(streamMock.mock.calls[0]![1].max_tokens).toBe(100);
+  });
+
   it("writes only the answer to stdout, usage and cost only to stderr", async () => {
     postMock.mockResolvedValue(completion("hello world"));
 
@@ -164,6 +182,29 @@ describe("callCommand", () => {
 
     expect(out).toBe("partial\n");
     expect(err).toContain("46 tokens");
+  });
+
+  it("the hint on a cut-off answer points at --max-tokens", async () => {
+    postMock.mockResolvedValue(completion("partial", "length"));
+
+    await expect(callCommand(call)).rejects.toMatchObject({
+      hint: expect.stringContaining("--max-tokens"),
+    });
+  });
+
+  it("a limit reached before any text does not claim stdout holds part of the answer", async () => {
+    // A reasoning model can spend a small --max-tokens before it writes anything.
+    postMock.mockResolvedValue(completion(null, "length"));
+
+    const error = await callCommand(call).catch((e: unknown) => e);
+
+    expect(error).toMatchObject({
+      code: "API_ERROR",
+      message: expect.stringContaining("finish_reason: length"),
+      hint: expect.stringContaining("--max-tokens"),
+    });
+    expect((error as { hint: string }).hint).not.toContain("stdout");
+    expect(out).toBe("");
   });
 
   it("--stream: a cut-off answer fails after printing what the model wrote and its usage", async () => {
