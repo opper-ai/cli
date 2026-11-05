@@ -1,4 +1,6 @@
+import { InvalidArgumentError } from "commander";
 import { OpperError } from "../errors.js";
+import { DEFAULT_MODELS } from "../config/models.js";
 import { callCommand } from "../commands/call.js";
 import {
   modelsListCommand,
@@ -46,17 +48,23 @@ const register: RegisterFn = (program, ctx) => {
   // ---- call --------------------------------------------------------------
   program
     .command("call")
-    .description("Execute a function by name via the Opper v3 /call endpoint")
-    .argument("<name>", "function name")
-    .argument("<instructions>", "instructions / system prompt")
-    .argument("[input]", "input (or piped via stdin)")
-    .option("--model <id>", "model identifier (e.g. claude-opus-5)")
+    .description("Call a model with instructions and input: the answer goes to stdout, usage and cost to stderr")
+    .argument("<name>", "call name, sent as X-Opper-Name (function-scoped project rules match on it)")
+    .argument("<instructions>", "instructions, sent as the system message")
+    .argument("[input]", "input, sent as the user message (or piped via stdin, for large input)")
+    .option("--model <id>", `model identifier (default: ${DEFAULT_MODELS.sonnet})`)
     .option("--stream", "stream the response token-by-token", false)
+    .option("--max-tokens <n>", "most tokens the model may generate (default: the model's own limit)", (value: string) => {
+      if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new InvalidArgumentError("max tokens must be a whole number above 0");
+      }
+      return Number(value);
+    })
     .action(async (
       name: string,
       instructions: string,
       input: string | undefined,
-      cmdOpts: { model?: string; stream?: boolean },
+      cmdOpts: { model?: string; stream?: boolean; maxTokens?: number },
     ) => {
       const resolvedInput = input ?? (await readStdinIfPiped());
       if (!resolvedInput) {
@@ -74,6 +82,7 @@ const register: RegisterFn = (program, ctx) => {
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
         ...(cmdOpts.stream ? { stream: true } : {}),
+        ...(cmdOpts.maxTokens !== undefined ? { maxTokens: cmdOpts.maxTokens } : {}),
       });
     });
 
