@@ -1,6 +1,8 @@
 const token = location.hash.slice(1);
 history.replaceState(null, "", "/");
 const $ = (id) => document.getElementById(id);
+let policy;
+let policyBusy = false;
 let sessions = [],
   selected;
 let navSignature = "";
@@ -118,14 +120,10 @@ function networkGraph(session) {
     );
     const group = svg("g", {
       class: `graph-host ${host.count ? "denied" : "policy"}${selectedHost === host.host && host.count ? " active" : ""}`,
-      ...(host.count
-        ? {
-            role: "button",
-            tabindex: 0,
-            "aria-label": `${host.host}: ${host.count} blocked attempts. Filter timeline.`,
-            "aria-pressed": String(selectedHost === host.host),
-          }
-        : {}),
+      role: "button",
+      tabindex: 0,
+      "aria-label": `${host.host}: select destination for policy editing.`,
+      "aria-pressed": String(selectedHost === host.host),
     });
     group.append(
       svg(
@@ -153,9 +151,13 @@ function networkGraph(session) {
           : "Allowed by policy · traffic unobserved",
       ),
     );
-    if (host.count) {
+    {
       const choose = () => {
         selectedHost = selectedHost === host.host ? undefined : host.host;
+        $("policy-host").value = (
+          host.count ? host.host.replace(/:(?:\d+|unknown)$/, "") : host.host
+        ).replace(/^\[|\]$/g, "");
+        $("policy-host").focus();
         $("filter").value = "NETWORK";
         render();
       };
@@ -367,6 +369,8 @@ async function refresh() {
       );
     const data = await response.json();
     sessions = data.sessions;
+    policy = data.policy;
+    renderPolicy();
     sessions.sort(
       (a, b) =>
         (b.state === "Live") - (a.state === "Live") ||
@@ -386,3 +390,81 @@ async function refresh() {
   }
 }
 refresh();
+
+function renderPolicy() {
+  if (!policy) return;
+  const live = sessions.filter((s) => s.state === "Live");
+  const current = live.filter((s) => s.policyVersion === policy.version).length;
+  $("policy-summary").textContent =
+    `Policy v${policy.version} · ${current}/${live.length} live sessions applied`;
+  $("policy-rules").replaceChildren(
+    ...Object.entries(policy.rules).map(([host, action]) => {
+      const item = el("li");
+      const button = el("button", host);
+      button.onclick = () => {
+        $("policy-host").value = host;
+        $("policy-host").focus();
+      };
+      item.append(
+        button,
+        el("span", ` ${action}`, action === "deny" ? "blocked" : "permitted"),
+      );
+      return item;
+    }),
+  );
+  $("policy-agents").replaceChildren(
+    ...sessions.map((s) => {
+      const row = el("tr");
+      const status =
+        s.state === "Stopped"
+          ? "Stopped"
+          : s.state !== "Live"
+            ? "Disconnected / unknown"
+            : s.policyVersion === null
+              ? "Relaunch to enable"
+              : s.policyVersion === policy.version
+                ? "Applied"
+                : "Pending";
+      row.append(
+        ...[
+          s.name,
+          s.policyVersion === null ? "Unmanaged" : `v${s.policyVersion}`,
+          `v${policy.version}`,
+          status,
+        ].map((value) => el("td", value)),
+      );
+      return row;
+    }),
+  );
+}
+$("policy-form").onsubmit = async (event) => {
+  event.preventDefault();
+  if (!policy || policyBusy) return;
+  policyBusy = true;
+  const buttons = [...$("policy-form").querySelectorAll("button")];
+  buttons.forEach((button) => (button.disabled = true));
+  try {
+    const response = await fetch("/api/policy", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        version: policy.version,
+        host: $("policy-host").value.trim(),
+        action: event.submitter?.value ?? "deny",
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    policy = await response.json();
+    $("policy-result").textContent =
+      `Published v${policy.version}. Waiting for session acknowledgments.`;
+    renderPolicy();
+  } catch (error) {
+    $("policy-result").textContent = error.message;
+  } finally {
+    policyBusy = false;
+    buttons.forEach((button) => (button.disabled = false));
+  }
+};

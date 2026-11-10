@@ -516,3 +516,29 @@ article[hidden],
 [role="tabpanel"][hidden] {
   display: none;
 }
+
+.policy-fleet {
+  max-height: 240px;
+  overflow: auto;
+  margin-bottom: 24px;
+}
+#policy-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+#policy-form label {
+  display: grid;
+  gap: 6px;
+  min-width: 180px;
+  flex: 1;
+}
+#policy-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+#policy-rules {
+  max-height: 160px;
+  overflow: auto;
+}

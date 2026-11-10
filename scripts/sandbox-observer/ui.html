@@ -29,6 +29,45 @@
         <p id="limit" class="muted"></p>
       </aside>
       <main>
+        <section aria-labelledby="policy-title">
+          <h2 id="policy-title">Network policy</h2>
+          <p id="policy-summary" role="status">Loading policy…</p>
+          <p class="muted">
+            Applies to Dune sessions on this machine. New connections update
+            live; existing connections may remain open. Older sessions need a
+            one-time relaunch to enable policy updates.
+          </p>
+          <form id="policy-form">
+            <label
+              >Hostname or IP
+              <input
+                id="policy-host"
+                required
+                maxlength="253"
+                placeholder="example.com"
+            /></label>
+            <button type="submit" name="action" value="allow">Allow</button>
+            <button type="submit" name="action" value="deny">Deny</button>
+            <button type="submit" name="action" value="inherit">
+              Use launch default
+            </button>
+          </form>
+          <p id="policy-result" role="status"></p>
+          <ul id="policy-rules"></ul>
+          <div class="tablewrap policy-fleet">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>Applied</th>
+                  <th>Target</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="policy-agents"></tbody>
+            </table>
+          </div>
+        </section>
         <div id="empty">
           <h2>Waiting for a sandbox</h2>
           <p>

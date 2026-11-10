@@ -1,3 +1,9 @@
+import {
+  readPolicy,
+  changePolicy,
+  policyDirectory,
+  applyPolicy,
+} from "../sandbox-policy/policy.mjs";
 import { createServer } from "node:http";
 import { constants } from "node:fs";
 import { lstat, open, readdir, readFile } from "node:fs/promises";
@@ -30,6 +36,10 @@ export function summarize(id, first, tail, clipped, now = Date.now()) {
       : "Unknown";
   return {
     id,
+    policyVersion: (() => {
+      const entry = [...header, ...events].findLast((e) => e.kind === "POLICY");
+      return entry && /^\d+$/.test(entry.detail) ? Number(entry.detail) : null;
+    })(),
     harness:
       header.find((e) => e.kind === "HARNESS")?.detail ??
       header
@@ -121,7 +131,11 @@ export async function scan(root = tmpdir()) {
     generatedAt: new Date().toISOString(),
   };
 }
-export async function startObserver({ root = tmpdir(), port = 0 } = {}) {
+export async function startObserver({
+  root = tmpdir(),
+  port = 0,
+  policyRoot = policyDirectory(),
+} = {}) {
   const token = randomBytes(32).toString("hex");
   const assets = new Map(
     await Promise.all(
@@ -148,14 +162,14 @@ export async function startObserver({ root = tmpdir(), port = 0 } = {}) {
       "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
     if (
-      req.method !== "GET" ||
+      !["GET", "POST"].includes(req.method) ||
       req.headers.host !== origin.slice(7) ||
       (req.headers.origin && req.headers.origin !== origin)
     ) {
       res.writeHead(403).end("Forbidden");
       return;
     }
-    if (req.url === "/api/sessions") {
+    if (req.url === "/api/sessions" || req.url === "/api/policy") {
       const supplied = Buffer.from(req.headers.authorization ?? "");
       const expected = Buffer.from(`Bearer ${token}`);
       if (
@@ -163,6 +177,49 @@ export async function startObserver({ root = tmpdir(), port = 0 } = {}) {
         !timingSafeEqual(supplied, expected)
       ) {
         res.writeHead(401).end("Unauthorized");
+        return;
+      }
+      if (req.url === "/api/policy") {
+        try {
+          let policy;
+          if (req.method === "POST") {
+            if (
+              req.headers.origin !== origin ||
+              req.headers["content-type"] !== "application/json"
+            ) {
+              res.writeHead(403).end("Forbidden");
+              return;
+            }
+            let body = "";
+            for await (const chunk of req) {
+              body += chunk;
+              if (body.length > 4096) {
+                res.writeHead(413).end("Request too large");
+                return;
+              }
+            }
+            const input = JSON.parse(body);
+            policy = changePolicy(
+              input.version,
+              input.host,
+              input.action,
+              policyRoot,
+            );
+          } else policy = readPolicy(policyRoot);
+          res
+            .writeHead(200, { "Content-Type": "application/json" })
+            .end(JSON.stringify(policy));
+        } catch {
+          res
+            .writeHead(409)
+            .end(
+              "Policy update failed. Refresh and check the hostname, version, and policy storage.",
+            );
+        }
+        return;
+      }
+      if (req.method !== "GET") {
+        res.writeHead(405).end("Method not allowed");
         return;
       }
       try {
@@ -177,12 +234,27 @@ export async function startObserver({ root = tmpdir(), port = 0 } = {}) {
             });
           await inFlight;
         }
+        const policy = readPolicy(policyRoot);
+        const sessions = snapshot.sessions.map((session) => ({
+          ...session,
+          allowed:
+            session.policyVersion === policy.version
+              ? applyPolicy(
+                  { allowedDomains: session.allowed, deniedDomains: [] },
+                  policy,
+                ).allowedDomains
+              : session.allowed,
+        }));
         res
           .writeHead(200, { "Content-Type": "application/json" })
-          .end(JSON.stringify(snapshot));
+          .end(JSON.stringify({ ...snapshot, policy, sessions }));
       } catch {
         res.writeHead(503).end("Could not read session logs");
       }
+      return;
+    }
+    if (req.method !== "GET") {
+      res.writeHead(405).end("Method not allowed");
       return;
     }
     const asset = assets.get(req.url);
@@ -204,7 +276,7 @@ if (
 ) {
   const { server, url } = await startObserver();
   console.log(
-    `Sandbox observer: ${url}\nRead-only local POC. Stop with Ctrl+C.`,
+    `Sandbox observer: ${url}\nLocal policy and observability POC. Stop with Ctrl+C.`,
   );
   for (const signal of ["SIGINT", "SIGTERM"])
     process.once(signal, () => server.close());

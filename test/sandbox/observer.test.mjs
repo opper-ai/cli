@@ -42,7 +42,10 @@ test("collector ignores symlinks, bounds reads and requires a local token", asyn
       await symlink(join(good, "activity.log"), join(bad, "activity.log"));
     }
     assert.equal((await scan(root)).sessions.length, 1);
-    const observer = await startObserver({ root });
+    const observer = await startObserver({
+      root,
+      policyRoot: join(root, "policy"),
+    });
     server = observer.server;
     const url = new URL(observer.url),
       token = url.hash.slice(1);
@@ -64,6 +67,55 @@ test("collector ignores symlinks, bounds reads and requires a local token", asyn
     });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).sessions[0].name, "srt / pi");
+    const policyUrl = `${url.origin}/api/policy`;
+    assert.equal((await fetch(policyUrl, { method: "POST" })).status, 401);
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Origin: url.origin,
+      "Content-Type": "application/json",
+    };
+    const edit = { version: 0, host: "example.com", action: "deny" };
+    assert.equal(
+      (
+        await fetch(policyUrl, {
+          method: "POST",
+          headers: { ...headers, Origin: "https://evil.example" },
+          body: JSON.stringify(edit),
+        })
+      ).status,
+      403,
+    );
+    const updated = await fetch(policyUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(edit),
+    });
+    assert.equal(updated.status, 200);
+    assert.equal((await updated.json()).version, 1);
+    assert.equal(
+      (
+        await fetch(policyUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(edit),
+        })
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await fetch(policyUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            ...edit,
+            version: 1,
+            host: "https://evil.example/path",
+          }),
+        })
+      ).status,
+      409,
+    );
     const page = await fetch(url.origin);
     assert.match(
       page.headers.get("content-security-policy"),
