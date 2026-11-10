@@ -30,8 +30,10 @@ Project edits are live. Claude and Opper have scoped authentication defaults.`);
       import.meta.url,
     ).href;
     const { startObserver } = await import(observerUrl);
-    const { server, url } = await startObserver();
-    console.log(`Dune observer: ${url}\nStop with Ctrl+C.`);
+    const { server, url, history } = await startObserver();
+    console.log(
+      `Dune observer: ${url}\n${history ? `History: ${history}\n` : ""}Stop with Ctrl+C.`,
+    );
     for (const signal of ["SIGINT", "SIGTERM"] as const)
       process.once(signal, () => server.close());
   } else process.exitCode = await launchDune(command, options);

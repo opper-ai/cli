@@ -1,448 +1,646 @@
 const token = location.hash.slice(1);
 history.replaceState(null, "", "/");
 const $ = (id) => document.getElementById(id);
+
+let sessions = [];
 let policy;
 let policyBusy = false;
-let sessions = [],
-  selected;
-let navSignature = "";
-let selectedHost;
-let graphSignature = "";
+let selected;
+let view = "network";
+let filter = "all";
+let hostFilter;
+
 function el(tag, text, cls) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
   if (cls) node.className = cls;
   return node;
 }
-function resourceList(id, entries, empty) {
-  const counts = new Map();
-  for (const [text, kind] of entries) {
-    const key = `${kind}\n${text}`;
-    const previous = counts.get(key);
-    counts.set(key, { text, kind, count: (previous?.count ?? 0) + 1 });
-  }
-  const list = $(id);
-  list.replaceChildren();
-  for (const { text, kind, count } of [...counts.values()].slice(0, 40)) {
-    const item = el("li");
-    item.append(
-      el("span", text),
-      el(
-        "small",
-        `${kind}${count > 1 ? ` ×${count}` : ""}`,
-        kind === "blocked" ? "blocked" : "muted",
-      ),
-    );
-    list.append(item);
-  }
-  if (!counts.size) list.append(el("li", empty, "muted"));
-  if (counts.size > 40)
-    list.append(
-      el(
-        "li",
-        `${counts.size - 40} more resources in the event window`,
-        "muted",
-      ),
-    );
+function svg(tag, attrs = {}, text) {
+  const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [key, value] of Object.entries(attrs))
+    node.setAttribute(key, String(value));
+  if (text !== undefined) node.textContent = text;
+  return node;
 }
-function networkGraph(session) {
-  const hosts = new Map();
-  for (const event of session.events.filter((e) => e.kind === "NETWORK")) {
-    const host = event.detail.replace(/ blocked$/, "");
-    const current = hosts.get(host) ?? { host, count: 0, last: event.time };
-    current.count++;
-    current.last = event.time;
-    hosts.set(host, current);
-  }
-  $("network-counts").replaceChildren(
-    ...[
-      [
-        String([...hosts.values()].reduce((sum, host) => sum + host.count, 0)),
-        "Blocked attempts",
-        "blocked",
-      ],
-      [String(hosts.size), "Blocked destinations", "blocked"],
-      [
-        String(new Set(session.allowed).size),
-        "Allowed-policy hosts",
-        "permitted",
-      ],
-      ["Not captured", "Allowed connections", "muted"],
-    ].map(([value, label, kind]) => {
-      const node = el("div", undefined, kind);
-      node.append(el("strong", value), el("span", label));
-      return node;
-    }),
-  );
-  const nodes = [...hosts.values()].sort((a, b) => b.count - a.count);
-  if ($("graph-policy").checked) {
-    for (const host of session.allowed) nodes.unshift({ host, count: 0 });
-  }
-  const visible = nodes.slice(0, 40);
-  const signature = JSON.stringify([session.id, visible, selectedHost]);
-  $("graph-summary").textContent =
-    `${hosts.size} blocked destinations; ${[...hosts.values()].reduce((sum, h) => sum + h.count, 0)} attempts in the event window. Click a blocked host to filter the timeline.${nodes.length > 40 ? " Showing the first 40 destinations." : ""}`;
-  $("clear-host").hidden = !selectedHost;
-  if (signature === graphSignature) return;
-  graphSignature = signature;
-  const container = $("network-graph");
-  container.replaceChildren();
-  if (!visible.length) {
-    container.append(
-      el("p", "No blocked network attempts in this event window.", "muted"),
-    );
-    return;
-  }
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = (tag, attrs, text) => {
-    const node = document.createElementNS(ns, tag);
-    for (const [key, value] of Object.entries(attrs))
-      node.setAttribute(key, String(value));
-    if (text !== undefined) node.textContent = text;
-    return node;
-  };
-  const height = Math.max(180, visible.length * 78 + 24),
-    center = Math.min(height / 2, 130);
-  const canvas = svg("svg", {
-    viewBox: `0 0 760 ${height}`,
-    width: 760,
-    height,
-    role: "group",
-    "aria-label": `Network destinations for ${session.name}`,
-  });
-  for (const [i, host] of visible.entries()) {
-    const y = 12 + i * 78;
-    canvas.append(
-      svg("path", {
-        d: `M 205 ${center} C 280 ${center}, 280 ${y + 30}, 345 ${y + 30}`,
-        class: host.count ? "graph-edge denied" : "graph-edge policy",
-      }),
-    );
-    const group = svg("g", {
-      class: `graph-host ${host.count ? "denied" : "policy"}${selectedHost === host.host && host.count ? " active" : ""}`,
-      role: "button",
-      tabindex: 0,
-      "aria-label": `${host.host}: select destination for policy editing.`,
-      "aria-pressed": String(selectedHost === host.host),
-    });
-    group.append(
-      svg(
-        "title",
-        {},
-        host.count
-          ? `${host.host} · last blocked ${new Date(host.last).toLocaleString()}`
-          : `${host.host} · allowed by policy; connections not observed`,
-      ),
-    );
-    group.append(svg("rect", { x: 345, y, width: 395, height: 60, rx: 7 }));
-    group.append(
-      svg(
-        "text",
-        { x: 360, y: y + 23, class: "graph-label" },
-        host.host.length > 44 ? host.host.slice(0, 41) + "…" : host.host,
-      ),
-    );
-    group.append(
-      svg(
-        "text",
-        { x: 360, y: y + 44, class: "graph-caption" },
-        host.count
-          ? `${host.count} blocked ${host.count === 1 ? "attempt" : "attempts"}`
-          : "Allowed by policy · traffic unobserved",
-      ),
-    );
-    {
-      const choose = () => {
-        selectedHost = selectedHost === host.host ? undefined : host.host;
-        $("policy-host").value = (
-          host.count ? host.host.replace(/:(?:\d+|unknown)$/, "") : host.host
-        ).replace(/^\[|\]$/g, "");
-        $("policy-host").focus();
-        $("filter").value = "NETWORK";
-        render();
-      };
-      group.onclick = choose;
-      group.onkeydown = (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          choose();
-        }
-      };
-    }
-    canvas.append(group);
-  }
-  canvas.append(
-    svg("rect", {
-      x: 10,
-      y: center - 36,
-      width: 195,
-      height: 72,
-      rx: 8,
-      class: "graph-source",
-    }),
-  );
-  canvas.append(
-    svg("text", { x: 26, y: center - 6, class: "graph-label" }, session.name),
-  );
-  canvas.append(
-    svg(
-      "text",
-      { x: 26, y: center + 17, class: "graph-caption" },
-      "Sandbox session",
-    ),
-  );
-  container.append(canvas);
+// Polling re-renders every two seconds. Rebuilding only when the inputs
+// change keeps focus, hover and scroll position where the reader left them.
+const signatures = new WeakMap();
+function sync(node, signature, build) {
+  const key = JSON.stringify(signature);
+  if (signatures.get(node) === key) return;
+  signatures.set(node, key);
+  node.replaceChildren(...build());
 }
-function render() {
-  const search = $("search").value.toLowerCase();
-  const nav = $("sessions");
 
+const plural = (n, word) =>
+  `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+const clock = (time) => new Date(time).toLocaleTimeString();
+function span(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return plural(minutes, "minute");
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h ${minutes % 60} min`;
+  return plural(Math.floor(hours / 24), "day");
+}
+function ago(time) {
+  const minutes = Math.floor((Date.now() - Date.parse(time)) / 60000);
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`;
+  return `${Math.floor(minutes / 1440)}d ago`;
+}
+const shortPath = (path) => path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
+const blockedHost = (event) => event.detail.replace(/ blocked$/, "");
+// Policy rules name a bare host; blocked attempts are logged as host:port.
+const bare = (host) =>
+  host.replace(/:(?:\d+|unknown)$/, "").replace(/^\[|\]$/g, "");
+const command = (s) =>
+  s.harness && s.harness !== "Unavailable" ? s.harness : s.name;
+const launcher = (s) => (s.name.includes(" / ") ? s.name.split(" / ")[0] : "");
+const hasProject = (s) => s.project.startsWith("/");
+const blockedTotal = (s) => s.totals?.blocked ?? count(s, "NETWORK");
+const count = (s, kind) => s.events.filter((e) => e.kind === kind).length;
+
+const GROUPS = {
+  NETWORK: "network",
+  FILE: "file",
+  TOOL: "tool",
+  TOOLS: "tool",
+};
+const group = (event) => GROUPS[event.kind] ?? "other";
+const KIND_LABELS = {
+  NETWORK: "Blocked",
+  FILE: "File",
+  TOOL: "Tool",
+  TOOLS: "Tool",
+  SESSION: "Session",
+  EXIT: "Session",
+  ERROR: "Error",
+  POLICY: "Policy",
+  COVERAGE: "Note",
+};
+
+function renderSessions() {
+  const search = $("search").value.trim().toLowerCase();
   const visible = sessions.filter((s) =>
-    `${s.name} ${s.project}`.toLowerCase().includes(search),
+    `${s.name} ${s.harness} ${s.project}`.toLowerCase().includes(search),
   );
-  const signature = JSON.stringify([
-    selected,
-    search,
-    visible.map((s) => [s.id, s.name, s.project, s.state]),
-  ]);
-  if (signature !== navSignature) {
-    navSignature = signature;
-    nav.replaceChildren();
-    for (const s of visible) {
-      const button = el("button");
-      button.className = s.id === selected ? "selected" : "";
-      button.setAttribute("aria-pressed", String(s.id === selected));
-      button.append(
-        el("strong", s.name),
-        el("span", s.project),
-        el("small", s.state, s.state === "Live" ? "live" : "muted"),
+  sync(
+    $("sessions"),
+    [
+      selected,
+      search,
+      Math.floor(Date.now() / 60000),
+      visible.map((s) => [
+        s.id,
+        s.state,
+        s.updated,
+        s.archived,
+        blockedTotal(s),
+      ]),
+    ],
+    () => {
+      if (!visible.length)
+        return [
+          el(
+            "p",
+            search ? "No session matches that search." : "Nothing here yet.",
+            "fine",
+          ),
+        ];
+      const nodes = [];
+      for (const [title, members] of [
+        ["Running", visible.filter((s) => s.state === "Live")],
+        ["Ended", visible.filter((s) => s.state !== "Live" && !s.archived)],
+        ["History", visible.filter((s) => s.archived)],
+      ]) {
+        if (!members.length) continue;
+        nodes.push(el("h2", `${title} (${members.length})`));
+        for (const s of members) {
+          const button = el("button", undefined, s.state.toLowerCase());
+          if (s.id === selected) button.classList.add("selected");
+          button.setAttribute("aria-current", String(s.id === selected));
+          const top = el("span", undefined, "row");
+          top.append(
+            el("i", undefined, "dot"),
+            el("strong", command(s)),
+            el(
+              "small",
+              s.state === "Live"
+                ? "running"
+                : s.state === "Unknown"
+                  ? "no heartbeat"
+                  : ago(s.updated),
+            ),
+          );
+          const bottom = el("span", undefined, "row");
+          const project = el(
+            "span",
+            hasProject(s)
+              ? s.project.split("/").filter(Boolean).at(-1)
+              : "project not recorded",
+            "where",
+          );
+          project.title = s.project;
+          bottom.append(project);
+          const blocked = blockedTotal(s);
+          if (blocked)
+            bottom.append(el("small", `${blocked} blocked`, "blocked"));
+          button.append(top, bottom);
+          button.onclick = () => {
+            selected = s.id;
+            hostFilter = undefined;
+            render();
+          };
+          nodes.push(button);
+        }
+      }
+      return nodes;
+    },
+  );
+}
+
+function renderHeader(s) {
+  $("name").textContent = command(s);
+  $("state").textContent =
+    s.state === "Live"
+      ? "Running"
+      : s.state === "Unknown"
+        ? "No recent heartbeat"
+        : "Ended";
+  if (s.archived) $("state").textContent = "From history";
+  $("state").className = `pill ${s.state.toLowerCase()}`;
+  $("project").textContent = hasProject(s) ? shortPath(s.project) : s.project;
+  $("project").title = s.project;
+  sync(
+    $("metadata"),
+    [s.id, s.model, s.started, s.monitorPid, s.policyVersion, s.totals],
+    () =>
+      [
+        ["Sandbox", [launcher(s), s.backend].filter(Boolean).join(" on ")],
+        ["Model", s.model],
+        [
+          "Started",
+          s.started ? new Date(s.started).toLocaleString() : "Unavailable",
+        ],
+        [
+          "Network policy",
+          s.policyVersion === null ? "Fixed at launch" : `v${s.policyVersion}`,
+        ],
+        ["Monitor PID", s.monitorPid],
+        ["Log", s.id],
+        ...(s.totals
+          ? [
+              [
+                "Recorded in history",
+                `${plural(s.totals.events, "event")}: ${s.totals.blocked.toLocaleString()} blocked, ${plural(s.totals.files, "file change")}, ${plural(s.totals.tools, "tool call")}`,
+              ],
+            ]
+          : []),
+      ].map(([label, value]) => {
+        const entry = el("div");
+        entry.append(el("dt", label), el("dd", value));
+        return entry;
+      }),
+  );
+}
+
+// One bar per time slice across the event window: when things happened, and
+// whether it was blocked traffic, file changes or tool calls.
+function renderRibbon(s) {
+  const marks = s.events.filter((e) => group(e) !== "other");
+  const first = Date.parse(s.events[0]?.time ?? s.started);
+  const last =
+    s.state === "Live"
+      ? Date.now()
+      : Date.parse(s.events.at(-1)?.time ?? s.started);
+  const width = Math.max(last - first, 1000);
+  $("ribbon-title").textContent = marks.length
+    ? `${plural(marks.length, "event")} over ${span(width)}`
+    : "No blocked traffic, file changes or tool calls recorded";
+  $("ribbon-start").textContent = Number.isFinite(first) ? clock(first) : "";
+  $("ribbon-end").textContent =
+    s.state === "Live" ? "now" : Number.isFinite(last) ? clock(last) : "";
+  sync($("ribbon"), [s.id, marks.length, Math.floor(last / 5000)], () => {
+    const slices = 96,
+      height = 48,
+      slot = 1000 / slices;
+    const buckets = Array.from({ length: slices }, () => ({
+      network: 0,
+      file: 0,
+      tool: 0,
+    }));
+    for (const event of marks) {
+      const at = Math.floor(
+        ((Date.parse(event.time) - first) / width) * slices,
       );
-      button.onclick = () => {
-        selected = s.id;
-        selectedHost = undefined;
+      buckets[Math.min(Math.max(at, 0), slices - 1)][group(event)]++;
+    }
+    const peak = Math.max(
+      1,
+      ...buckets.map((b) => b.network + b.file + b.tool),
+    );
+    const canvas = svg("svg", {
+      viewBox: `0 0 1000 ${height}`,
+      preserveAspectRatio: "none",
+      role: "img",
+      "aria-label": $("ribbon-title").textContent,
+    });
+    canvas.append(
+      svg("line", { x1: 0, x2: 1000, y1: height - 0.5, y2: height - 0.5 }),
+    );
+    for (const [i, bucket] of buckets.entries()) {
+      let y = height - 1;
+      const parts = [];
+      for (const kind of ["tool", "file", "network"]) {
+        if (!bucket[kind]) continue;
+        const size = Math.max(3, (bucket[kind] / peak) * (height - 4));
+        y -= size;
+        canvas.append(
+          svg("rect", {
+            x: i * slot + 1,
+            y: Math.max(y, 0),
+            width: slot - 2,
+            height: size,
+            class: kind,
+          }),
+        );
+        parts.push(`${bucket[kind]} ${kind === "network" ? "blocked" : kind}`);
+      }
+      if (parts.length)
+        canvas.lastChild.append(
+          svg(
+            "title",
+            {},
+            `${clock(first + (i / slices) * width)}: ${parts.reverse().join(", ")}`,
+          ),
+        );
+    }
+    return [canvas];
+  });
+}
+
+function destinationRows(s) {
+  const rows = new Map();
+  const row = (host) => {
+    if (!rows.has(host)) rows.set(host, { host, attempts: 0 });
+    return rows.get(host);
+  };
+  if (s) {
+    for (const host of s.allowed) row(host).allowed = true;
+    for (const event of s.events.filter((e) => e.kind === "NETWORK")) {
+      const entry = row(bare(blockedHost(event)));
+      entry.attempts++;
+      entry.last = event.time;
+    }
+  }
+  for (const [host, action] of Object.entries(policy?.rules ?? {}))
+    row(host).rule = action;
+  const rank = (r) =>
+    r.attempts ? 0 : r.rule === "deny" ? 1 : r.rule === "allow" ? 2 : 3;
+  return [...rows.values()].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      b.attempts - a.attempts ||
+      a.host.localeCompare(b.host),
+  );
+}
+
+function renderNetwork(s) {
+  $("network-panel").hidden = !!s && view !== "network";
+  $("network-title").hidden = !!s;
+  $("network-note").textContent = !s
+    ? "Rules below apply to every Dune session on this machine, including ones you start later."
+    : s.policyVersion === null
+      ? "This session’s network access was fixed at launch, so rule changes won’t reach it. Only blocked attempts are recorded; allowed connections are not."
+      : "Only blocked attempts are recorded; allowed connections are not. Rule changes reach running Dune sessions within a few seconds.";
+  const rows = destinationRows(s);
+  const peak = Math.max(1, ...rows.map((r) => r.attempts));
+  sync($("destinations"), [s?.id, s?.policyVersion, rows, policyBusy], () => {
+    if (!rows.length) {
+      const cell = el(
+        "td",
+        s
+          ? "No hosts allowed and no blocked attempts in this window."
+          : "No rules yet. Add one below, or open a session and allow a blocked host.",
+        "fine",
+      );
+      cell.colSpan = 5;
+      const line = el("tr");
+      line.append(cell);
+      return [line];
+    }
+    return rows.map((r) => {
+      const line = el("tr");
+      const name = el("td");
+      if (r.attempts && s) {
+        const jump = el("button", r.host, "link host");
+        jump.title = "Show these attempts in the activity timeline";
+        jump.onclick = () => {
+          hostFilter = r.host;
+          filter = "network";
+          showView("activity");
+        };
+        name.append(jump);
+      } else name.append(el("code", r.host, "host"));
+
+      const status = el("td");
+      const [label, tone, hint] =
+        r.rule === "deny"
+          ? ["Denied by rule", "blocked", ""]
+          : r.rule === "allow"
+            ? [
+                "Allowed by rule",
+                "permitted",
+                s && !r.allowed
+                  ? s.policyVersion === null
+                    ? "not followed by this session"
+                    : s.state === "Live"
+                      ? "not applied yet"
+                      : ""
+                  : "",
+              ]
+            : r.allowed
+              ? ["Allowed at launch", "permitted", ""]
+              : ["Blocked", "blocked", "not on the allowlist"];
+      status.append(el("span", label, `tag ${tone}`));
+      if (hint) status.append(el("small", hint));
+
+      const attempts = el("td", undefined, "attempts");
+      if (r.attempts) {
+        const bar = el("i", undefined, "bar");
+        bar.style.setProperty("--share", `${(r.attempts / peak) * 100}%`);
+        attempts.append(el("span", r.attempts.toLocaleString()), bar);
+      } else attempts.append(el("span", s ? "none" : "", "fine"));
+
+      const last = el("td", r.last ? ago(r.last) : "", "fine");
+      if (r.last) last.title = new Date(r.last).toLocaleString();
+
+      const actions = el("td", undefined, "actions");
+      if (!/[*/\s]/.test(r.host)) {
+        const offer = (text, action, cls) => {
+          const button = el("button", text, cls);
+          button.disabled = policyBusy;
+          button.setAttribute("aria-label", `${text}: ${r.host}`);
+          button.onclick = () => changeRule(r.host, action);
+          actions.append(button);
+        };
+        if (r.rule !== "allow" && !(r.allowed && !r.rule))
+          offer("Allow", "allow", "allow");
+        if (r.rule !== "deny" && (r.allowed || r.rule))
+          offer("Deny", "deny", "deny");
+        if (r.rule) offer("Remove rule", "inherit", "quiet");
+      }
+      line.append(name, status, attempts, last, actions);
+      return line;
+    });
+  });
+
+  if (!policy) return;
+  const live = sessions.filter((x) => x.state === "Live");
+  const managed = live.filter((x) => x.policyVersion !== null);
+  const current = managed.filter((x) => x.policyVersion === policy.version);
+  $("policy-summary").textContent = !live.length
+    ? `Policy v${policy.version}. No sessions are running; new launches start with these rules.`
+    : `Policy v${policy.version}, applied by ${current.length} of ${plural(managed.length, "running Dune session")}.`;
+  const lagging = live.filter((x) => x.policyVersion !== policy.version);
+  sync(
+    $("policy-agents"),
+    lagging.map((x) => [x.id, x.policyVersion]),
+    () =>
+      lagging.map((x) =>
+        el(
+          "li",
+          x.policyVersion === null
+            ? `${command(x)} in ${shortPath(x.project)} doesn’t follow live rules. Relaunch it with dune to manage it here.`
+            : `${command(x)} in ${shortPath(x.project)} is still on v${x.policyVersion}.`,
+        ),
+      ),
+  );
+}
+
+function describe(event) {
+  const cell = el("td");
+  const code = (text) => el("code", text);
+  if (event.kind === "NETWORK") {
+    cell.append(code(blockedHost(event)), " blocked");
+  } else if (event.kind === "FILE") {
+    const match = /^(changed|created\/deleted\/renamed) (.+)$/.exec(
+      event.detail,
+    );
+    if (!match) cell.append(event.detail);
+    else
+      cell.append(
+        code(match[2]),
+        match[1] === "changed" ? " changed" : " created, removed or renamed",
+      );
+  } else if (event.kind === "TOOL") {
+    const match = /^(\S+) (start|end|error)(?: · (\d+)ms observed)?$/.exec(
+      event.detail,
+    );
+    if (!match) cell.append(event.detail);
+    else {
+      const took =
+        Number(match[3]) > 0
+          ? ` after ${Number(match[3]) < 1000 ? `${match[3]} ms` : `${(Number(match[3]) / 1000).toFixed(1)} s`}`
+          : "";
+      cell.append(
+        code(match[1]),
+        match[2] === "start"
+          ? " started"
+          : match[2] === "end"
+            ? ` finished${took}`
+            : ` failed${took}`,
+      );
+      if (match[2] === "error") cell.className = "blocked";
+    }
+  } else if (event.kind === "POLICY" && /^\d+$/.test(event.detail)) {
+    cell.append(`Applied network policy v${event.detail}`);
+  } else cell.append(event.detail);
+  return cell;
+}
+
+function tally(id, entries, empty, unit) {
+  const counts = new Map();
+  for (const key of entries) counts.set(key, (counts.get(key) ?? 0) + 1);
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  sync($(id), ranked, () => {
+    if (!ranked.length) return [el("li", empty, "fine")];
+    const items = ranked.slice(0, 30).map(([text, n]) => {
+      const item = el("li");
+      const label = el("code", text);
+      label.title = text;
+      item.append(label, el("small", unit(n)));
+      return item;
+    });
+    if (ranked.length > 30)
+      items.push(el("li", `and ${ranked.length - 30} more`, "fine"));
+    return items;
+  });
+}
+
+function renderActivity(s) {
+  $("activity-panel").hidden = view !== "activity";
+  const totals = {
+    all: s.events.length,
+    network: 0,
+    file: 0,
+    tool: 0,
+    other: 0,
+  };
+  for (const event of s.events) totals[group(event)]++;
+  sync($("filters"), [filter, totals], () =>
+    [
+      ["all", "Everything"],
+      ["network", "Blocked network"],
+      ["file", "Files"],
+      ["tool", "Tools"],
+      ["other", "Session"],
+    ].map(([value, label]) => {
+      const chip = el("button", `${label} `);
+      chip.append(el("span", String(totals[value]), "count"));
+      chip.setAttribute("aria-pressed", String(filter === value));
+      chip.onclick = () => {
+        filter = value;
+        if (value !== "network") hostFilter = undefined;
         render();
       };
-      nav.append(button);
-    }
-    if (!visible.length)
-      nav.append(
-        el(
-          "p",
-          search ? "No matching sessions." : "No logs found yet.",
-          "muted",
-        ),
-      );
-  }
-  const s = sessions.find((s) => s.id === selected);
-  $("empty").hidden = !!s;
-  $("detail").hidden = !s;
-  if (!s) return;
-  $("metadata").replaceChildren(
-    ...[
-      ["Harness", s.harness],
-      ["Model", s.model],
-      ["Sandbox", s.backend],
-      [
-        "Started",
-        s.started ? new Date(s.started).toLocaleString() : "Unavailable",
-      ],
-      ["Monitor PID", s.monitorPid],
-    ].map(([label, value]) => {
-      const entry = el("div");
-      entry.append(el("dt", label), el("dd", value));
-      return entry;
+      return chip;
     }),
   );
-  $("name").textContent = s.name;
-  $("source").textContent = s.name;
-  $("project").textContent = s.project;
-  $("sessionId").textContent = s.id;
-  $("state").textContent =
-    s.state === "Unknown" ? "Status unknown · no recent heartbeat" : s.state;
-  $("state").className = "pill " + (s.state === "Live" ? "live" : "");
-  resourceList(
-    "network",
-    [
-      ...s.allowed.map((host) => [host, "allowed by policy"]),
-      ...s.events
-        .filter((e) => e.kind === "NETWORK")
-        .map((e) => [e.detail.replace(/ blocked$/, ""), "blocked"]),
-    ],
-    "No network observations in this window.",
+  $("host-filter").hidden = !hostFilter;
+  $("host-filter-text").textContent = hostFilter
+    ? `Only attempts to reach ${hostFilter}. `
+    : "";
+  const events = s.events.filter(
+    (e) =>
+      (filter === "all" || group(e) === filter) &&
+      (!hostFilter ||
+        (e.kind === "NETWORK" && bare(blockedHost(e)) === hostFilter)),
   );
-  resourceList(
+  sync(
+    $("timeline"),
+    [s.id, filter, hostFilter, events.length, events.at(-1)?.time],
+    () => {
+      if (!events.length) {
+        const cell = el("td", "Nothing of this kind in the window.", "fine");
+        cell.colSpan = 3;
+        const line = el("tr");
+        line.append(cell);
+        return [line];
+      }
+      return events
+        .slice()
+        .reverse()
+        .map((e) => {
+          const line = el("tr", undefined, group(e));
+          const time = el("td", clock(e.time), "time");
+          time.title = new Date(e.time).toLocaleString();
+          const kind = el("td");
+          kind.append(
+            el(
+              "span",
+              KIND_LABELS[e.kind] ??
+                e.kind.charAt(0) + e.kind.slice(1).toLowerCase(),
+              `tag ${e.kind === "NETWORK" || e.kind === "ERROR" ? "blocked" : ""}`,
+            ),
+          );
+          line.append(time, kind, describe(e));
+          return line;
+        });
+    },
+  );
+  $("window").textContent =
+    s.totals && s.totals.events > s.events.length
+      ? `Newest first, latest ${s.events.length.toLocaleString()} of ${plural(s.totals.events, "recorded event")}. The ribbon and counts on this page cover these ${s.events.length.toLocaleString()}.`
+      : `Newest first, latest ${plural(s.events.length, "event")}.` +
+        (s.clipped
+          ? " Older events have scrolled out of the 128 KiB window."
+          : "");
+  tally(
     "files",
     s.events
       .filter((e) => e.kind === "FILE")
-      .map((e) => [
+      .map((e) =>
         e.detail.replace(/^(changed|created\/deleted\/renamed) /, ""),
-        "change observed",
-      ]),
-    "No file changes in this window.",
+      ),
+    "No file changes seen.",
+    (n) => `${n}×`,
   );
-  resourceList(
+  tally(
     "tools",
     s.events
-      .filter((e) => e.kind === "TOOL")
-      .map((e) => [e.detail.split(" ")[0], "events reported"]),
-    "No tool events in this window.",
+      .filter((e) => e.kind === "TOOL" && / start$/.test(e.detail))
+      .map((e) => e.detail.split(" ")[0]),
+    "No tool calls reported.",
+    (n) => plural(n, "call"),
   );
-  networkGraph(s);
-  const filter = $("filter").value;
-  const events = s.events.filter(
-    (e) =>
-      (filter === "all" ||
-        e.kind === filter ||
-        (filter === "TOOL" && e.kind === "TOOLS")) &&
-      (!selectedHost ||
-        (e.kind === "NETWORK" &&
-          e.detail.replace(/ blocked$/, "") === selectedHost)),
-  );
-  $("timeline").replaceChildren(
-    ...events
-      .slice()
-      .reverse()
-      .map((e) => {
-        const row = el("tr");
-        row.append(
-          el("td", new Date(e.time).toLocaleTimeString()),
-          el("td", e.kind, e.kind === "NETWORK" ? "blocked" : ""),
-          el("td", e.detail),
-        );
-        return row;
-      }),
-  );
-  $("window").textContent =
-    `Latest ${s.events.length} events, newest first. ${s.clipped ? "Older log data is outside the 128 KiB window. " : ""}Resource counts cover this window only.`;
-  $("coverage").replaceChildren(...s.coverage.map((text) => el("li", text)));
 }
-$("search").oninput = render;
-$("filter").onchange = () => {
-  selectedHost = undefined;
-  render();
-};
-$("graph-policy").onchange = render;
-$("clear-host").onclick = () => {
-  selectedHost = undefined;
-  render();
-};
-function showView(view) {
-  for (const name of ["activity", "network"]) {
+
+function render() {
+  renderSessions();
+  const s = sessions.find((x) => x.id === selected);
+  $("empty").hidden = !!s || sessions.length > 0;
+  $("detail").hidden = !s;
+  renderNetwork(s);
+  sync($("coverage"), s?.coverage ?? [], () =>
+    (s?.coverage ?? []).map((text) => el("li", text)),
+  );
+  if (!s) return;
+  renderHeader(s);
+  renderRibbon(s);
+  const blocked = count(s, "NETWORK");
+  $("network-count").textContent = blocked ? `${blocked} blocked` : "";
+  $("network-count").className = `count ${blocked ? "blocked" : ""}`;
+  $("activity-count").textContent = String(s.events.length);
+  renderActivity(s);
+}
+
+function showView(next) {
+  view = next;
+  for (const name of ["network", "activity"]) {
     $(`${name}-tab`).setAttribute("aria-selected", String(name === view));
     $(`${name}-tab`).tabIndex = name === view ? 0 : -1;
-    $(`${name}-panel`).hidden = name !== view;
   }
-  selectedHost = undefined;
-  $("filter").value = view === "network" ? "NETWORK" : "all";
+  if (view === "network") hostFilter = undefined;
   render();
 }
-for (const view of ["activity", "network"]) {
-  $(`${view}-tab`).onclick = () => showView(view);
-  $(`${view}-tab`).onkeydown = (event) => {
-    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-      event.preventDefault();
-      const next =
-        event.key === "Home"
+for (const name of ["network", "activity"]) {
+  $(`${name}-tab`).onclick = () => showView(name);
+  $(`${name}-tab`).onkeydown = (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? "network"
+        : event.key === "End"
           ? "activity"
-          : event.key === "End"
-            ? "network"
-            : view === "network"
-              ? "activity"
-              : "network";
-      showView(next);
-      $(`${next}-tab`).focus();
-    }
+          : name === "network"
+            ? "activity"
+            : "network";
+    showView(next);
+    $(`${next}-tab`).focus();
   };
 }
-$("activity-tab").tabIndex = -1;
-$("filter").value = "NETWORK";
-async function refresh() {
-  try {
-    const response = await fetch("/api/sessions", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok)
-      throw new Error(
-        response.status === 401
-          ? "Open the full URL printed in the terminal to connect."
-          : "Collector unavailable. Displayed data may be stale.",
-      );
-    const data = await response.json();
-    sessions = data.sessions;
-    policy = data.policy;
-    renderPolicy();
-    sessions.sort(
-      (a, b) =>
-        (b.state === "Live") - (a.state === "Live") ||
-        (b.updated ?? "").localeCompare(a.updated ?? ""),
-    );
-    if (!sessions.some((s) => s.id === selected)) selected = sessions[0]?.id;
-    $("connection").textContent =
-      `Local collector · updated ${new Date(data.generatedAt).toLocaleTimeString()}`;
-    $("limit").textContent = data.omitted
-      ? `${data.omitted} older sessions omitted; showing at most 64.`
-      : "Up to 64 recent sessions. Refreshes every 2 seconds.";
-    render();
-  } catch (error) {
-    $("connection").textContent = error.message;
-  } finally {
-    setTimeout(refresh, 2000);
-  }
-}
-refresh();
+$("search").oninput = render;
+$("clear-host").onclick = () => {
+  hostFilter = undefined;
+  render();
+};
 
-function renderPolicy() {
-  if (!policy) return;
-  const live = sessions.filter((s) => s.state === "Live");
-  const current = live.filter((s) => s.policyVersion === policy.version).length;
-  $("policy-summary").textContent =
-    `Policy v${policy.version} · ${current}/${live.length} live sessions applied`;
-  $("policy-rules").replaceChildren(
-    ...Object.entries(policy.rules).map(([host, action]) => {
-      const item = el("li");
-      const button = el("button", host);
-      button.onclick = () => {
-        $("policy-host").value = host;
-        $("policy-host").focus();
-      };
-      item.append(
-        button,
-        el("span", ` ${action}`, action === "deny" ? "blocked" : "permitted"),
-      );
-      return item;
-    }),
-  );
-  $("policy-agents").replaceChildren(
-    ...sessions.map((s) => {
-      const row = el("tr");
-      const status =
-        s.state === "Stopped"
-          ? "Stopped"
-          : s.state !== "Live"
-            ? "Disconnected / unknown"
-            : s.policyVersion === null
-              ? "Relaunch to enable"
-              : s.policyVersion === policy.version
-                ? "Applied"
-                : "Pending";
-      row.append(
-        ...[
-          s.name,
-          s.policyVersion === null ? "Unmanaged" : `v${s.policyVersion}`,
-          `v${policy.version}`,
-          status,
-        ].map((value) => el("td", value)),
-      );
-      return row;
-    }),
-  );
-}
-$("policy-form").onsubmit = async (event) => {
-  event.preventDefault();
+const PAST = {
+  allow: "Allowed",
+  deny: "Denied",
+  inherit: "Removed the rule for",
+};
+async function changeRule(host, action) {
   if (!policy || policyBusy) return;
   policyBusy = true;
-  const buttons = [...$("policy-form").querySelectorAll("button")];
-  buttons.forEach((button) => (button.disabled = true));
+  render();
+  const result = $("policy-result");
   try {
     const response = await fetch("/api/policy", {
       method: "POST",
@@ -450,21 +648,61 @@ $("policy-form").onsubmit = async (event) => {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        version: policy.version,
-        host: $("policy-host").value.trim(),
-        action: event.submitter?.value ?? "deny",
-      }),
+      body: JSON.stringify({ version: policy.version, host, action }),
     });
     if (!response.ok) throw new Error(await response.text());
     policy = await response.json();
-    $("policy-result").textContent =
-      `Published v${policy.version}. Waiting for session acknowledgments.`;
-    renderPolicy();
+    result.className = "result";
+    result.textContent = `${PAST[action]} ${host}. Policy v${policy.version} is published; running sessions pick it up within a few seconds.`;
+    return true;
   } catch (error) {
-    $("policy-result").textContent = error.message;
+    result.className = "result blocked";
+    result.textContent = error.message;
+    return false;
   } finally {
     policyBusy = false;
-    buttons.forEach((button) => (button.disabled = false));
+    render();
   }
+}
+$("policy-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const input = $("policy-host");
+  if (await changeRule(input.value.trim(), event.submitter?.value ?? "deny"))
+    input.value = "";
 };
+
+async function refresh() {
+  const connection = $("connection");
+  try {
+    const response = await fetch("/api/sessions", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok)
+      throw new Error(
+        response.status === 401
+          ? "Not connected. Open the full URL that dune observe printed."
+          : "The collector isn’t answering. What you see may be stale.",
+      );
+    const data = await response.json();
+    sessions = data.sessions;
+    if (!policyBusy) policy = data.policy;
+    sessions.sort(
+      (a, b) =>
+        (b.state === "Live") - (a.state === "Live") ||
+        (b.updated ?? "").localeCompare(a.updated ?? ""),
+    );
+    if (!sessions.some((s) => s.id === selected)) selected = sessions[0]?.id;
+    connection.className = "connection ok";
+    connection.textContent = `Updated ${clock(data.generatedAt)}`;
+    $("limit").textContent = data.omitted
+      ? `Showing the 64 most recent sessions; ${data.omitted} older ones are hidden.`
+      : "";
+    render();
+  } catch (error) {
+    connection.className = "connection error";
+    connection.textContent = error.message;
+  } finally {
+    setTimeout(refresh, 2000);
+  }
+}
+refresh();
