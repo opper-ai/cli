@@ -1,3 +1,7 @@
+import {
+  readPolicy,
+  applyPolicy,
+} from "../../scripts/sandbox-policy/policy.mjs";
 import type { ActivitySink } from "./activity.js";
 import { constants } from "node:os";
 import { spawn } from "node:child_process";
@@ -20,6 +24,7 @@ interface SandboxLibrary {
       ask?: (request: { host: string; port?: number }) => Promise<boolean>,
     ): Promise<void>;
     wrapWithSandbox(command: string, shell: string): Promise<string>;
+    updateConfig(config: SandboxRuntimeConfig): void;
     reset(): Promise<void>;
   };
 }
@@ -51,8 +56,10 @@ export async function runSrt(
   env: NodeJS.ProcessEnv,
   cwd: string,
   activity?: ActivitySink,
+  policyPath?: string,
 ): Promise<number> {
   let manager: SandboxLibrary["SandboxManager"] | undefined;
+  let policyTimer: ReturnType<typeof setInterval> | undefined;
   let pid: number | undefined;
   let interrupted: NodeJS.Signals | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -83,8 +90,13 @@ export async function runSrt(
   try {
     manager = (await loadSrt()).SandboxManager;
     if (interrupted) return interruptedCode()!;
+    let applied = policyPath ? readPolicy(policyPath) : undefined;
+    const effective = () =>
+      applied
+        ? { ...config, network: applyPolicy(config.network, applied) }
+        : config;
     await manager.initialize(
-      config,
+      effective(),
       activity
         ? async ({ host, port }) => {
             activity("NETWORK", `${host}:${port ?? "unknown"} blocked`);
@@ -98,6 +110,36 @@ export async function runSrt(
       "/bin/sh",
     );
     if (interrupted) return interruptedCode()!;
+    if (policyPath && applied) {
+      activity?.("POLICY", String(applied.version));
+      policyTimer = setInterval(() => {
+        try {
+          const next = readPolicy(policyPath);
+          if (
+            next.version === applied!.version &&
+            JSON.stringify(next.rules) !== JSON.stringify(applied!.rules)
+          )
+            throw new Error("Policy version was modified");
+          if (next.version < applied!.version)
+            throw new Error("Policy rollback");
+          if (next.version !== applied!.version) {
+            manager!.updateConfig({
+              ...config,
+              network: applyPolicy(config.network, next),
+            });
+            applied = next;
+          }
+          activity?.("POLICY", String(applied!.version));
+        } catch {
+          activity?.(
+            "POLICYERROR",
+            "Policy could not be applied; stopping sandbox.",
+          );
+          signalGroup("SIGKILL");
+        }
+      }, 1000);
+      policyTimer.unref();
+    }
     // The in-process network proxies need a running Node event loop.
     return await new Promise<number>((resolve, reject) => {
       const child = spawn("/bin/sh", ["-c", wrapped], {
@@ -116,6 +158,7 @@ export async function runSrt(
   } finally {
     for (const [signal, handler] of handlers) process.off(signal, handler);
     if (killTimer) clearTimeout(killTimer);
+    if (policyTimer) clearInterval(policyTimer);
     signalGroup("SIGKILL");
     await manager?.reset();
   }

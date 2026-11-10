@@ -118,7 +118,8 @@ it("passes arbitrary argv unchanged with no implicit credentials or network", as
     }),
   ).toBe(13);
   expect(existsSync(home)).toBe(false);
-  expect(existsSync(join(mocks.home, ".dune"))).toBe(false);
+  expect(existsSync(join(mocks.home, ".dune", "claude"))).toBe(false);
+  expect(existsSync(join(mocks.home, ".dune", "policy"))).toBe(true);
   await rm(log, { recursive: true, force: true });
 });
 

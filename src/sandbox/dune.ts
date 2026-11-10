@@ -1,3 +1,4 @@
+import { policyDirectory } from "../../scripts/sandbox-policy/policy.mjs";
 import { mkdir, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -56,6 +57,10 @@ export async function launchDune(
     throw new Error(
       "Start dune from a project directory outside your home root and Dune profile.",
     );
+  await mkdir(policyDirectory(), { recursive: true, mode: 0o700 });
+  const policyPath = await realpath(policyDirectory());
+  if (!contains(profileRoot, policyPath))
+    throw new Error("Dune policy must not point outside ~/.dune.");
   let profile: string | undefined;
   if (nativeClaude) {
     await mkdir(join(profileRoot, "claude"), { recursive: true, mode: 0o700 });
@@ -190,6 +195,7 @@ export async function launchDune(
             .concat(isOpper ? [] : [literal(opperDirectory)]),
           denyWrite: [
             dirname(activity.path),
+            policyPath,
             ...(isOpper ? [opperDirectory] : []),
           ].map(literal),
         },
@@ -197,6 +203,7 @@ export async function launchDune(
       env,
       project,
       activity.emit,
+      policyPath,
     );
     activity.emit("EXIT", `agent exited ${code}`);
     return code;

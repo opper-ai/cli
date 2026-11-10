@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 const mocks = vi.hoisted(() => ({
+  updateConfig: vi.fn(),
   initialize: vi.fn(),
   wrapWithSandbox: vi.fn(),
   reset: vi.fn(),
@@ -97,7 +98,14 @@ it("signals the whole sandbox process group and reaps leftover children", async 
     pid: 123456,
     kill: vi.fn(),
   });
-  mocks.spawn.mockReturnValue(child);
+  let spawned!: () => void;
+  const started = new Promise<void>((resolve) => {
+    spawned = resolve;
+  });
+  mocks.spawn.mockImplementation(() => {
+    spawned();
+    return child;
+  });
   const result = runSrt(["agent"], {} as any, {}, "/project");
   await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
   process.emit("SIGTERM");
@@ -140,3 +148,59 @@ it.each(["initialize", "wrapWithSandbox"] as const)(
     expect(process.listenerCount("SIGTERM")).toBe(listeners);
   },
 );
+
+it("hot loads network policy without respawning and acknowledges only successful updates", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { changePolicy } =
+    await import("../../scripts/sandbox-policy/policy.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "srt-policy-test-"));
+  const child = Object.assign(new EventEmitter(), { pid: 123456789 });
+  let spawned!: () => void;
+  const started = new Promise<void>((resolve) => {
+    spawned = resolve;
+  });
+  mocks.spawn.mockImplementation(() => {
+    spawned();
+    return child;
+  });
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  const activity = vi.fn();
+  vi.useFakeTimers();
+  try {
+    const running = runSrt(
+      ["agent"],
+      {
+        network: { allowedDomains: ["example.com"], deniedDomains: [] },
+        filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
+      },
+      {},
+      "/project",
+      activity,
+      directory,
+    );
+    await started;
+    changePolicy(0, "example.com", "deny", directory);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(mocks.updateConfig.mock.calls[0]?.[0].network).toEqual({
+      allowedDomains: [],
+      deniedDomains: ["example.com"],
+    });
+    expect(activity).toHaveBeenCalledWith("POLICY", "1");
+    mocks.updateConfig.mockImplementation(() => {
+      throw new Error("update failed");
+    });
+    changePolicy(1, "example.com", "allow", directory);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(activity).not.toHaveBeenCalledWith("POLICY", "2");
+    expect(kill).toHaveBeenCalledWith(-123456789, "SIGKILL");
+    child.emit("close", 1);
+    await running;
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
