@@ -182,6 +182,46 @@ opper agents remove claude-desktop   # works for any registered adapter
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
+### Experimental sandbox
+
+`opper launch --sandbox srt <agent>` runs the whole agent process under Anthropic's open-source Sandbox Runtime (SRT), with a temporary home, filesystem restrictions and a network allowlist. Missing libraries and startup failures never fall back to an unsandboxed launch.
+
+SRT 0.0.81 is bundled as an optional npm dependency; keep optional dependencies enabled. It requires Node >=22.12 and a host-installed agent. On Debian/Ubuntu, install OS dependencies with `sudo apt-get install bubblewrap socat`. macOS uses its native sandbox mechanism. No VM, container daemon or image download is needed. Supported agents: `claude`, `codex`, `pi`, `opencode`, and `hermes`.
+
+Build in the CLI checkout, then launch from a scratch project. An existing globally installed `opper` will not include these local changes.
+
+```sh
+npm run build
+CLI="$PWD/dist/index.js"
+mkdir -p /tmp/opper-sandbox-playground
+cd /tmp/opper-sandbox-playground
+node "$CLI" launch --sandbox srt claude
+node "$CLI" launch --sandbox srt --sandbox-domain github.com pi
+```
+
+**The agent edits your current project directly.** Use a scratch copy for disposable edits. Existing home settings and history are not copied into the temporary home. Project secrets and the selected Opper key remain accessible to the agent. SRT denies reads of `.ssh`, `.aws`, `.azure`, `.kube`, and the Opper configuration directory, but other host files can remain readable. Network access is restricted to the configured Opper host plus repeatable `--sandbox-domain` entries. GUI applications and background gateways are unsupported.
+
+#### Claude Code sandbox coordination
+
+Opper wraps the whole Claude Code process, including its tools and subprocesses. It passes a temporary `--settings` file with `sandbox.enabled: false` so Claude does not attempt a second, nested sandbox. Claude's tool permissions remain unchanged. Explicit `--settings` JSON or file contents are preserved, with Opper's monitoring hooks added and only `sandbox.enabled` overridden. For repeated `--settings`, the last value is used. Original settings files are not edited; generated settings are deleted with the sandbox session.
+
+Organization-managed Claude settings take precedence over command-line settings and can require its internal sandbox. Opper does not bypass those policies. Such a configuration may fail when nested; the outer SRT boundary stays enforced, and Opper never retries outside it. Monitoring hooks may also be disabled by Claude settings, so the log records when hooks actually report ready.
+
+References: [SRT source](https://github.com/anthropics/sandbox-runtime), [Claude sandbox scope](https://code.claude.com/docs/en/sandboxing#what-runs-outside-the-sandbox), [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence).
+
+#### Activity log
+
+Every sandbox launch prints a private host-side `activity.log` path and a `tail -f` command. Watch it in another terminal while keeping the agent's interactive terminal intact. Logs survive sandbox cleanup in the OS temporary directory; delete them when finished.
+
+The log records session start/exit, project file notifications, Claude/Pi tool start/finish/failure events, and SRT network requests rejected through its permission callback. Tool hooks report when ready. Unsupported agents and missing monitoring capabilities are labeled explicitly. No new npm dependency is needed for logging.
+
+Tool arguments, results, prompts, file contents, and HTTP bodies/headers are omitted. The selected Opper key is redacted from log lines. Paths and domain names remain visible. These logs are diagnostic telemetry: file notifications can be coalesced or include edits by other programs, and agent-reported tool events can be disabled or forged. They are not a complete or tamper-proof audit. Allowed SRT connections, file reads, and arbitrary subprocess execution are not currently observed. Monitoring does not add restrictions or change the existing live-project behavior.
+
+#### Verification
+
+After building, run `node test/sandbox/smoke.mjs` from the CLI checkout. It uses a fake Claude executable and fake key to verify session-only sandbox settings, tool hooks, allowed/blocked networking, literal arguments, filesystem restrictions, child processes, and cleanup. It makes no model inference request. Run from a normal terminal because nested macOS sandboxes can be rejected. These functional checks are not a security audit or a full Claude inference test.
+
+
 ### Codex / ChatGPT desktop on macOS and Windows
 
 On macOS, install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). On Windows, install the [Codex app](https://openai.com/codex/) from the Microsoft Store; the CLI discovers its registered MSIX package and bundled runtime. The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.

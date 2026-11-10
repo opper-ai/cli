@@ -25,6 +25,13 @@ vi.mock("../../src/agents/registry.js", () => ({
 const loginMock = vi.fn();
 vi.mock("../../src/commands/login.js", () => ({ loginCommand: loginMock }));
 
+const sandboxCheck = vi.fn().mockResolvedValue("srt");
+const sandboxLaunch = vi.fn().mockResolvedValue(0);
+vi.mock("../../src/sandbox/launch.js", () => ({
+  checkSandbox: sandboxCheck,
+  launchSandbox: sandboxLaunch,
+}));
+
 const apiGetMock = vi.fn().mockResolvedValue([]);
 const desktopPrepareMock = vi.fn();
 const desktopOpenMock = vi.fn();
@@ -52,6 +59,8 @@ describe("launchCommand", () => {
     adapter.install.mockReset();
     adapter.spawn.mockReset();
     loginMock.mockReset();
+    sandboxCheck.mockClear();
+    sandboxLaunch.mockClear();
     apiGetMock.mockClear();
     apiGetMock.mockResolvedValue([]);
     desktopPrepareMock.mockReset();
@@ -140,6 +149,56 @@ describe("launchCommand", () => {
     await expect(
       launchCommand({ agent: "nonexistent", key: "default" }),
     ).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+  });
+
+  it("runs the adapter inside the sandbox with the same routing and passthrough args", async () => {
+    await setSlot("default", { apiKey: "fake-sandbox-key" });
+    adapter.detect.mockResolvedValue({ installed: true });
+    const code = await launchCommand({
+      agent: "hermes",
+      key: "default",
+      sandbox: "srt",
+      sandboxDomains: ["github.com"],
+      passthrough: ["--", "literal ' argument"],
+      configScope: "project",
+    });
+    expect(code).toBe(0);
+    expect(sandboxCheck).toHaveBeenCalledWith("srt", "hermes");
+    expect(sandboxLaunch).toHaveBeenCalledWith(
+      "srt",
+      {
+        agent: "hermes",
+        args: ["--", "literal ' argument"],
+        routing: expect.objectContaining({
+          apiKey: "fake-sandbox-key",
+          baseUrl: expect.stringContaining("/v3/session/"),
+        }),
+        spawnOptions: { configScope: "project" },
+      },
+      ["github.com"],
+    );
+    expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects inapplicable sandbox options before login or installation", async () => {
+    await expect(
+      launchCommand({
+        agent: "hermes",
+        key: "default",
+        sandbox: "boxlite",
+        sandboxDomains: ["github.com"],
+      }),
+    ).rejects.toThrow(/requires --sandbox srt/);
+    await expect(
+      launchCommand({
+        agent: "hermes",
+        key: "default",
+        sandbox: "srt",
+        install: true,
+      }),
+    ).rejects.toThrow(/cannot be combined with --sandbox/);
+    expect(loginMock).not.toHaveBeenCalled();
+    expect(adapter.install).not.toHaveBeenCalled();
   });
 
   it("calls loginCommand when no slot is stored, then continues with the new slot", async () => {
