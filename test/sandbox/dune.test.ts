@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   runSrt: vi.fn(),
   which: vi.fn(),
   checkSandbox: vi.fn(),
+  readConfig: vi.fn(),
 }));
 vi.mock("node:os", async (original) => ({
   ...(await original<typeof import("node:os")>()),
@@ -21,6 +22,7 @@ vi.mock("../../src/sandbox/launch.js", async (original) => ({
   ...(await original<typeof import("../../src/sandbox/launch.js")>()),
   checkSandbox: mocks.checkSandbox,
 }));
+vi.mock("../../src/auth/config.js", () => ({ readConfig: mocks.readConfig }));
 vi.mock("../../src/util/which.js", () => ({ which: mocks.which }));
 import { launchDune, claudeDomains } from "../../src/sandbox/dune.js";
 beforeEach(async () => {
@@ -28,6 +30,7 @@ beforeEach(async () => {
   mocks.home = await realpath(await mkdtemp(join(tmpdir(), "dune-test-")));
   mocks.which.mockResolvedValue("/installed/claude");
   mocks.checkSandbox.mockResolvedValue("srt");
+  mocks.readConfig.mockResolvedValue(null);
 });
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -65,7 +68,13 @@ it("runs native Claude without Opper routing and preserves only its dedicated pr
     emit("NETWORK", "subscription-token blocked");
     return 7;
   });
-  expect(await launchDune(["-p", "hello"], ["github.com"])).toBe(7);
+  expect(
+    await launchDune(["claude", "-p", "hello"], {
+      domains: ["github.com"],
+      env: [],
+      write: [],
+    }),
+  ).toBe(7);
   expect(existsSync(sessionHome)).toBe(false);
   expect(existsSync(join(mocks.home, ".dune", "claude"))).toBe(true);
   expect(readFileSync(log, "utf8")).not.toContain("subscription-token");
@@ -75,4 +84,77 @@ it("does not launch when SRT validation fails", async () => {
   mocks.checkSandbox.mockRejectedValue(new Error("unavailable"));
   await expect(launchDune([])).rejects.toThrow("unavailable");
   expect(mocks.runSrt).not.toHaveBeenCalled();
+});
+it("passes arbitrary argv unchanged with no implicit credentials or network", async () => {
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "must-not-pass");
+  vi.stubEnv("CUSTOM_TOKEN", "explicit-token");
+  mocks.which.mockResolvedValue("/bin/python");
+  let log = "",
+    home = "";
+  mocks.runSrt.mockImplementation(async (argv, config, env) => {
+    expect(argv).toEqual([
+      "/bin/python",
+      "script.py",
+      "--help",
+      "$(touch nope)",
+    ]);
+    expect(config.network.allowedDomains).toEqual([]);
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(config.filesystem.denyRead).toContainEqual({
+      path: join(mocks.home, ".dune"),
+      literal: true,
+    });
+    expect(env.CUSTOM_TOKEN).toBe("explicit-token");
+    home = env.HOME;
+    log = config.filesystem.denyWrite[0].path;
+    return 13;
+  });
+  expect(
+    await launchDune(["python", "script.py", "--help", "$(touch nope)"], {
+      domains: [],
+      env: ["CUSTOM_TOKEN"],
+      write: [],
+    }),
+  ).toBe(13);
+  expect(existsSync(home)).toBe(false);
+  expect(existsSync(join(mocks.home, ".dune"))).toBe(false);
+  await rm(log, { recursive: true, force: true });
+});
+
+it("uses Opper's configured hosts and read-only credentials without altering argv", async () => {
+  vi.stubEnv("OPPER_HOME", join(mocks.home, "custom-opper"));
+  mocks.readConfig.mockResolvedValue({
+    version: 1,
+    defaultKey: "default",
+    keys: {
+      default: {
+        apiKey: "stored-secret",
+        baseUrl: "https://custom.opper.example",
+      },
+    },
+  });
+  mocks.which.mockResolvedValue("/installed/opper");
+  let log = "";
+  mocks.runSrt.mockImplementation(async (argv, config, env, _cwd, emit) => {
+    expect(argv).toEqual(["/installed/opper", "launch", "pi", "-p", "hello"]);
+    expect(env.OPPER_HOME).toBe(join(mocks.home, "custom-opper"));
+    expect(config.network.allowedDomains).toContain("custom.opper.example");
+    expect(config.filesystem.denyWrite).toContainEqual({
+      path: env.OPPER_HOME,
+      literal: true,
+    });
+    expect(config.filesystem.denyRead).not.toContainEqual({
+      path: env.OPPER_HOME,
+      literal: true,
+    });
+    log = config.filesystem.denyWrite[0].path;
+    emit("FILE", "stored-secret");
+    return 0;
+  });
+  expect(await launchDune(["opper", "launch", "pi", "-p", "hello"])).toBe(0);
+  expect(readFileSync(join(log, "activity.log"), "utf8")).not.toContain(
+    "stored-secret",
+  );
+  await rm(log, { recursive: true, force: true });
 });

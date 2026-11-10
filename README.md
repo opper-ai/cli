@@ -1092,20 +1092,32 @@ The collector binds to `127.0.0.1` on a random port and requires a per-run token
 
 Run collector tests with `node --test test/sandbox/observer.test.mjs`.
 
-### Dune: native Claude subscription experiment
+### Dune: command sandbox experiment
+
+Dune wraps any executable and forwards all arguments after its name unchanged. Dune options go before the executable; `--` explicitly ends option parsing. Generic commands use a temporary home and deny network access by default. `--env NAME` passes a selected environment variable without putting its value in argv. `--allow-write DIRECTORY` grants writes to an existing extra directory, while filesystem roots and the host home remain rejected.
+
+```sh
+dune python script.py
+dune -- npm test
+dune --env OPENAI_API_KEY --allow-domain api.openai.com python script.py
+dune --allow-write /absolute/path/to/output node build.js
+dune opper launch --model deepseek-v4.1-flash-1017 pi
+```
+
+For `opper`, Dune makes the existing Opper configuration readable but not writable, passes Opper's API-key/base-URL environment overrides when set, and allows configured API hosts. Renew expired credentials with `opper login` outside Dune. Omit Opper's own `--sandbox` flag. Direct Claude and Pi commands receive tool hooks; wrapped programs and other executables receive lifecycle, file-change and blocked-network observation without tool-call instrumentation. `dune observe` is reserved for the collector; `dune -- observe` runs an executable named `observe`.
 
 `dune claude` runs the installed Claude Code binary directly inside SRT, without Opper authentication or inference routing. It uses a separate private profile at `~/.dune/claude`; Claude manages its login, credentials, settings, and session history there. Your existing Claude profile is not copied. Sign in once with your Claude subscription:
 
 ```sh
 dune claude auth login
 dune claude
-# Add permitted destinations before Claude's own arguments:
-dune claude --allow-domain github.com -p "Review this project"
+# Put Dune options before the executable:
+dune --allow-domain github.com claude -p "Review this project"
 dune observe
 ```
 
 If a browser does not open during login, open the URL Claude prints and paste the returned code into its prompt. `CLAUDE_CODE_OAUTH_TOKEN`, if explicitly set in your shell, is passed only to the native Claude process; API keys, Opper routing variables and other inherited credentials are omitted. The launcher never extracts your existing Keychain credentials. Claude's documented `CLAUDE_CONFIG_DIR` profile mechanism keeps the Dune login separate. See [Claude authentication](https://code.claude.com/docs/en/authentication).
 
-Dune allows `api.anthropic.com`, `claude.ai`, `platform.claude.com`, and `console.anthropic.com` by default. It shares the sandbox and monitoring limitations described above. Project edits are live; the Dune profile persists and is writable to Claude, including its tools. Other host files outside explicitly denied paths can remain readable. It collects lifecycle, file-change notifications, blocked destinations, and Claude-reported tool metadata, without saving prompts, tool arguments, outputs or file contents in the activity log. Claude's own persistent history is separate from those logs.
+For direct Claude commands, Dune allows `api.anthropic.com`, `claude.ai`, `platform.claude.com`, and `console.anthropic.com` by default. It shares the sandbox and monitoring limitations described above. Project edits are live; the Dune profile persists and is writable to Claude, including its tools. Other host files outside explicitly denied paths can remain readable. It collects lifecycle, file-change notifications, blocked destinations, and Claude-reported tool metadata, without saving prompts, tool arguments, outputs or file contents in the activity log. Claude's own persistent history is separate from those logs.
 
 From this checkout, `npm run build` produces `dist/dune.js`; use `node /absolute/path/to/cli/dist/dune.js claude` before installing the package. The package exports the separate `dune` executable; `dune observe` prints its private local dashboard URL.

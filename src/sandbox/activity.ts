@@ -17,7 +17,11 @@ export type ActivitySink = (kind: string, detail: string) => void;
 
 // A host-owned log stays outside the writable sandbox directories. Hook events are
 // agent-reported telemetry, not an authenticated security audit.
-export function startActivity(project: string, events: string, secret: string) {
+export function startActivity(
+  project: string,
+  events: string,
+  secret: string | string[],
+) {
   const directory = mkdtempSync(join(tmpdir(), "opper-activity-"));
   const path = join(directory, "activity.log");
   const fd = openSync(path, "wx", 0o600);
@@ -26,7 +30,13 @@ export function startActivity(project: string, events: string, secret: string) {
   let written = 0;
   const maxLogBytes = 8 * 1024 * 1024;
   const clean = (value: string) => {
-    const redacted = secret ? value.replaceAll(secret, "[redacted]") : value;
+    const secrets = (Array.isArray(secret) ? secret : [secret])
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    const redacted = secrets.reduce(
+      (text, key) => text.replaceAll(key, "[redacted]"),
+      value,
+    );
     return redacted
       .replace(/[\x00-\x1f\x7f-\x9f\u2028-\u202e\u2066-\u2069]/g, " ")
       .slice(0, 2048);
