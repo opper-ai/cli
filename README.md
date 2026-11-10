@@ -1091,3 +1091,21 @@ From a source checkout, run `node scripts/sandbox-observer/server.mjs` and open 
 The collector binds to `127.0.0.1` on a random port and requires a per-run token for log access. Keep the printed URL private. Refreshing the page requires reopening that URL. It reads at most 128 KiB per session and displays the latest 300 events; resource counts cover that window. Allowed connections, file reads, and subprocess execution are **not** captured. File notifications can include outside edits, and tool events are agent-reported. An empty map does not prove that no access occurred. Host activity logs stop after 8 MiB with a coverage warning; the agent-owned hook spool is not disk-quota limited. Stop the collector with Ctrl+C and remove temporary logs when no longer needed.
 
 Run collector tests with `node --test test/sandbox/observer.test.mjs`.
+
+### Dune: native Claude subscription experiment
+
+`dune claude` runs the installed Claude Code binary directly inside SRT, without Opper authentication or inference routing. It uses a separate private profile at `~/.dune/claude`; Claude manages its login, credentials, settings, and session history there. Your existing Claude profile is not copied. Sign in once with your Claude subscription:
+
+```sh
+dune claude auth login
+dune claude
+# Add permitted destinations before Claude's own arguments:
+dune claude --allow-domain github.com -p "Review this project"
+dune observe
+```
+
+If a browser does not open during login, open the URL Claude prints and paste the returned code into its prompt. `CLAUDE_CODE_OAUTH_TOKEN`, if explicitly set in your shell, is passed only to the native Claude process; API keys, Opper routing variables and other inherited credentials are omitted. The launcher never extracts your existing Keychain credentials. Claude's documented `CLAUDE_CONFIG_DIR` profile mechanism keeps the Dune login separate. See [Claude authentication](https://code.claude.com/docs/en/authentication).
+
+Dune allows `api.anthropic.com`, `claude.ai`, `platform.claude.com`, and `console.anthropic.com` by default. It shares the sandbox and monitoring limitations described above. Project edits are live; the Dune profile persists and is writable to Claude, including its tools. Other host files outside explicitly denied paths can remain readable. It collects lifecycle, file-change notifications, blocked destinations, and Claude-reported tool metadata, without saving prompts, tool arguments, outputs or file contents in the activity log. Claude's own persistent history is separate from those logs.
+
+From this checkout, `npm run build` produces `dist/dune.js`; use `node /absolute/path/to/cli/dist/dune.js claude` before installing the package. The package exports the separate `dune` executable; `dune observe` prints its private local dashboard URL.
