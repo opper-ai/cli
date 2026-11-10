@@ -23,19 +23,28 @@ export function startActivity(project: string, events: string, secret: string) {
   const fd = openSync(path, "wx", 0o600);
   let closed = false;
   let failed = false;
+  let written = 0;
+  const maxLogBytes = 8 * 1024 * 1024;
   const clean = (value: string) => {
     const redacted = secret ? value.replaceAll(secret, "[redacted]") : value;
     return redacted
-      .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, " ")
+      .replace(/[\x00-\x1f\x7f-\x9f\u2028-\u202e\u2066-\u2069]/g, " ")
       .slice(0, 2048);
   };
   const emit: ActivitySink = (kind, detail) => {
     if (closed || failed) return;
     try {
-      writeSync(
-        fd,
-        `${new Date().toISOString()}  ${clean(kind).padEnd(10)} ${clean(detail)}\n`,
-      );
+      const line = `${new Date().toISOString()}  ${clean(kind).padEnd(10)} ${clean(detail)}\n`;
+      if (written + Buffer.byteLength(line) > maxLogBytes) {
+        writeSync(
+          fd,
+          `${new Date().toISOString()}  COVERAGE   Activity log limit reached; further events omitted.\n`,
+        );
+        failed = true;
+        process.stderr.write("Activity log stopped: 8 MiB limit reached.\n");
+        return;
+      }
+      written += writeSync(fd, line);
     } catch {
       failed = true;
       process.stderr.write("Activity log stopped: could not write to disk.\n");
@@ -63,6 +72,7 @@ export function startActivity(project: string, events: string, secret: string) {
   }
   let offset = 0;
   let pending = "";
+  let discarding = false;
   const starts = new Map<string, number>();
   const drain = () => {
     try {
@@ -70,6 +80,8 @@ export function startActivity(project: string, events: string, secret: string) {
       if (size < offset) {
         offset = 0;
         pending = "";
+        discarding = false;
+        starts.clear();
         emit("COVERAGE", "Tool event stream was truncated.");
       }
       // Bound processing per tick; never load an agent-controlled file wholesale.
@@ -81,6 +93,10 @@ export function startActivity(project: string, events: string, secret: string) {
       while ((newline = pending.indexOf("\n")) >= 0) {
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
+        if (discarding || line.length > 65536) {
+          discarding = false;
+          continue;
+        }
         try {
           const item = JSON.parse(line);
           if (
@@ -114,6 +130,7 @@ export function startActivity(project: string, events: string, secret: string) {
       }
       if (pending.length > 65536) {
         pending = "";
+        discarding = true;
         emit("COVERAGE", "Oversized tool event discarded.");
       }
     } catch {

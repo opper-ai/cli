@@ -3,9 +3,14 @@ import { constants } from "node:os";
 import { spawn } from "node:child_process";
 // Keep the optional dependency out of compile-time resolution on Node 20,
 // where npm omits SRT because its engine requires Node 22.12 or later.
+type FilesystemPath = string | { path: string; literal: true };
 export interface SandboxRuntimeConfig {
   network: { allowedDomains: string[]; deniedDomains: string[] };
-  filesystem: { allowWrite: string[]; denyRead: string[]; denyWrite: string[] };
+  filesystem: {
+    allowWrite: FilesystemPath[];
+    denyRead: FilesystemPath[];
+    denyWrite: FilesystemPath[];
+  };
 }
 interface SandboxLibrary {
   SandboxManager: {

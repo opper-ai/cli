@@ -1,6 +1,14 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, parse } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  parse,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { OpperError } from "../errors.js";
 import { opperHome } from "../auth/paths.js";
@@ -91,10 +99,17 @@ export async function launchSandbox(
 ): Promise<number> {
   const project = await realpath(process.cwd());
   const hostHome = await realpath(homedir());
-  if (project === hostHome || project === parse(project).root) {
+  const homeRelative = relative(project, hostHome);
+  if (
+    project === parse(project).root ||
+    !homeRelative ||
+    (!isAbsolute(homeRelative) &&
+      homeRelative !== ".." &&
+      !homeRelative.startsWith(`..${sep}`))
+  ) {
     throw new OpperError(
       "INVALID_ARGUMENT",
-      "Start a sandbox from a project directory, not your home or filesystem root.",
+      "Start a sandbox from a project directory, not your home or a directory containing it.",
     );
   }
   const session = await realpath(
@@ -171,10 +186,16 @@ export async function launchSandbox(
             join(hostHome, ".aws"),
             join(hostHome, ".azure"),
             join(hostHome, ".kube"),
-            opperHome(),
-          ],
-          allowWrite: [project, home, temp, events],
-          denyWrite: [requestPath, activity.path],
+            resolve(opperHome()),
+          ].map((path) => ({ path, literal: true })),
+          allowWrite: [project, home, temp, events].map((path) => ({
+            path,
+            literal: true,
+          })),
+          denyWrite: [requestPath, dirname(activity.path)].map((path) => ({
+            path,
+            literal: true,
+          })),
         },
       },
       env,

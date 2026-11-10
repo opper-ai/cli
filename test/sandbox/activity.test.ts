@@ -87,6 +87,37 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
     monitor.close();
   });
 
+  it("discards oversized records through their newline and bounds host logs", async () => {
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    vi.useFakeTimers();
+    let eventsPath = "";
+    const monitor = startActivity(temp(), tempEvents(), "");
+    function tempEvents() {
+      const path = temp();
+      eventsPath = join(path, "tools.jsonl");
+      return path;
+    }
+    directories.push(dirname(monitor.path));
+    try {
+      appendFileSync(eventsPath, "x".repeat(131072));
+      await vi.advanceTimersByTimeAsync(400);
+      appendFileSync(
+        eventsPath,
+        '{"phase":"ready","tool":"forged"}\n{"phase":"ready","tool":"valid"}\n',
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      const log = readFileSync(monitor.path, "utf8");
+      expect(log).not.toContain("forged hooks ready");
+      expect(log).toContain("valid hooks ready");
+      for (let i = 0; i < 5000; i++) monitor.emit("FILE", "x".repeat(2048));
+      expect(statSync(monitor.path).size).toBeLessThan(8 * 1024 * 1024 + 200);
+      expect(readFileSync(monitor.path, "utf8")).toContain("limit reached");
+    } finally {
+      monitor.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("runs Claude hooks without saving tool inputs or responses", async () => {
     const home = temp();
     const events = temp();

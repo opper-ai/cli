@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const { runSrt, loadSrt } = vi.hoisted(() => ({
   runSrt: vi.fn(),
@@ -114,8 +114,9 @@ describe("sandbox launch", () => {
         "registry.npmjs.org",
       ]);
       expect(
-        settings.filesystem.denyRead.some((path: string) =>
-          path.endsWith("/.ssh"),
+        settings.filesystem.denyRead.some(
+          (entry: { path: string; literal: boolean }) =>
+            basename(entry.path) === ".ssh" && entry.literal,
         ),
       ).toBe(true);
       expect(command.join(" ")).not.toContain(request.routing.apiKey);
