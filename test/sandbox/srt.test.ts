@@ -118,3 +118,25 @@ it("rejects unsupported Node versions before initializing the optional runtime",
   });
   expect(mocks.initialize).not.toHaveBeenCalled();
 });
+
+it.each(["initialize", "wrapWithSandbox"] as const)(
+  "does not spawn after cancellation during %s",
+  async (stage) => {
+    let finish!: (value?: any) => void;
+    mocks[stage].mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const listeners = process.listenerCount("SIGTERM");
+    const result = runSrt(["agent"], {} as any, {}, "/project");
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    process.emit("SIGTERM");
+    finish("wrapped");
+    expect(await result).toBe(143);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(mocks.reset).toHaveBeenCalledOnce();
+    expect(process.listenerCount("SIGTERM")).toBe(listeners);
+  },
+);

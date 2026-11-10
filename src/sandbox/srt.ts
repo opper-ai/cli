@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 // where npm omits SRT because its engine requires Node 22.12 or later.
 type FilesystemPath = string | { path: string; literal: true };
 export interface SandboxRuntimeConfig {
+  allowPty?: boolean;
   network: { allowedDomains: string[]; deniedDomains: string[] };
   filesystem: {
     allowWrite: FilesystemPath[];
@@ -51,9 +52,38 @@ export async function runSrt(
   cwd: string,
   activity?: ActivitySink,
 ): Promise<number> {
-  const { SandboxManager } = await loadSrt();
+  let manager: SandboxLibrary["SandboxManager"] | undefined;
+  let pid: number | undefined;
+  let interrupted: NodeJS.Signals | undefined;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  const signalGroup = (signal: NodeJS.Signals) => {
+    if (!pid) return;
+    try {
+      process.kill(-pid, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+        activity?.("ERROR", "Could not signal sandbox process group.");
+    }
+  };
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
+  const handlers = signals.map((signal) => {
+    const handler = () => {
+      interrupted ??= signal;
+      signalGroup(signal);
+      if (pid && signal !== "SIGINT" && !killTimer) {
+        killTimer = setTimeout(() => signalGroup("SIGKILL"), 2000);
+        killTimer.unref();
+      }
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  const interruptedCode = () =>
+    interrupted ? 128 + constants.signals[interrupted] : undefined;
   try {
-    await SandboxManager.initialize(
+    manager = (await loadSrt()).SandboxManager;
+    if (interrupted) return interruptedCode()!;
+    await manager.initialize(
       config,
       activity
         ? async ({ host, port }) => {
@@ -62,10 +92,12 @@ export async function runSrt(
           }
         : undefined,
     );
-    const wrapped = await SandboxManager.wrapWithSandbox(
+    if (interrupted) return interruptedCode()!;
+    const wrapped = await manager.wrapWithSandbox(
       command.map(shellQuote).join(" "),
       "/bin/sh",
     );
+    if (interrupted) return interruptedCode()!;
     // The in-process network proxies need a running Node event loop.
     return await new Promise<number>((resolve, reject) => {
       const child = spawn("/bin/sh", ["-c", wrapped], {
@@ -74,45 +106,17 @@ export async function runSrt(
         stdio: "inherit",
         detached: true,
       });
-      // A separate process group lets the host stop the worker, agent and
-      // ordinary subprocesses together without signaling its own terminal group.
-      const signalGroup = (signal: NodeJS.Signals) => {
-        if (!child.pid) return;
-        try {
-          process.kill(-child.pid, signal);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-            activity?.("ERROR", "Could not signal sandbox process group.");
-        }
-      };
-      let killTimer: ReturnType<typeof setTimeout> | undefined;
-      const signals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
-      const handlers = signals.map((signal) => {
-        const handler = () => {
-          signalGroup(signal);
-          if (signal !== "SIGINT" && !killTimer) {
-            killTimer = setTimeout(() => signalGroup("SIGKILL"), 2000);
-            killTimer.unref();
-          }
-        };
-        process.on(signal, handler);
-        return [signal, handler] as const;
-      });
-      const cleanup = () => {
-        for (const [signal, handler] of handlers) process.off(signal, handler);
-        if (killTimer) clearTimeout(killTimer);
-        signalGroup("SIGKILL");
-      };
-      child.once("error", (error) => {
-        cleanup();
-        reject(error);
-      });
+      // Signal the worker, agent and ordinary subprocesses as one process group.
+      pid = child.pid;
+      child.once("error", reject);
       child.once("close", (code, signal: NodeJS.Signals | null) => {
-        cleanup();
         resolve(code ?? (signal ? 128 + constants.signals[signal] : 1));
       });
     });
   } finally {
-    await SandboxManager.reset();
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    if (killTimer) clearTimeout(killTimer);
+    signalGroup("SIGKILL");
+    await manager?.reset();
   }
 }

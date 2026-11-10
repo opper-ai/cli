@@ -137,6 +137,10 @@ export function startActivity(project: string, events: string, secret: string) {
       emit("COVERAGE", "Tool event stream could not be read.");
     }
   };
+  emit("PROJECT", project);
+  emit("HEARTBEAT", "monitor alive");
+  const heartbeat = setInterval(() => emit("HEARTBEAT", "monitor alive"), 5000);
+  heartbeat.unref();
   const timer = setInterval(drain, 200);
   timer.unref();
   let watcher: FSWatcher | undefined;
@@ -164,6 +168,7 @@ export function startActivity(project: string, events: string, secret: string) {
     close() {
       if (closed) return;
       clearInterval(timer);
+      clearInterval(heartbeat);
       watcher?.close();
       drain();
       if (fstatSync(input).size > offset || pending.length)

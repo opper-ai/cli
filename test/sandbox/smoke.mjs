@@ -48,6 +48,7 @@ if(process.env.NODE_USE_ENV_PROXY==='1') {
  if(denied.status===0)process.exit(28);
  console.log('SRT allowed Opper and blocked example.com');
 }
+if(process.stdin.isTTY) { process.stdin.setRawMode(true); process.stdin.setRawMode(false); console.log('Interactive raw terminal mode passed'); }
 fs.writeFileSync('home-path',process.env.HOME);
 console.log('Agent launch, literal arguments, clean environment, project/home writes, outside-write denial and child isolation passed');
 `,

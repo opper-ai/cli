@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Opper · Sandbox observer</title>
+    <link rel="stylesheet" href="/ui.css" />
+    <script src="/ui.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <span class="brand">opper</span
+        ><span class="subtitle">Sandbox observer</span>
+      </div>
+      <span id="connection" role="status">Connecting…</span>
+    </header>
+    <div class="layout">
+      <aside>
+        <h1>Sessions</h1>
+        <p class="muted">On this machine</p>
+        <label class="search"
+          >Find a session<input
+            id="search"
+            type="search"
+            placeholder="Agent or project"
+        /></label>
+        <nav id="sessions" aria-label="Sandbox sessions"></nav>
+        <p id="limit" class="muted"></p>
+      </aside>
+      <main>
+        <div id="empty">
+          <h2>Waiting for a sandbox</h2>
+          <p>
+            Run <code>opper launch --sandbox srt pi</code> in a project.
+            Sessions from this machine appear here automatically.
+          </p>
+        </div>
+        <article id="detail" hidden>
+          <div class="heading">
+            <div>
+              <p id="sessionId" class="muted"></p>
+              <h2 id="name"></h2>
+              <p id="project"></p>
+            </div>
+            <span id="state" class="pill"></span>
+          </div>
+          <dl id="metadata" class="metadata"></dl>
+          <p class="notice">
+            Observed activity is partial. Allowed connections and file reads are
+            not captured. File changes can include outside edits; tool events
+            are reported by the agent.
+          </p>
+          <section>
+            <h3>Resource map</h3>
+            <div class="map">
+              <div class="source">
+                <strong id="source"></strong><small>Sandbox session</small>
+              </div>
+              <div class="resources">
+                <div>
+                  <h4>Network</h4>
+                  <p class="muted">Policy and blocked attempts</p>
+                  <ul id="network"></ul>
+                </div>
+                <div>
+                  <h4>Files</h4>
+                  <p class="muted">Project change notifications</p>
+                  <ul id="files"></ul>
+                </div>
+                <div>
+                  <h4>Tools</h4>
+                  <p class="muted">Agent-reported activity</p>
+                  <ul id="tools"></ul>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section>
+            <div class="timelineHeading">
+              <h3>Event timeline</h3>
+              <label
+                >Show
+                <select id="filter">
+                  <option value="all">All events</option>
+                  <option value="NETWORK">Network</option>
+                  <option value="FILE">Files</option>
+                  <option value="TOOL">Tools</option>
+                  <option value="COVERAGE">Coverage</option>
+                </select></label
+              >
+            </div>
+            <p id="window" class="muted"></p>
+            <div class="tablewrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Kind</th>
+                    <th>Activity</th>
+                  </tr>
+                </thead>
+                <tbody id="timeline"></tbody>
+              </table>
+            </div>
+          </section>
+          <details>
+            <summary>Collection coverage</summary>
+            <ul id="coverage"></ul>
+          </details>
+        </article>
+      </main>
+    </div>
+  </body>
+</html>

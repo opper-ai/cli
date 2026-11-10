@@ -19,7 +19,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && node --test test/scripts/build-bundles.test.mjs",
+    "test": "vitest run && node --test test/scripts/build-bundles.test.mjs test/sandbox/observer.test.mjs",
     "test:smoke": "node test/integration/package-smoke.mjs",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"

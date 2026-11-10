@@ -109,6 +109,9 @@ describe("sandbox launch", () => {
   });
   it("restricts SRT network to the routing host and explicit extra hosts", async () => {
     runSrt.mockImplementation(async (command, settings) => {
+      expect(settings.allowPty).toBe(
+        process.platform === "darwin" && Boolean(process.stdin.isTTY),
+      );
       expect(settings.network.allowedDomains).toEqual([
         "api.opper.ai",
         "registry.npmjs.org",

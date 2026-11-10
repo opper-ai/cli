@@ -123,6 +123,10 @@ export async function launchSandbox(
     await rm(session, { recursive: true, force: true });
     throw error;
   }
+  activity.emit("HARNESS", request.agent);
+  activity.emit("MODEL", request.routing.model);
+  activity.emit("BACKEND", backend);
+  activity.emit("MONITOR", String(process.pid));
   activity.emit(
     "SESSION",
     `${backend} / ${request.agent} starting; project edits are live`,
@@ -170,9 +174,13 @@ export async function launchSandbox(
     process.stderr.write(
       "Experimental SRT library sandbox: temporary agent home; live project edits; network restricted to Opper and allowed hosts.\n",
     );
+    for (const host of [new URL(request.routing.baseUrl).hostname, ...domains])
+      activity.emit("ALLOW", host);
     const code = await runSrt(
       command,
       {
+        // Interactive TUIs need raw-mode ioctl access to the inherited macOS PTY.
+        allowPty: process.platform === "darwin" && Boolean(process.stdin.isTTY),
         network: {
           allowedDomains: [
             new URL(request.routing.baseUrl).hostname,

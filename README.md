@@ -186,7 +186,7 @@ This is the non-interactive equivalent of the menu's "Remove Opper integration" 
 
 `opper launch --sandbox srt <agent>` runs the whole agent process under Anthropic's open-source Sandbox Runtime (SRT), with a temporary home, filesystem restrictions and a network allowlist. Missing libraries and startup failures never fall back to an unsandboxed launch.
 
-SRT 0.0.81 is bundled as an optional npm dependency; keep optional dependencies enabled. It requires Node >=22.12 and a host-installed agent. On Debian/Ubuntu, install OS dependencies with `sudo apt-get install bubblewrap socat`. macOS uses its native sandbox mechanism. No VM, container daemon or image download is needed. Supported agents: `claude`, `codex`, `pi`, `opencode`, and `hermes`.
+SRT 0.0.81 is bundled as an optional npm dependency; keep optional dependencies enabled. It requires Node >=22.12 and a host-installed agent. On Debian/Ubuntu, install OS dependencies with `sudo apt-get install bubblewrap socat`. macOS uses its native sandbox mechanism. No VM, container daemon or image download is needed. Supported agents: `claude`, `codex`, `pi`, `opencode`, and `hermes`. Interactive macOS launches enable SRT pseudo-terminal access so agent TUIs can use raw mode.
 
 Build in the CLI checkout, then launch from a scratch project. An existing globally installed `opper` will not include these local changes.
 
@@ -1083,3 +1083,11 @@ entries remain available during refresh; narrowing never silently removes an
 older selection. Existing native endpoint discovery remains in use where its
 response contract is compatible. See [agent model discovery](docs/agent-model-catalogs.md)
 for adapter support, compatibility boundaries and runtime validation.
+
+#### Local observability POC
+
+From a source checkout, run `node scripts/sandbox-observer/server.mjs` and open the full URL it prints. The dashboard discovers up to 64 recent sandbox sessions in your OS temporary directory, including sessions started in other terminals. It shows the harness, configured model, backend, project, start time and host monitor PID, alongside each session's network allowlist, blocked network attempts, project file-change notifications, reported tools, and a filterable event timeline. New sessions send a host heartbeat every five seconds; stale or older logs show an unknown status. This is a read-only POC with no extra dependencies or agent controls.
+
+The collector binds to `127.0.0.1` on a random port and requires a per-run token for log access. Keep the printed URL private. Refreshing the page requires reopening that URL. It reads at most 128 KiB per session and displays the latest 300 events; resource counts cover that window. Allowed connections, file reads, and subprocess execution are **not** captured. File notifications can include outside edits, and tool events are agent-reported. An empty map does not prove that no access occurred. Host activity logs stop after 8 MiB with a coverage warning; the agent-owned hook spool is not disk-quota limited. Stop the collector with Ctrl+C and remove temporary logs when no longer needed.
+
+Run collector tests with `node --test test/sandbox/observer.test.mjs`.
