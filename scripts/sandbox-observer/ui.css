@@ -390,3 +390,129 @@ article[hidden],
 .metadata > div {
   max-width: 100%;
 }
+
+#graph-policy {
+  display: inline-block;
+  width: auto;
+  margin: 0 6px 0 0;
+}
+.graph-legend,
+#graph-summary {
+  font-size: 12px;
+}
+.network-graph {
+  overflow: auto;
+  max-height: 500px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  padding: 12px;
+}
+.network-graph svg {
+  display: block;
+  width: 100%;
+  min-width: 650px;
+  height: auto;
+}
+.graph-edge {
+  fill: none;
+  stroke-width: 2;
+}
+.graph-edge.denied {
+  stroke: var(--rust);
+}
+.graph-edge.policy {
+  stroke: #8b9bb1;
+  stroke-dasharray: 5 5;
+}
+.graph-host rect {
+  fill: #f6f8fc;
+  stroke: #b7c4d6;
+}
+.graph-host.denied rect {
+  fill: #fff4ef;
+  stroke: #c58472;
+}
+.graph-host[role="button"] {
+  cursor: pointer;
+}
+.graph-host.active rect,
+.graph-host:focus rect {
+  stroke: var(--blue);
+  stroke-width: 3;
+}
+.graph-host:hover rect {
+  stroke-width: 2;
+}
+.graph-label {
+  fill: #23334b;
+  font-size: 15px;
+  font-weight: 600;
+}
+.graph-caption {
+  fill: #5c6c80;
+  font-size: 12px;
+}
+.graph-source {
+  fill: #eaf0fc;
+  stroke: var(--blue);
+  stroke-width: 2;
+}
+#clear-host {
+  background: white;
+  border: 1px solid #a5b5cc;
+  padding: 6px 12px;
+  border-radius: 5px;
+  color: var(--blue);
+}
+
+.view-tabs {
+  display: flex;
+  gap: 24px;
+  border-bottom: 1px solid var(--line);
+  margin-top: 26px;
+}
+.view-tabs button {
+  background: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 12px 4px;
+  color: var(--muted);
+}
+.view-tabs button[aria-selected="true"] {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+  font-weight: 600;
+}
+.network-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px 40px;
+  margin: 24px 0;
+}
+.network-counts strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1.2;
+}
+.network-counts span {
+  display: block;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.permitted {
+  color: #176148;
+}
+.graph-edge.policy {
+  stroke: #288765;
+}
+.graph-host.policy rect {
+  fill: #eef8f3;
+  stroke: #77b59a;
+}
+.graph-host.policy .graph-caption {
+  fill: #176148;
+}
+[role="tabpanel"][hidden] {
+  display: none;
+}

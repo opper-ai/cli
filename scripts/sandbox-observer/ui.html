@@ -51,31 +51,75 @@
             not captured. File changes can include outside edits; tool events
             are reported by the agent.
           </p>
-          <section>
-            <h3>Resource map</h3>
-            <div class="map">
-              <div class="source">
-                <strong id="source"></strong><small>Sandbox session</small>
+          <div class="view-tabs" role="tablist" aria-label="Session view">
+            <button
+              id="activity-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="activity-panel"
+            >
+              Activity
+            </button>
+            <button
+              id="network-tab"
+              role="tab"
+              aria-selected="true"
+              aria-controls="network-panel"
+            >
+              Network
+            </button>
+          </div>
+          <div id="network-panel" role="tabpanel" aria-labelledby="network-tab">
+            <div class="network-counts" id="network-counts"></div>
+            <section aria-labelledby="graph-title">
+              <div class="timelineHeading">
+                <h3 id="graph-title">Network attempts</h3>
+                <label
+                  ><input type="checkbox" id="graph-policy" checked /> Include
+                  policy hosts</label
+                >
               </div>
-              <div class="resources">
-                <div>
-                  <h4>Network</h4>
-                  <p class="muted">Policy and blocked attempts</p>
-                  <ul id="network"></ul>
+              <p class="muted graph-legend">
+                <span class="blocked">Solid line: blocked attempts</span> ·
+                Dashed green line: allowed by policy, traffic unobserved
+              </p>
+              <div id="network-graph" class="network-graph"></div>
+              <p id="graph-summary" class="muted"></p>
+              <button id="clear-host" hidden>Clear host filter</button>
+            </section>
+          </div>
+          <div
+            id="activity-panel"
+            role="tabpanel"
+            aria-labelledby="activity-tab"
+            hidden
+          >
+            <section>
+              <h3>Resource map</h3>
+              <div class="map">
+                <div class="source">
+                  <strong id="source"></strong><small>Sandbox session</small>
                 </div>
-                <div>
-                  <h4>Files</h4>
-                  <p class="muted">Project change notifications</p>
-                  <ul id="files"></ul>
-                </div>
-                <div>
-                  <h4>Tools</h4>
-                  <p class="muted">Agent-reported activity</p>
-                  <ul id="tools"></ul>
+                <div class="resources">
+                  <div>
+                    <h4>Network</h4>
+                    <p class="muted">Policy and blocked attempts</p>
+                    <ul id="network"></ul>
+                  </div>
+                  <div>
+                    <h4>Files</h4>
+                    <p class="muted">Project change notifications</p>
+                    <ul id="files"></ul>
+                  </div>
+                  <div>
+                    <h4>Tools</h4>
+                    <p class="muted">Agent-reported activity</p>
+                    <ul id="tools"></ul>
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
+          </div>
           <section>
             <div class="timelineHeading">
               <h3>Event timeline</h3>
