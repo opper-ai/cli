@@ -31,8 +31,7 @@ export function deploymentForApiUrl(url: string): Deployment | undefined {
 }
 
 /** Resolves a deployment before authentication, including fresh browser setup. */
-export function resolveDeploymentEndpoint(fallback?: string): string {
-  const deployment = selectedDeployment();
+export function resolveDeploymentEndpoint(fallback?: string, deployment = selectedDeployment()): string {
   const override = process.env.OPPER_BASE_URL;
   if (deployment && override !== undefined && !sameApiUrl(override, deployment.apiUrl)) {
     throw new OpperError("INVALID_ARGUMENT", "OPPER_BASE_URL conflicts with the selected deployment.", "Unset OPPER_BASE_URL or choose the matching deployment.");
@@ -41,8 +40,7 @@ export function resolveDeploymentEndpoint(fallback?: string): string {
 }
 
 /** Select credentials by deployment; a name alone never rebinds a saved key. */
-export async function slotNameForSelection(explicitKey?: string): Promise<string> {
-  const deployment = selectedDeployment();
+export async function slotNameForSelection(explicitKey?: string, deployment = selectedDeployment()): Promise<string> {
   if (explicitKey !== undefined) return explicitKey;
   const config = await readConfig();
   const active = config?.defaultKey ?? "default";

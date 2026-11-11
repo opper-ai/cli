@@ -1,7 +1,7 @@
 import { select, confirm, text, outro, isCancel, cancel, log } from "@clack/prompts";
 import { isLaunchable } from "../agents/types.js";
 import { launchCommand } from "./launch.js";
-import { loginCommand } from "./login.js";
+import { manualLoginCommand } from "./manual-login.js";
 import { askCommand } from "./ask.js";
 import { brand } from "../ui/colors.js";
 import { printBanner } from "../ui/banner.js";
@@ -181,7 +181,11 @@ async function maybePromptSignIn(opts: MenuOptions): Promise<void> {
   if (isCancel(wantsLogin) || wantsLogin !== true) return;
 
   try {
-    await loginCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
+    const key = await manualLoginCommand({
+      ...(opts.explicitKey !== undefined ? { key: opts.explicitKey } : {}),
+      ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
+    });
+    if (key !== undefined) opts.key = key;
   } catch (err) {
     reportError(err);
   }

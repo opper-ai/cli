@@ -1,5 +1,5 @@
 import { whoamiCommand } from "../commands/whoami.js";
-import { loginCommand } from "../commands/login.js";
+import { manualLoginCommand } from "../commands/manual-login.js";
 import { logoutCommand } from "../commands/logout.js";
 import {
   configAddCommand,
@@ -26,10 +26,10 @@ const register: RegisterFn = (program, ctx) => {
     .option("--renew", "replace the stored key after fresh browser approval")
     .option("--base-url <url>", "override the Opper API base URL")
     .action(async (cmdOpts: { force?: boolean; renew?: boolean; baseUrl?: string }) => {
-      await loginCommand({
-        key: ctx.key(),
+      await manualLoginCommand({
+        ...(program.opts().key !== undefined ? { key: program.opts().key as string } : {}),
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
+        ...(cmdOpts.baseUrl !== undefined ? { baseUrl: cmdOpts.baseUrl } : {}),
         ...(cmdOpts.force ? { force: true } : {}),
         ...(cmdOpts.renew ? { renew: true } : {}),
       });
@@ -73,7 +73,7 @@ const register: RegisterFn = (program, ctx) => {
       await configAddCommand({
         name,
         apiKey,
-        ...(cmdOpts.baseUrl ? { baseUrl: cmdOpts.baseUrl } : {}),
+        ...(cmdOpts.baseUrl !== undefined ? { baseUrl: cmdOpts.baseUrl } : {}),
       });
     });
 

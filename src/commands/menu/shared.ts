@@ -6,6 +6,8 @@ import type { AgentAdapter } from "../../agents/types.js";
 export interface MenuOptions {
   projectUuid?: string | undefined;
   key: string;
+  /** Preserve an explicit CLI --key pin when entering manual sign-in. */
+  explicitKey?: string;
   version?: string;
 }
 

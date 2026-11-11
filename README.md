@@ -53,7 +53,7 @@ Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each ho
 
 | Command | Description |
 |---------|-------------|
-| `opper login [-d main|evroc] [--force] [--renew] [--base-url <url>]` | OAuth device flow; stores into the active slot. `--renew` requests a replacement key after fresh browser approval. |
+| `opper login [-d main|evroc] [--force] [--renew] [--base-url <url>]` | Choose a deployment interactively, then approve the OAuth device flow; explicit selectors skip the choice. `--renew` requests a replacement key after fresh browser approval. |
 | `opper logout [--all] [--yes]` | Clear credentials for the active slot, or every slot. |
 | `opper whoami` | Show the authenticated user for the active slot. |
 | `opper config add <name> <api-key> [--base-url <url>]` | Manually store an API key in a slot. |
@@ -63,8 +63,17 @@ Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each ho
 | `opper config remove <name>` | Delete a stored slot. |
 | `opper config project <name> [uuid]` | Set a default resource project for a slot; omit the UUID to clear it. |
 
-A fresh installation defaults to the main (AWS) deployment without prompting.
-Select Evroc by name; no API URL is needed:
+Interactive `opper login` starts with **platform.opper.ai** selected and an
+**Other deployment…** option that reveals **evroc.on.opper.ai**. A remembered
+Evroc profile preselects Other and then Evroc. Successful sign-in remembers the
+profile for later commands. Cancelling or denied approval leaves the active
+profile unchanged. The first-run and Account sign-in menus use the same choice.
+
+Explicit `-d`, `OPPER_DEPLOYMENT`, `--base-url`, `OPPER_BASE_URL`, and `--key`
+bypass this menu. Non-interactive login also bypasses it, using the saved profile
+or main (AWS) on a fresh installation. Existing custom API profiles keep their
+endpoint. Automatic agent authentication and renewal never ask for a deployment.
+Select Evroc directly by name; no API URL is needed:
 
 ```bash
 opper login -d evroc       # approve on Evroc, save and activate its slot

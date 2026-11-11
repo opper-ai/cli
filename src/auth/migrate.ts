@@ -12,31 +12,21 @@ interface LegacyFile {
   >;
 }
 
-export async function maybeMigrateLegacyConfig(legacyPath: string): Promise<boolean> {
-  const sentinel = legacyMigrationSentinelPath();
-  if (existsSync(sentinel)) return false;
-  if (!existsSync(legacyPath)) {
-    await stampSentinel(sentinel);
-    return false;
-  }
-  if (existsSync(configPath())) {
-    await stampSentinel(sentinel);
-    return false;
-  }
+/** Read the same eligible legacy profile as migration, without writing config or a sentinel. */
+export async function previewLegacyConfig(legacyPath: string): Promise<Config | null> {
+  if (existsSync(legacyMigrationSentinelPath()) || !existsSync(legacyPath) || existsSync(configPath())) return null;
 
   let raw: string;
   try {
     raw = await readFile(legacyPath, "utf8");
   } catch {
-    await stampSentinel(sentinel);
-    return false;
+    return null;
   }
 
   const parsed = parseYaml(raw) as LegacyFile | null;
   const keys = parsed?.api_keys;
   if (!keys || typeof keys !== "object") {
-    await stampSentinel(sentinel);
-    return false;
+    return null;
   }
 
   const slots: Config["keys"] = {};
@@ -49,14 +39,20 @@ export async function maybeMigrateLegacyConfig(legacyPath: string): Promise<bool
     };
   }
   if (Object.keys(slots).length === 0) {
-    await stampSentinel(sentinel);
-    return false;
+    return null;
   }
 
   const firstKey = Object.keys(slots)[0]!;
   const defaultKey = "default" in slots ? "default" : firstKey;
 
-  const wrote = await writeConfigIfAbsent({ version: 1, defaultKey, keys: slots });
+  return { version: 1, defaultKey, keys: slots };
+}
+
+export async function maybeMigrateLegacyConfig(legacyPath: string): Promise<boolean> {
+  const sentinel = legacyMigrationSentinelPath();
+  if (existsSync(sentinel)) return false;
+  const config = await previewLegacyConfig(legacyPath);
+  const wrote = config ? await writeConfigIfAbsent(config) : false;
   await stampSentinel(sentinel);
   return wrote;
 }

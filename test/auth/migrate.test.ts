@@ -3,9 +3,9 @@ import { writeFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { useTempOpperHome } from "../helpers/temp-home.js";
-import { maybeMigrateLegacyConfig } from "../../src/auth/migrate.js";
+import { maybeMigrateLegacyConfig, previewLegacyConfig } from "../../src/auth/migrate.js";
 import { readConfig } from "../../src/auth/config.js";
-import { legacyMigrationSentinelPath } from "../../src/auth/paths.js";
+import { configPath, legacyMigrationSentinelPath } from "../../src/auth/paths.js";
 
 const home = useTempOpperHome();
 
@@ -91,5 +91,29 @@ describe("maybeMigrateLegacyConfig", () => {
     } finally {
       rmSync(legacyDir, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe("previewLegacyConfig", () => {
+  it("returns the migration profile without config or sentinel writes", async () => {
+    const path = join(home.get(), "legacy-preview.yml");
+    writeFileSync(path, "api_keys:\n  default:\n    key: synthetic-legacy\n    baseUrl: https://custom.example\n");
+    const preview = await previewLegacyConfig(path);
+    expect(preview?.defaultKey).toBe("default");
+    expect(preview?.keys.default).toEqual({ apiKey: "synthetic-legacy", baseUrl: "https://custom.example", source: "migrated" });
+    expect(existsSync(configPath())).toBe(false);
+    expect(existsSync(legacyMigrationSentinelPath())).toBe(false);
+    await maybeMigrateLegacyConfig(path);
+    expect(await readConfig()).toEqual(preview);
+  });
+  it.each(["missing", "empty", "sentinel", "config"])("previews no migration when %s", async (guard) => {
+    const path = join(home.get(), "legacy-preview.yml");
+    if (guard !== "missing") writeFileSync(path, guard === "empty" ? "api_keys: {}\n" : "api_keys:\n  default:\n    key: synthetic-legacy\n");
+    if (guard === "sentinel") writeFileSync(legacyMigrationSentinelPath(), "previous migration\n");
+    if (guard === "config") writeFileSync(configPath(), "{invalid-existing-config");
+    expect(await previewLegacyConfig(path)).toBeNull();
+    expect(existsSync(configPath())).toBe(guard === "config");
+    expect(existsSync(legacyMigrationSentinelPath())).toBe(guard === "sentinel");
   });
 });

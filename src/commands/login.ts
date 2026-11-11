@@ -7,10 +7,12 @@ import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
 import { openBrowser } from "../util/open-browser.js";
 import { validateProjectUuid } from "../api/resolve.js";
-import { DEPLOYMENTS, deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment } from "../config/deployments.js";
+import { DEPLOYMENTS, deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment, getDeployment, type DeploymentName } from "../config/deployments.js";
 
 export interface LoginOptions {
   key: string;
+  /** Explicit choice from the manual sign-in menu; never changes process environment. */
+  deployment?: DeploymentName;
   baseUrl?: string;
   force?: boolean;
   renew?: boolean;
@@ -21,25 +23,15 @@ export interface LoginOptions {
   legacyPath?: string;
 }
 
-export async function loginCommand(opts: LoginOptions): Promise<void> {
-  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+export async function loginCommand(opts: LoginOptions): Promise<boolean> {
+  const deployment = validateLoginInputs(opts);
   let existing = await getSlot(opts.key);
   if (!opts.force) {
-    const migrated = await maybeMigrateLegacyConfig(
-      opts.legacyPath ?? legacyConfigPath(),
-    );
-    if (migrated) {
-      log.info(
-        "Migrated legacy ~/.oppercli into ~/.opper/config.json (one-time).",
-      );
-    }
+    await migrateLegacyConfigForLogin(opts.legacyPath);
     existing = await getSlot(opts.key);
   }
-  const deployment = selectedDeployment();
-  if (deployment && opts.baseUrl && !sameApiUrl(opts.baseUrl, deployment.apiUrl)) {
-    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
-  }
-  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl);
+  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl, deployment);
+  sameApiUrl(baseUrl, baseUrl); // Validate explicit empty or malformed roots before starting OAuth.
   const existingMatches = !existing || sameApiUrl(existing.baseUrl ?? "https://api.opper.ai", baseUrl);
   if (deployment && !existingMatches) {
     throw new OpperError("INVALID_ARGUMENT", `Slot "${opts.key}" belongs to another deployment.`, "Choose a new --key slot or omit --key to select a matching slot automatically.");
@@ -59,7 +51,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       if (deployment && opts.activate !== false) await setDefaultSlot(opts.key);
       const who = existing.user ? ` as ${existing.user.email}` : "";
       log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
-      return;
+      return true;
     }
   }
 
@@ -124,12 +116,33 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);
     outro(brand.accent("✓"));
+    return true;
   } catch (err) {
     if (promptShown) s.stop("Sign-in failed");
     if (isCancel(err)) {
       cancel("Sign-in cancelled.");
-      return;
+      return false;
     }
     throw err;
+  }
+}
+
+
+/** Reject explicit routing errors before migration or any other sign-in side effect. */
+export function validateLoginInputs(opts: Pick<LoginOptions, "baseUrl" | "deployment" | "projectUuid">) {
+  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+  const deployment = opts.deployment !== undefined ? getDeployment(opts.deployment) : selectedDeployment();
+  const selectedUrl = opts.baseUrl ?? resolveDeploymentEndpoint(undefined, deployment);
+  sameApiUrl(selectedUrl, selectedUrl);
+  if (deployment && !sameApiUrl(selectedUrl, deployment.apiUrl)) {
+    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
+  }
+  return deployment;
+}
+
+/** Share migration and its one-time notice with manual sign-in before resolving a slot. */
+export async function migrateLegacyConfigForLogin(path = legacyConfigPath()): Promise<void> {
+  if (await maybeMigrateLegacyConfig(path)) {
+    log.info("Migrated legacy ~/.oppercli into ~/.opper/config.json (one-time).");
   }
 }
