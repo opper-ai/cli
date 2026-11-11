@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
-import { getSlot, readConfig, setSlot } from "../../src/auth/config.js";
+import { getSlot, readConfig, setSlot, writeConfig } from "../../src/auth/config.js";
 
 const adapter = vi.hoisted(() => ({
   name: "profile-test", displayName: "Profile test agent", docsUrl: "https://example.invalid",
@@ -55,6 +55,41 @@ describe("automatic launch login preserves the saved profile", () => {
     if (stored === "expired") expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ renew: true, currentCredentialId: "old-id" }));
     if (installed) expect(adapter.spawn).toHaveBeenCalledWith([], expect.objectContaining({ apiKey: "synthetic-new-evroc", apiBaseUrl: "https://api.evroc.on.opper.ai" }), expect.any(Object));
     else expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects first automatic Evroc login into the default slot before requesting a credential", async () => {
+    adapter.detect.mockResolvedValue({ installed: true });
+    await expect(launchCommand({ agent: adapter.name, key: "default" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT", hint: expect.stringContaining("--key") });
+    expect(runDeviceFlow).not.toHaveBeenCalled();
+    expect(adapter.detect).not.toHaveBeenCalled();
+    expect(await readConfig()).toBeNull();
+  });
+
+  it("rechecks a missing active slot under the config lock after browser approval", async () => {
+    vi.mocked(runDeviceFlow).mockImplementationOnce(async () => {
+      await writeConfig({ version: 1, defaultKey: "evroc", keys: {} });
+      return { apiKey: "synthetic-new-evroc", source: "device-flow" };
+    });
+    adapter.detect.mockResolvedValue({ installed: true });
+    await expect(launchCommand({ agent: adapter.name, key: "evroc" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(runDeviceFlow).toHaveBeenCalledOnce();
+    expect(await readConfig()).toEqual({ version: 1, defaultKey: "evroc", keys: {} });
+    expect(adapter.spawn).not.toHaveBeenCalled();
+  });
+
+  it("allows automatic main login into the initial default slot", async () => {
+    vi.stubEnv("OPPER_DEPLOYMENT", "main");
+    adapter.detect.mockResolvedValue({ installed: true });
+    expect(await launchCommand({ agent: adapter.name, key: "default" })).toBe(0);
+    expect((await readConfig())?.defaultKey).toBe("default");
+    expect((await getSlot("default"))?.baseUrl).toBe("https://api.opper.ai");
+  });
+
+  it("allows explicit Evroc login to select the initial default slot", async () => {
+    await loginCommand({ key: "default" });
+    expect((await readConfig())?.defaultKey).toBe("default");
+    expect((await getSlot("default"))?.baseUrl).toBe("https://api.evroc.on.opper.ai");
+    expect(runDeviceFlow).toHaveBeenCalledOnce();
   });
 
   it("preserves the active profile during Copilot's rejected-credential recovery", async () => {

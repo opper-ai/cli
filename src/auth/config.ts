@@ -135,17 +135,30 @@ export async function setSlot(name: string, slot: AuthSlot): Promise<void> {
   });
 }
 
+function assertInactiveSlotCreationInConfig(name: string, config: Config): void {
+  if (config.defaultKey === name && !config.keys[name]) {
+    throw new OpperError("INVALID_ARGUMENT", "Automatic sign-in would change the default deployment.",
+      "Choose another --key slot (for example, evroc), or run `opper login` explicitly to select this profile.");
+  }
+}
+
+/** Preflight only; credential writes repeat this check under their config lock. */
+export async function assertInactiveSlotCreation(name: string): Promise<void> {
+  assertInactiveSlotCreationInConfig(name, (await readConfig()) ?? emptyConfig());
+}
+
 /** Compare and replace inside one lock so a late browser result cannot overwrite a newer slot. */
 export async function replaceSlotIfUnchanged(
   name: string,
   expected: AuthSlot | null,
   replacement: AuthSlot,
-  options: { preserveDefaultKey?: boolean } = {},
+  options: { preserveDefaultKey?: boolean; rejectDefaultSlotCreation?: boolean } = {},
 ): Promise<boolean> {
   return withConfigLock(async () => {
     const cfg = (await readConfig()) ?? emptyConfig();
     const current = cfg.keys[name] ?? null;
     if (!isDeepStrictEqual(current, expected)) return false;
+    if (options.rejectDefaultSlotCreation) assertInactiveSlotCreationInConfig(name, cfg);
     const isFirstSlot = Object.keys(cfg.keys).length === 0;
     cfg.keys[name] = replacement;
     if (isFirstSlot && !options.preserveDefaultKey) cfg.defaultKey = name;

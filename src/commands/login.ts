@@ -1,13 +1,13 @@
 import { intro, outro, note, spinner, log, isCancel, cancel } from "@clack/prompts";
 import { runDeviceFlow } from "../auth/device-flow.js";
-import { getSlot, isSlotExpired, replaceSlotIfUnchanged, setDefaultSlot } from "../auth/config.js";
+import { getSlot, isSlotExpired, replaceSlotIfUnchanged, setDefaultSlot, assertInactiveSlotCreation } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
 import { openBrowser } from "../util/open-browser.js";
 import { validateProjectUuid } from "../api/resolve.js";
-import { deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment } from "../config/deployments.js";
+import { DEPLOYMENTS, deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment } from "../config/deployments.js";
 
 export interface LoginOptions {
   key: string;
@@ -44,6 +44,10 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
   if (deployment && !existingMatches) {
     throw new OpperError("INVALID_ARGUMENT", `Slot "${opts.key}" belongs to another deployment.`, "Choose a new --key slot or omit --key to select a matching slot automatically.");
   }
+  // Creating a non-main credential in a missing default slot would change
+  // unqualified commands even if the default slot name itself stayed the same.
+  const rejectDefaultSlotCreation = opts.activate === false && !sameApiUrl(baseUrl, DEPLOYMENTS.main.apiUrl);
+  if (rejectDefaultSlotCreation) await assertInactiveSlotCreation(opts.key);
   if (!opts.force) {
     if (existing && existingMatches && !opts.renew && !isSlotExpired(existing)) {
       if (opts.projectUuid !== undefined) {
@@ -107,7 +111,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
 
     // Browser approval can take minutes. Compare and write under one lock so
     // another process's newer credential cannot be overwritten by this result.
-    if (!await replaceSlotIfUnchanged(opts.key, existing, slot, { preserveDefaultKey: opts.activate === false })) {
+    if (!await replaceSlotIfUnchanged(opts.key, existing, slot, { preserveDefaultKey: opts.activate === false, rejectDefaultSlotCreation })) {
       throw new OpperError(
         "API_ERROR",
         "The stored credential changed while browser approval was in progress.",
