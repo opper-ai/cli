@@ -30,6 +30,14 @@ export async function resolveApiBaseUrl(keyName?: string): Promise<string> {
   return endpointForSlot(slot);
 }
 
+/** Fresh MCP authorization needs an endpoint, not an existing runtime credential. */
+export async function resolveSetupApiBaseUrl(keyName?: string): Promise<string> {
+  if (selectedDeployment() || process.env.OPPER_BASE_URL !== undefined) {
+    return resolveDeploymentEndpoint();
+  }
+  return resolveApiBaseUrl(keyName);
+}
+
 function endpointForSlot(slot: AuthSlot | null): string {
   const baseUrl = resolveDeploymentEndpoint(slot?.baseUrl);
   if (slot && (selectedDeployment() || deploymentForApiUrl(baseUrl)) && !sameApiUrl(slot.baseUrl ?? DEFAULT_BASE_URL, baseUrl)) {

@@ -59,6 +59,25 @@ describe("real CLI deployment workflow", () => {
     expect((await run(["config", "remove", "evroc"], { OPPER_DEPLOYMENT: "evroc" })).code).toBe(0);
     expect(JSON.parse(readFileSync(path, "utf8")).keys.evroc).toBeUndefined();
   }, 60_000);
+  it.each(["malformed", "ambiguous"])("runs independent key validation and explicit MCP setup with %s saved credentials", async (condition) => {
+    const path = join(home, "config.json");
+    const original = condition === "malformed" ? "{invalid json" : JSON.stringify({ version: 1, defaultKey: "default", keys: {
+      default: { apiKey: "synthetic-main", baseUrl: "https://api.opper.ai" },
+      one: { apiKey: "synthetic-one", baseUrl: "https://api.evroc.on.opper.ai" },
+      two: { apiKey: "synthetic-two", baseUrl: "https://api.evroc.on.opper.ai" },
+    } });
+    writeFileSync(path, original);
+    const key = await run(["-d", "evroc", "keys", "create", "--project", "invalid", "--name", "fixture", "--output", join(home, "key.env"), "--mcp-url", "http://127.0.0.1:1/mcp"]);
+    expect(key.code).toBe(8);
+    expect(key.stderr).toContain("Project and idempotency identifiers must be UUIDs");
+    const mcp = await run(["-d", "evroc", "mcp", "add", "opencode", "--url", "https://separate.example/mcp"], { OPPER_EDITOR_HOME: home });
+    expect(mcp.code, mcp.stderr).toBe(0);
+    const alias = await run(["-d", "evroc", "editors", "opencode", "--mcp", "--mcp-url", "https://separate.example/mcp"], { OPPER_EDITOR_HOME: home });
+    expect(alias.code, alias.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, ".config", "opencode", "opencode.json"), "utf8")).mcp.opper.url).toBe("https://separate.example/mcp");
+    expect(readFileSync(path, "utf8")).toBe(original);
+  }, 60_000);
+
   it("supports deployment env selection independently of the saved account", async () => {
     seed();
     const result = await run(["whoami"], { OPPER_API_KEY: "synthetic-env", OPPER_DEPLOYMENT: "evroc" });

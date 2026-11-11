@@ -74,10 +74,12 @@ program.hook("preAction", async (_command, actionCommand) => {
   // These actions either operate on explicit configuration arguments or use
   // no API credentials. Leave any necessary config reads to the action itself.
   const independent = parent === "config" || parent === "skills"
+    || (parent === "keys" && name === "create")
+    || (parent === "mcp" && name === "add")
     || name === "version" || name === "help"
     || (parent === "agents" && ["list", "remove"].includes(name))
     || (parent === "editors" && (name === "list"
-      || (name === "opencode" && options.removeLoginBridge)
+      || (name === "opencode" && (options.removeLoginBridge || options.mcp))
       || (name === "github-copilot-vscode" && options.remove)))
     || (parent === "proxy" && ["status", "tag", "clear", "stop"].includes(name))
     || (name === "logout" && options.all)

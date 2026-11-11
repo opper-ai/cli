@@ -1,9 +1,11 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 import { readConfig, setSlot, setDefaultSlot } from "../../src/auth/config.js";
 import { DEPLOYMENTS, deploymentForApiUrl, selectedDeployment, slotNameForSelection } from "../../src/config/deployments.js";
-import { resolveApiBaseUrl, resolveApiContext } from "../../src/api/resolve.js";
-useTempOpperHome();
+import { resolveApiBaseUrl, resolveApiContext, resolveSetupApiBaseUrl } from "../../src/api/resolve.js";
+const tempHome = useTempOpperHome();
 afterEach(() => vi.unstubAllEnvs());
 describe("deployment selection", () => {
   it("recognizes exact deployment API roots, including trailing slashes", () => {
@@ -74,6 +76,25 @@ describe("deployment selection", () => {
     vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
     vi.stubEnv("OPPER_BASE_URL", DEPLOYMENTS.main.apiUrl);
     await expect(resolveApiBaseUrl()).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+  it.each([
+    { name: "OPPER_DEPLOYMENT", value: "evroc", expected: DEPLOYMENTS.evroc.apiUrl },
+    { name: "OPPER_BASE_URL", value: "https://custom.example", expected: "https://custom.example" },
+  ])("resolves explicit setup $name without reading malformed stored credentials", async ({ name, value, expected }) => {
+    writeFileSync(join(tempHome.get(), "config.json"), "{invalid json");
+    vi.stubEnv(name, value);
+    expect(await resolveSetupApiBaseUrl("unrelated-slot")).toBe(expected);
+  });
+  it("keeps explicit setup targets independent of saved runtime credential bindings", async () => {
+    await setSlot("default", { apiKey: "synthetic-main", baseUrl: DEPLOYMENTS.main.apiUrl });
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    expect(await resolveSetupApiBaseUrl("default")).toBe(DEPLOYMENTS.evroc.apiUrl);
+    await expect(resolveApiBaseUrl("default")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    await expect(resolveApiContext("default")).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+  it("remembers the saved profile endpoint for unqualified setup", async () => {
+    await setSlot("work", { apiKey: "synthetic-evroc", baseUrl: DEPLOYMENTS.evroc.apiUrl });
+    expect(await resolveSetupApiBaseUrl()).toBe(DEPLOYMENTS.evroc.apiUrl);
   });
   it("keeps legacy custom URL overrides available without a named deployment", async () => {
     await setSlot("custom", { apiKey: "custom", baseUrl: "https://original.example" });
