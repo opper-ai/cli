@@ -7,10 +7,12 @@ import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
 import { openBrowser } from "../util/open-browser.js";
 import { validateProjectUuid } from "../api/resolve.js";
-import { DEPLOYMENTS, deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment } from "../config/deployments.js";
+import { DEPLOYMENTS, deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment, getDeployment, type DeploymentName } from "../config/deployments.js";
 
 export interface LoginOptions {
   key: string;
+  /** Explicit choice from the manual sign-in menu; never changes process environment. */
+  deployment?: DeploymentName;
   baseUrl?: string;
   force?: boolean;
   renew?: boolean;
@@ -21,7 +23,7 @@ export interface LoginOptions {
   legacyPath?: string;
 }
 
-export async function loginCommand(opts: LoginOptions): Promise<void> {
+export async function loginCommand(opts: LoginOptions): Promise<boolean> {
   if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   let existing = await getSlot(opts.key);
   if (!opts.force) {
@@ -35,11 +37,12 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     }
     existing = await getSlot(opts.key);
   }
-  const deployment = selectedDeployment();
+  const deployment = opts.deployment ? getDeployment(opts.deployment) : selectedDeployment();
   if (deployment && opts.baseUrl && !sameApiUrl(opts.baseUrl, deployment.apiUrl)) {
     throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
   }
-  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl);
+  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl, deployment);
+  sameApiUrl(baseUrl, baseUrl); // Validate explicit empty or malformed roots before starting OAuth.
   const existingMatches = !existing || sameApiUrl(existing.baseUrl ?? "https://api.opper.ai", baseUrl);
   if (deployment && !existingMatches) {
     throw new OpperError("INVALID_ARGUMENT", `Slot "${opts.key}" belongs to another deployment.`, "Choose a new --key slot or omit --key to select a matching slot automatically.");
@@ -59,7 +62,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       if (deployment && opts.activate !== false) await setDefaultSlot(opts.key);
       const who = existing.user ? ` as ${existing.user.email}` : "";
       log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
-      return;
+      return true;
     }
   }
 
@@ -124,11 +127,12 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);
     outro(brand.accent("✓"));
+    return true;
   } catch (err) {
     if (promptShown) s.stop("Sign-in failed");
     if (isCancel(err)) {
       cancel("Sign-in cancelled.");
-      return;
+      return false;
     }
     throw err;
   }

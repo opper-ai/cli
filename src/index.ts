@@ -60,7 +60,7 @@ program
       program.outputHelp();
       return;
     }
-    await menuCommand({ key: activeKey, version: pkg.version, projectUuid: program.opts().projectUuid });
+    await menuCommand({ key: activeKey, version: pkg.version, projectUuid: program.opts().projectUuid, ...(program.opts().key !== undefined ? { explicitKey: program.opts().key as string } : {}) });
   });
 
 let activeKey = "default";
@@ -73,7 +73,7 @@ program.hook("preAction", async (_command, actionCommand) => {
   const options = actionCommand.opts();
   // These actions either operate on explicit configuration arguments or use
   // no API credentials. Leave any necessary config reads to the action itself.
-  const independent = parent === "config" || parent === "skills"
+  const independent = name === "login" || parent === "config" || parent === "skills"
     || (parent === "keys" && name === "create")
     || (parent === "mcp" && name === "add")
     || name === "version" || name === "help"

@@ -34,6 +34,6 @@ export const copilot: AgentAdapter = {
       }) {
         return renewAgentCredential({previous,signal,onPrompt,baseUrl:routing.apiBaseUrl});
       },
-    }), () => loginCommand({key:routing.keyName ?? "default",baseUrl:routing.apiBaseUrl,force:true,activate:false}));
+    }), async () => { await loginCommand({key:routing.keyName ?? "default",baseUrl:routing.apiBaseUrl,force:true,activate:false}); });
   },
 };

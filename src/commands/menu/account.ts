@@ -1,5 +1,5 @@
 import { getSlot } from "../../auth/config.js";
-import { loginCommand } from "../login.js";
+import { manualLoginCommand } from "../manual-login.js";
 import { logoutCommand } from "../logout.js";
 import { whoamiCommand } from "../whoami.js";
 import { configListCommand } from "../config.js";
@@ -35,9 +35,14 @@ export async function accountMenu(opts: MenuOptions): Promise<void> {
         case "show":
           await whoamiCommand({ key: opts.key });
           break;
-        case "login":
-          await loginCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
+        case "login": {
+          const key = await manualLoginCommand({
+            ...(opts.explicitKey !== undefined ? { key: opts.explicitKey } : {}),
+            ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
+          });
+          if (key !== undefined) opts.key = key;
           break;
+        }
         case "logout":
           await logoutCommand({ key: opts.key, all: false });
           break;

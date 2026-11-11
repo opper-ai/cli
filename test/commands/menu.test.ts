@@ -106,7 +106,7 @@ describe("menuCommand", () => {
     hermesIsConfigured.mockReset();
     hermesConfigure.mockReset();
     hermesAdapter.unconfigure.mockReset();
-    loginMock.mockReset();
+    loginMock.mockReset().mockResolvedValue(true);
     logoutMock.mockReset();
     whoamiMock.mockReset();
     launchMock.mockReset();
@@ -266,6 +266,35 @@ describe("menuCommand", () => {
 
     await menuCommand({ key: "default" });
     expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+  });
+
+  it.each(["first-run", "account"])("uses the successful %s login immediately in the same menu session", async (entry) => {
+    const streams = [process.stdin, process.stdout];
+    const descriptors = streams.map(stream => Object.getOwnPropertyDescriptor(stream, "isTTY"));
+    streams.forEach(stream => Object.defineProperty(stream, "isTTY", { configurable: true, value: true }));
+    try {
+      await deleteSlot("default");
+      loginMock.mockImplementationOnce(async () => {
+        await setSlot("evroc", { apiKey: "synthetic", baseUrl: "https://api.evroc.on.opper.ai" });
+        return true;
+      });
+      if (entry === "first-run") answers.push(() => true);
+      else answers.push(() => false, () => "account", () => "login");
+      answers.push(() => "other", () => "evroc");
+      if (entry === "first-run") answers.push(() => "account");
+      answers.push(() => "show", () => "back", () => "quit");
+      const options = { key: "default" };
+      await menuCommand(options);
+      expect(loginMock).toHaveBeenCalledWith({ key: "evroc", deployment: "evroc" });
+      expect(options.key).toBe("evroc");
+      expect(whoamiMock).toHaveBeenCalledWith({ key: "evroc" });
+    } finally {
+      streams.forEach((stream, index) => {
+        const descriptor = descriptors[index];
+        if (descriptor) Object.defineProperty(stream, "isTTY", descriptor);
+        else delete (stream as { isTTY?: boolean }).isTTY;
+      });
+    }
   });
 
   it("does not prompt for sign-in when a slot already exists", async () => {
