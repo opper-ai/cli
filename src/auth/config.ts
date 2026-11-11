@@ -20,6 +20,7 @@ export interface AuthSlot {
   /** Absolute server-issued expiry. Omitted for credentials without a lifetime. */
   expiresAt?: string;
   baseUrl?: string;
+  deployment?: "main" | "evroc";
   user?: { email: string; name: string };
   obtainedAt?: string;
   source?: "device-flow" | "manual" | "migrated";
@@ -170,5 +171,15 @@ export async function clearAllSlots(): Promise<void> {
     const cfg = await readConfig();
     if (!cfg || Object.keys(cfg.keys).length === 0) return;
     await writeConfigUnlocked({ ...cfg, keys: {}, defaultKey: "default" });
+  });
+}
+
+/** Switch the default without replacing credentials or touching other slots. */
+export async function setDefaultSlot(name: string): Promise<void> {
+  await withConfigLock(async () => {
+    const cfg = await readConfig();
+    if (!cfg?.keys[name]) throw new OpperError("AUTH_REQUIRED", `No slot named "${name}"`, "Run `opper login --key <slot>` first.");
+    cfg.defaultKey = name;
+    await writeConfigUnlocked(cfg);
   });
 }

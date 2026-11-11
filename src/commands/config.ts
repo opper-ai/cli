@@ -4,10 +4,12 @@ import {
   deleteSlot,
   readConfig,
   replaceSlotIfUnchanged,
+  setDefaultSlot,
 } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
 import { validateProjectUuid } from "../api/resolve.js";
+import { deploymentForApiUrl, resolveDeploymentEndpoint, selectedDeployment, sameApiUrl } from "../config/deployments.js";
 
 export async function configProjectCommand(name: string, projectUuid?: string): Promise<void> {
   if (projectUuid !== undefined) validateProjectUuid(projectUuid);
@@ -42,9 +44,16 @@ function fingerprint(key: string): string {
 }
 
 export async function configAddCommand(opts: ConfigAddOptions): Promise<void> {
+  const selected = selectedDeployment();
+  if (selected && opts.baseUrl && !sameApiUrl(selected.apiUrl, opts.baseUrl)) {
+    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
+  }
+  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint();
+  const deployment = deploymentForApiUrl(baseUrl);
   await setSlot(opts.name, {
     apiKey: opts.apiKey,
-    ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+    baseUrl,
+    ...(deployment ? { deployment: deployment.name } : {}),
     source: "manual",
     obtainedAt: new Date().toISOString(),
   });
@@ -59,7 +68,7 @@ export async function configListCommand(): Promise<void> {
   }
   for (const [name, slot] of Object.entries(cfg.keys)) {
     const marker = name === cfg.defaultKey ? brand.accent("*") : " ";
-    console.log(`${marker} ${name.padEnd(14)} ${fingerprint(slot.apiKey)}`);
+    console.log(`${marker} ${name.padEnd(14)} ${fingerprint(slot.apiKey)}  ${slot.deployment ?? deploymentForApiUrl(slot.baseUrl ?? "https://api.opper.ai")?.name ?? "custom"}  ${slot.baseUrl ?? "https://api.opper.ai"}`);
   }
 }
 
@@ -80,4 +89,9 @@ export async function configRemoveCommand(
 ): Promise<void> {
   await deleteSlot(opts.name);
   console.log(brand.accent(`✓ Removed slot "${opts.name}".`));
+}
+
+export async function configUseCommand(name: string): Promise<void> {
+  await setDefaultSlot(name);
+  console.log(`Active slot: ${name}`);
 }

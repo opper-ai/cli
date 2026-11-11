@@ -7,6 +7,7 @@ import {
   configGetCommand,
   configRemoveCommand,
   configProjectCommand,
+  configUseCommand,
 } from "../commands/config.js";
 import type { RegisterFn } from "./types.js";
 
@@ -50,6 +51,11 @@ const register: RegisterFn = (program, ctx) => {
   const config = program
     .command("config")
     .description("Manage stored API keys");
+
+  config.command("use")
+    .description("Make a stored slot active for future commands")
+    .argument("<name>", "slot name")
+    .action(configUseCommand);
 
   config.command("project")
     .description("Set a resource project default for a slot (does not scope inference); omit UUID to clear")

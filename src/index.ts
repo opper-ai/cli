@@ -18,6 +18,8 @@ import registerMcp from "./cli/mcp.js";
 import registerProxy from "./cli/proxy.js";
 import { addGroupedHelpText } from "./cli/help.js";
 import { checkForUpdate } from "./util/update-check.js";
+import { readConfig } from "./auth/config.js";
+import { getDeployment, slotNameForSelection } from "./config/deployments.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -39,7 +41,8 @@ program
   .name("opper")
   .description("The official Opper CLI")
   .version(pkg.version, "-v, --version")
-  .option("--key <slot>", "API key slot to use", "default")
+  .option("--key <slot>", "API key slot to use (defaults to the active slot)")
+  .option("-d, --deployment <name>", "Opper deployment: main (AWS) or evroc (or OPPER_DEPLOYMENT)")
   .option("--project-uuid <uuid>", "explicit Opper project target (does not bind the API key)")
   .option("--debug", "enable debug output", false)
   .option("--no-telemetry", "disable anonymous telemetry")
@@ -58,10 +61,20 @@ program
       program.outputHelp();
       return;
     }
-    await menuCommand({ key: program.opts().key, version: pkg.version, projectUuid: program.opts().projectUuid });
+    await menuCommand({ key: activeKey, version: pkg.version, projectUuid: program.opts().projectUuid });
   });
 
-program.hook("preAction", () => {
+let activeKey = "default";
+program.hook("preAction", async (_command, actionCommand) => {
+  if (program.opts().deployment !== undefined) {
+    process.env.OPPER_DEPLOYMENT = getDeployment(program.opts().deployment).name;
+  }
+  // Runtime environment credentials are independent of stored slots. Login
+  // still selects a slot because it writes the newly approved credential.
+  const configAction = actionCommand.parent?.name() === "config";
+  activeKey = configAction || (process.env.OPPER_API_KEY && actionCommand.name() !== "login")
+    ? program.opts().key ?? (await readConfig())?.defaultKey ?? "default"
+    : await slotNameForSelection(program.opts().key);
   if (program.opts().color === false) {
     process.env.NO_COLOR = "1";
   }
@@ -75,7 +88,7 @@ program
   });
 
 const ctx: CliContext = {
-  key: () => program.opts().key as string,
+  key: () => activeKey,
   projectUuid: () => program.opts().projectUuid as string | undefined,
   version: pkg.version,
 };

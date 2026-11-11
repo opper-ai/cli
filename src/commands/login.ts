@@ -1,12 +1,13 @@
 import { intro, outro, note, spinner, log, isCancel, cancel } from "@clack/prompts";
 import { runDeviceFlow } from "../auth/device-flow.js";
-import { getSlot, isSlotExpired, replaceSlotIfUnchanged } from "../auth/config.js";
+import { getSlot, isSlotExpired, replaceSlotIfUnchanged, setDefaultSlot } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { maybeMigrateLegacyConfig } from "../auth/migrate.js";
 import { legacyConfigPath } from "../auth/paths.js";
 import { brand } from "../ui/colors.js";
 import { openBrowser } from "../util/open-browser.js";
 import { validateProjectUuid } from "../api/resolve.js";
+import { deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment } from "../config/deployments.js";
 
 export interface LoginOptions {
   key: string;
@@ -31,24 +32,33 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
     existing = await getSlot(opts.key);
-    if (existing && !opts.renew && !isSlotExpired(existing)) {
+  }
+  const deployment = selectedDeployment();
+  if (deployment && opts.baseUrl && !sameApiUrl(opts.baseUrl, deployment.apiUrl)) {
+    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
+  }
+  const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl);
+  const existingMatches = !existing || sameApiUrl(existing.baseUrl ?? "https://api.opper.ai", baseUrl);
+  if (deployment && !existingMatches) {
+    throw new OpperError("INVALID_ARGUMENT", `Slot "${opts.key}" belongs to another deployment.`, "Choose a new --key slot or omit --key to select a matching slot automatically.");
+  }
+  if (!opts.force) {
+    if (existing && existingMatches && !opts.renew && !isSlotExpired(existing)) {
       if (opts.projectUuid !== undefined) {
         const replacement = { ...existing, defaultProjectUuid: opts.projectUuid };
         if (!await replaceSlotIfUnchanged(opts.key, existing, replacement)) {
           throw new OpperError("API_ERROR", "The stored credential changed while setting its resource default. Retry.");
         }
       }
+      if (deployment) await setDefaultSlot(opts.key);
       const who = existing.user ? ` as ${existing.user.email}` : "";
       log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
       return;
     }
   }
 
-  const renew = Boolean(opts.renew || (existing && isSlotExpired(existing)));
-  // Use the same host for browser approval and the inference request that
-  // follows a launch. An explicit --base-url still has highest precedence.
-  const baseUrl = opts.baseUrl ?? process.env.OPPER_BASE_URL ?? existing?.baseUrl;
-
+  // A credential identifier is meaningful only at its issuing API root.
+  const renew = Boolean(existingMatches && (opts.renew || (existing && isSlotExpired(existing))));
   intro(brand.accent("Sign in to Opper"));
 
   const s = spinner();
@@ -72,6 +82,10 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
         promptShown = true;
       },
     });
+
+    slot.baseUrl = baseUrl;
+    const profile = deploymentForApiUrl(baseUrl);
+    if (profile) slot.deployment = profile.name;
 
     // Replace all credential metadata. Only a resource preference survives a
     // renewal to the same verified org and API host; old bindings never do.
@@ -99,6 +113,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
 
+    if (deployment) await setDefaultSlot(opts.key);
     const who = slot.user ? slot.user.email : opts.key;
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);

@@ -102,6 +102,40 @@ describe("login", () => {
     expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "http://localhost:18080" }));
   });
 
+  it("persists and activates a named deployment login without changing main", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "main-key" });
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "evroc-key", baseUrl: "https://api.evroc.on.opper.ai", source: "device-flow" });
+    await loginCommand({ key: "evroc", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "https://api.evroc.on.opper.ai" }));
+    const config = await readConfig();
+    expect(config?.defaultKey).toBe("evroc");
+    expect(config?.keys.evroc?.deployment).toBe("evroc");
+    expect(config?.keys.default?.apiKey).toBe("main-key");
+  });
+
+  it("activates an existing matching deployment without another approval", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "main" });
+    await setSlot("work", { apiKey: "evroc", baseUrl: "https://api.evroc.on.opper.ai" });
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    vi.mocked(runDeviceFlow).mockClear();
+    await loginCommand({ key: "work", legacyPath: "/nonexistent" });
+    expect(runDeviceFlow).not.toHaveBeenCalled();
+    expect((await readConfig())?.defaultKey).toBe("work");
+  });
+
+  it("does not report already signed in or overwrite when another deployment is selected", async () => {
+    const { setSlot } = await import("../../src/auth/config.js");
+    await setSlot("default", { apiKey: "main" });
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    vi.mocked(runDeviceFlow).mockClear();
+    await expect(loginCommand({ key: "default", legacyPath: "/nonexistent" })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+    expect(runDeviceFlow).not.toHaveBeenCalled();
+    expect((await readConfig())?.keys.default?.apiKey).toBe("main");
+  });
+
   it("short-circuits when slot already has a key", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", { apiKey: "op_live_existing" });
@@ -146,10 +180,12 @@ describe("login", () => {
 
     vi.mocked(runDeviceFlow).mockResolvedValue({ apiKey: "op_live_newer", obtainedAt: "2026-09-24T11:00:00Z", source: "device-flow" });
     await loginCommand({ key: "default", renew: true, baseUrl: "https://override.example", legacyPath: "/nonexistent" });
-    expect(runDeviceFlow).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "https://override.example", renew: true }));
+    expect(runDeviceFlow).toHaveBeenLastCalledWith(expect.objectContaining({ baseUrl: "https://override.example" }));
+    expect(vi.mocked(runDeviceFlow).mock.lastCall?.[0]).not.toHaveProperty("renew");
+    expect(vi.mocked(runDeviceFlow).mock.lastCall?.[0]).not.toHaveProperty("currentCredentialId");
   });
 
-  it("uses OPPER_BASE_URL over a stored host for renewal", async () => {
+  it("starts fresh approval at a raw URL override without sending another host's credential id", async () => {
     const { setSlot } = await import("../../src/auth/config.js");
     await setSlot("default", {
       apiKey: "op_live_old",
@@ -168,9 +204,9 @@ describe("login", () => {
 
     expect(runDeviceFlow).toHaveBeenCalledWith(expect.objectContaining({
       baseUrl: "http://localhost:18080",
-      renew: true,
-      currentCredentialId: "key-old",
     }));
+    expect(vi.mocked(runDeviceFlow).mock.lastCall?.[0]).not.toHaveProperty("renew");
+    expect(vi.mocked(runDeviceFlow).mock.lastCall?.[0]).not.toHaveProperty("currentCredentialId");
   });
 
   it("keeps the old slot if renewal returns the same key", async () => {

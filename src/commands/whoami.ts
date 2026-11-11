@@ -1,6 +1,8 @@
 import { getSlot, isSlotExpired } from "../auth/config.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
+import { resolveApiBaseUrl } from "../api/resolve.js";
+import { deploymentForApiUrl } from "../config/deployments.js";
 
 export interface WhoamiOptions {
   key: string;
@@ -11,6 +13,15 @@ function fingerprint(apiKey: string): string {
 }
 
 export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
+  const baseUrl = await resolveApiBaseUrl(opts.key);
+  const deployment = deploymentForApiUrl(baseUrl)?.name ?? "custom";
+  if (process.env.OPPER_API_KEY) {
+    console.log(`${brand.bold("source:")}  OPPER_API_KEY (overrides stored slots)`);
+    console.log(`${brand.bold("api key:")} ${fingerprint(process.env.OPPER_API_KEY)}`);
+    console.log(`${brand.bold("deployment:")} ${deployment}`);
+    console.log(`${brand.bold("base url:")} ${baseUrl}`);
+    return;
+  }
   const slot = await getSlot(opts.key);
   if (!slot) {
     throw new OpperError(
@@ -35,7 +46,8 @@ export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
   if (slot.expiresAt) {
     console.log(`${brand.bold("expires:")} ${slot.expiresAt}${isSlotExpired(slot) ? " (expired)" : ""}`);
   }
-  console.log(`${brand.bold("base url:")} ${slot.baseUrl ?? "https://api.opper.ai"}`);
+  console.log(`${brand.bold("deployment:")} ${deployment}`);
+  console.log(`${brand.bold("base url:")} ${baseUrl}`);
   if (slot.obtainedAt) {
     console.log(`${brand.bold("since:")}   ${slot.obtainedAt}`);
   }
