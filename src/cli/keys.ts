@@ -7,9 +7,12 @@ const register: RegisterFn = (program) => {
     .requiredOption("--project <uuid>", "exact project UUID")
     .requiredOption("--name <name>", "runtime key name")
     .requiredOption("--output <path>", "new env file (0600); parent directory must exist")
-    .option("--mcp-url <url>", "MCP server URL (default: https://api.opper.ai/mcp)")
+    .option("--mcp-url <url>", "MCP server URL (default: selected deployment)")
     .option("--idempotency-key <uuid>", "reuse only to recover the same interrupted create operation")
     .option("--reset-client", "replace this server's cached OAuth registration for a fresh create; cannot be used with --idempotency-key")
-    .action(async (options: KeysCreateOptions) => keysCreateCommand(options));
+    .action(async (options: KeysCreateOptions) => {
+      const key = program.opts().key as string | undefined;
+      await keysCreateCommand({ ...options, ...(key !== undefined ? { key } : {}) });
+    });
 };
 export default register;

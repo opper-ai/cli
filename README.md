@@ -594,7 +594,10 @@ memory. It does not copy the key into `opencode.json` or rewrite other provider
 settings. Setup binds the selected CLI slot to plain OpenCode; reinstall with
 another `--key` to switch it, or set `OPPER_KEY_SLOT` for one OpenCode process.
 `OPPER_API_KEY` overrides the slot with an independent credential; its host is
-`OPPER_BASE_URL` or the production API root. An explicit target supplied during
+`OPPER_DEPLOYMENT`, `OPPER_BASE_URL`, or the main API root. A conflicting named
+deployment is refused before the saved credential is sent. Bridge installation
+reports its pinned slot and API endpoint; later CLI profile changes do not
+switch that binding. An explicit target supplied during
 bridge setup is persisted without a secret. For one plain OpenCode process,
 `OPPER_PROJECT_UUID` supplies an explicit target. An environment key uses only
 that environment target, and never borrows the bridge's stored target. If the stored key is expired or the
@@ -618,8 +621,12 @@ access to Opper account tools; `opper launch <agent>` separately runs an agent
 with model inference through Opper. Setup helpers for other MCP clients are not
 implemented yet.
 
-The command adds the remote `https://api.opper.ai/mcp` server as `opper`. It leaves
-your inference provider, model, tool permissions, and other MCP servers alone.
+The command adds the selected deployment or remembered profile's MCP server as
+`opper`, initially `https://api.opper.ai/mcp` on main/AWS. For Evroc, use
+`opper -d evroc mcp add opencode`. Existing MCP URLs, OAuth preferences, and
+disabled connections are preserved; a conflicting server named `opper` must be
+renamed before adding another endpoint. It leaves your inference provider,
+model, tool permissions, and other MCP servers alone.
 It needs no API key and does not log in, launch OpenCode, or approve consent.
 The default connection contains only the server URL and connection settings:
 
@@ -747,6 +754,14 @@ Direct access to the platform endpoints:
 ```bash
 opper keys create --project <project-uuid> --name 'My app' --output .env.opper
 ```
+
+The MCP endpoint uses the selected deployment or remembered profile, initially
+main/AWS. For Evroc, use `opper -d evroc keys create ...` or select an Evroc
+profile. Env files created on main or Evroc include `OPPER_DEPLOYMENT` alongside
+the private key, so sourcing them selects that deployment too. Custom
+`--mcp-url` endpoints retain the key-only env format; configure their API URL
+separately. Conflicting `OPPER_BASE_URL` values are rejected when a named
+deployment is selected.
 
 The command opens Opper consent for project read access and API key creation.
 Choose the organization containing that project and explicitly select API key

@@ -4,11 +4,10 @@ import { basename, dirname, join } from "node:path";
 import { isIP } from "node:net";
 import { applyEdits, getNodeValue, modify, parseTree, type Node, type ParseError } from "jsonc-parser";
 import { OpperError } from "../errors.js";
-import { OPPER_HOST } from "../config/endpoints.js";
+import { resolveSetupApiBaseUrl } from "../api/resolve.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import type { ConfigureOpenCodeResult } from "./opencode.js";
 
-const DEFAULT_MCP_URL = `${OPPER_HOST}/mcp`;
 const MCP_SCOPES = new Set([
   "account:read", "projects:read", "projects:write", "projects:delete",
   "apikeys:read", "apikeys:write", "controls:read", "controls:write",
@@ -147,10 +146,10 @@ function effectiveLayer(config: Config): Config {
 /** Add an account MCP connection; this never configures inference or logs in. */
 export async function configureOpenCodeMcp(
   location: Location,
-  requestedUrl = DEFAULT_MCP_URL,
+  requestedUrl?: string,
   requestedScopes?: string,
 ): Promise<ConfigureOpenCodeResult> {
-  const url = validateMcpUrl(requestedUrl);
+  const url = validateMcpUrl(requestedUrl ?? `${(await resolveSetupApiBaseUrl()).replace(/\/+$/, "")}/mcp`);
   const scopes = requestedScopes === undefined ? undefined : selectedScopes(requestedScopes);
   const jsonPath = opencodeConfigPath(location);
   const directory = dirname(jsonPath);

@@ -27,15 +27,16 @@ const register: RegisterFn = (program, ctx) => {
     .option("--login-bridge", "let plain OpenCode read the CLI login and refresh Opper models at startup")
     .option("--remove-login-bridge", "remove the Opper-managed OpenCode login plugin")
     .option("--mcp", "compatibility alias for opper mcp add opencode; preserve inference settings")
-    .option("--mcp-url <url>", "MCP endpoint override (requires --mcp; default https://api.opper.ai/mcp)")
+    .option("--mcp-url <url>", "MCP endpoint override (requires --mcp; defaults to selected deployment)")
     .option("--mcp-scopes <scopes>", "advanced: restrict available permissions to these space-separated OAuth scopes (requires --mcp)")
     .action(async (cmdOpts: { global?: boolean; local?: boolean; overwrite?: boolean; modelKinds?: string; loginBridge?: boolean; removeLoginBridge?: boolean; mcp?: boolean; mcpUrl?: string; mcpScopes?: string }) => {
       if (cmdOpts.modelKinds !== undefined) validateModelKinds(cmdOpts.modelKinds);
+      const key = cmdOpts.mcp ? program.opts().key as string | undefined : ctx.key();
       await editorsOpenCodeCommand({
         location: cmdOpts.local ? "local" : "global",
         overwrite: cmdOpts.overwrite ?? false,
         ...(cmdOpts.modelKinds !== undefined ? { modelKinds: cmdOpts.modelKinds } : {}),
-        key: ctx.key(),
+        ...(key !== undefined ? { key } : {}),
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
         ...(cmdOpts.loginBridge ? { loginBridge: true } : {}),
         ...(cmdOpts.removeLoginBridge ? { removeLoginBridge: true } : {}),
@@ -56,7 +57,7 @@ const register: RegisterFn = (program, ctx) => {
         await editorsGitHubCopilotVSCodeRemoveCommand();
         return;
       }
-      await editorsGitHubCopilotVSCodeCommand(ctx.projectUuid?.());
+      await editorsGitHubCopilotVSCodeCommand(ctx.projectUuid?.(), ctx.key());
     });
 };
 

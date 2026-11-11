@@ -49,10 +49,19 @@ describe("editors commands", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await editorsOpenCodeCommand({ location: "local", overwrite: false });
-      expect(mocks.configureOpenCode).toHaveBeenCalledWith({ location: "local" });
+      expect(mocks.configureOpenCode).toHaveBeenCalledWith({ location: "local", baseUrl: "https://api.opper.ai" });
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("uses Evroc for unauthenticated static inference setup", async () => {
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    mocks.configureOpenCode.mockResolvedValue({ path: "/tmp/opencode.json", wrote: true });
+    try {
+      await editorsOpenCodeCommand({ location: "local", overwrite: false });
+      expect(mocks.configureOpenCode).toHaveBeenLastCalledWith({ location: "local", baseUrl: "https://api.evroc.on.opper.ai" });
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it("opencode writes the live catalogue when it resolves", async () => {
@@ -91,6 +100,7 @@ describe("editors commands", () => {
       expect(mocks.configureOpenCode).toHaveBeenCalledWith({
         location: "global",
         overwrite: true,
+        baseUrl: "https://api.opper.ai",
       });
     } finally {
       log.mockRestore();
@@ -131,7 +141,7 @@ describe("editors commands", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       await editorsOpenCodeCommand({ location: "global", overwrite: false, mcp: true, mcpScopes: "account:read projects:write" });
-      expect(mocks.configureOpenCode).toHaveBeenLastCalledWith({ location: "global", mcp: true, mcpScopes: "account:read projects:write" });
+      expect(mocks.configureOpenCode).toHaveBeenLastCalledWith({ location: "global", mcp: true, mcpUrl: "https://api.opper.ai/mcp", mcpScopes: "account:read projects:write" });
       const output = log.mock.calls.map(([message]) => message).join("\n");
       expect(output).toContain("account:read projects:write");
       expect(output).toMatch(/browser/i);

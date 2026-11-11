@@ -228,7 +228,7 @@ describe("agentsConfigureCommand", () => {
     (await import("../../src/cli/editors.js")).default(cli, context);
     try { await cli.parseAsync(args, {from: "user"}); }
     finally { detect.mockRestore(); }
-    expect(configureCopilot).toHaveBeenCalledExactlyOnceWith({channel: "stable"});
+    expect(configureCopilot).toHaveBeenCalledExactlyOnceWith({channel: "stable", baseUrl: "https://api.opper.ai"});
     expect(configure).not.toHaveBeenCalled();
   });
 

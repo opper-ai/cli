@@ -10,6 +10,7 @@ import { which } from "../util/which.js";
 import { run } from "../util/run.js";
 import { OpperError } from "../errors.js";
 import { OPPER_COMPAT_URL } from "../config/endpoints.js";
+import { deploymentForApiUrl } from "../config/deployments.js";
 import { PICKER_MODELS } from "../config/models.js";
 
 export const COMMUNITY_EXTENSION_ID = "johnny-zhao.oai-compatible-copilot";
@@ -138,6 +139,8 @@ async function confirmAndInstallExtension(): Promise<void> {
 
 export interface GitHubCopilotVSCodeOptions {
   channel?: VSCodeChannel;
+  /** API root selected by the CLI; no credential is written. */
+  baseUrl?: string;
 }
 
 export interface ConfigureResult {
@@ -182,7 +185,7 @@ export async function configureGitHubCopilotVSCode(
     }
   }
 
-  existing["oaicopilot.baseUrl"] = OPPER_COMPAT_URL;
+  existing["oaicopilot.baseUrl"] = opts.baseUrl ? `${opts.baseUrl.replace(/\/+$/, "")}/v3/compat` : OPPER_COMPAT_URL;
   existing["oaicopilot.models"] = buildModelList();
 
   mkdirSync(dirname(path), { recursive: true });
@@ -237,7 +240,9 @@ export function isGitHubCopilotVSCodeConfigured(
       string,
       unknown
     >;
-    return parsed["oaicopilot.baseUrl"] === OPPER_COMPAT_URL;
+    const base = parsed["oaicopilot.baseUrl"];
+    return typeof base === "string" && base.endsWith("/v3/compat") &&
+      deploymentForApiUrl(base.slice(0, -"/v3/compat".length)) !== undefined;
   } catch {
     return false;
   }

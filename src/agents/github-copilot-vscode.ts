@@ -1,3 +1,4 @@
+import { resolveApiBaseUrl } from "../api/resolve.js";
 import { which } from "../util/which.js";
 import { vscodeUserSettingsPath } from "../util/editor-paths.js";
 import {
@@ -46,7 +47,7 @@ async function isConfigured(): Promise<boolean> {
 
 async function configure(opts: ConfigureOptions = {}): Promise<void> {
   if (opts.projectUuid) throw new OpperError("INVALID_ARGUMENT", "VS Code Copilot setup does not support an explicit project target.", "Use organization inference without --project-uuid, or launch a supported agent with the target.");
-  await configureGitHubCopilotVSCode({ channel: "stable" });
+  await configureGitHubCopilotVSCode({ channel: "stable", baseUrl: opts.baseUrl ?? await resolveApiBaseUrl(opts.keyName) });
 }
 
 async function unconfigure(): Promise<void> {
