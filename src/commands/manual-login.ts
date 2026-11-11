@@ -1,28 +1,32 @@
 import { select, isCancel, cancel } from "@clack/prompts";
+import { previewLegacyConfig } from "../auth/migrate.js";
+import { legacyConfigPath } from "../auth/paths.js";
 import { getSlot } from "../auth/config.js";
 import {
   DEPLOYMENTS, deploymentForApiUrl, slotNameForSelection,
   type DeploymentName,
 } from "../config/deployments.js";
-import { validateProjectUuid } from "../api/resolve.js";
-import { loginCommand, type LoginOptions } from "./login.js";
+import { loginCommand, migrateLegacyConfigForLogin, validateLoginInputs, type LoginOptions } from "./login.js";
 
 type ManualLoginOptions = Omit<LoginOptions, "key" | "activate" | "deployment"> & { key?: string };
 
 /** Manual entry points opt in to selection; automatic authentication never prompts. */
 export async function manualLoginCommand(opts: ManualLoginOptions): Promise<string | undefined> {
-  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+  validateLoginInputs(opts);
   const explicit = opts.key !== undefined || opts.baseUrl !== undefined
     || process.env.OPPER_DEPLOYMENT !== undefined || process.env.OPPER_BASE_URL !== undefined;
   if (explicit || !process.stdin.isTTY || !process.stdout.isTTY) {
+    if (!opts.force) await migrateLegacyConfigForLogin(opts.legacyPath);
     const key = await slotNameForSelection(opts.key);
     return await loginCommand({ ...opts, key }) ? key : undefined;
   }
 
-  const current = await getSlot();
+  const preview = opts.force ? null : await previewLegacyConfig(opts.legacyPath ?? legacyConfigPath());
+  const current = await getSlot() ?? preview?.keys[preview.defaultKey];
   const currentDeployment = current ? deploymentForApiUrl(current.baseUrl ?? DEPLOYMENTS.main.apiUrl) : undefined;
   // Existing custom API roots remain usable without being rebound by this menu.
   if (current && !currentDeployment) {
+    if (!opts.force) await migrateLegacyConfigForLogin(opts.legacyPath);
     const key = await slotNameForSelection();
     return await loginCommand({ ...opts, key }) ? key : undefined;
   }
@@ -32,6 +36,7 @@ export async function manualLoginCommand(opts: ManualLoginOptions): Promise<stri
     return undefined;
   }
   const deployment = DEPLOYMENTS[name];
+  if (!opts.force) await migrateLegacyConfigForLogin(opts.legacyPath);
   const key = await slotNameForSelection(undefined, deployment);
   return await loginCommand({ ...opts, key, deployment: name }) ? key : undefined;
 }

@@ -24,22 +24,11 @@ export interface LoginOptions {
 }
 
 export async function loginCommand(opts: LoginOptions): Promise<boolean> {
-  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+  const deployment = validateLoginInputs(opts);
   let existing = await getSlot(opts.key);
   if (!opts.force) {
-    const migrated = await maybeMigrateLegacyConfig(
-      opts.legacyPath ?? legacyConfigPath(),
-    );
-    if (migrated) {
-      log.info(
-        "Migrated legacy ~/.oppercli into ~/.opper/config.json (one-time).",
-      );
-    }
+    await migrateLegacyConfigForLogin(opts.legacyPath);
     existing = await getSlot(opts.key);
-  }
-  const deployment = opts.deployment ? getDeployment(opts.deployment) : selectedDeployment();
-  if (deployment && opts.baseUrl && !sameApiUrl(opts.baseUrl, deployment.apiUrl)) {
-    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
   }
   const baseUrl = opts.baseUrl ?? resolveDeploymentEndpoint(existing?.baseUrl, deployment);
   sameApiUrl(baseUrl, baseUrl); // Validate explicit empty or malformed roots before starting OAuth.
@@ -135,5 +124,25 @@ export async function loginCommand(opts: LoginOptions): Promise<boolean> {
       return false;
     }
     throw err;
+  }
+}
+
+
+/** Reject explicit routing errors before migration or any other sign-in side effect. */
+export function validateLoginInputs(opts: Pick<LoginOptions, "baseUrl" | "deployment" | "projectUuid">) {
+  if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
+  const deployment = opts.deployment !== undefined ? getDeployment(opts.deployment) : selectedDeployment();
+  const selectedUrl = opts.baseUrl ?? resolveDeploymentEndpoint(undefined, deployment);
+  sameApiUrl(selectedUrl, selectedUrl);
+  if (deployment && !sameApiUrl(selectedUrl, deployment.apiUrl)) {
+    throw new OpperError("INVALID_ARGUMENT", "--base-url conflicts with the selected deployment.");
+  }
+  return deployment;
+}
+
+/** Share migration and its one-time notice with manual sign-in before resolving a slot. */
+export async function migrateLegacyConfigForLogin(path = legacyConfigPath()): Promise<void> {
+  if (await maybeMigrateLegacyConfig(path)) {
+    log.info("Migrated legacy ~/.oppercli into ~/.opper/config.json (one-time).");
   }
 }

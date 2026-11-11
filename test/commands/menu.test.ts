@@ -80,7 +80,10 @@ vi.mock("../../src/commands/desktop.js", () => ({
   desktopStopCommand: desktopStopMock,
 }));
 
-vi.mock("../../src/commands/login.js", () => ({ loginCommand: loginMock }));
+vi.mock("../../src/commands/login.js", async () => ({
+  ...await vi.importActual<typeof import("../../src/commands/login.js")>("../../src/commands/login.js"),
+  loginCommand: loginMock,
+}));
 vi.mock("../../src/commands/logout.js", () => ({ logoutCommand: logoutMock }));
 vi.mock("../../src/commands/whoami.js", () => ({ whoamiCommand: whoamiMock }));
 vi.mock("../../src/commands/launch.js", () => ({ launchCommand: launchMock }));
