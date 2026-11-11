@@ -32,6 +32,20 @@ describe("real CLI deployment integration setup", () => {
     expect(existsSync(join(home, "auth", "config.json"))).toBe(false);
     expect(result.stdout).toContain("choose permissions in Opper");
   }, 60_000);
+  it.each(["malformed", "ambiguous"])("configures named Evroc setup independently of %s runtime slots", async (condition) => {
+    mkdirSync(join(home, "auth"));
+    const path = join(home, "auth", "config.json");
+    const original = condition === "malformed" ? "{invalid json" : JSON.stringify({ version: 1, defaultKey: "default", keys: {
+      default: { apiKey: "synthetic-main", baseUrl: "https://api.opper.ai" },
+      one: { apiKey: "synthetic-one", baseUrl: "https://api.evroc.on.opper.ai" },
+      two: { apiKey: "synthetic-two", baseUrl: "https://api.evroc.on.opper.ai" },
+    } });
+    writeFileSync(path, original);
+    const result = await run(["-d", "evroc", "mcp", "add", "opencode"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).mcp.opper.url).toBe("https://api.evroc.on.opper.ai/mcp");
+    expect(readFileSync(path, "utf8")).toBe(original);
+  }, 60_000);
   function seedProfiles() {
     mkdirSync(join(home, "auth"));
     writeFileSync(join(home, "auth", "config.json"), JSON.stringify({ version: 1, defaultKey: "default", keys: {
@@ -46,6 +60,7 @@ describe("real CLI deployment integration setup", () => {
   it("remembers the selected Evroc profile, then preserves its connection on conflicting main setup", async () => {
     seedProfiles();
     expect((await run(["config", "use", "work"])).code).toBe(0);
+    expect((await run(["mcp", "add", "opencode"])).code).toBe(0);
     expect((await run(["editors", "opencode", "--mcp"])).code).toBe(0);
     const original = readFileSync(configPath, "utf8");
     expect(JSON.parse(original).mcp.opper.url).toBe("https://api.evroc.on.opper.ai/mcp");

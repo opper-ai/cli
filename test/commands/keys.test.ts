@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,25 @@ describe("private runtime key creation", () => {
     expect(authFlow.mock.calls[0]![0].toString()).toBe("https://api.evroc.on.opper.ai/mcp");
     expect(fetchMock.mock.calls[0]![0].toString()).toBe(`https://api.evroc.on.opper.ai/user/v1/projects/${project}`);
     expect(await readFile(options.output, "utf8")).toBe(`OPPER_API_KEY=${secret}\nOPPER_DEPLOYMENT=evroc\n`);
+  });
+
+  it.each(["malformed", "ambiguous"])("uses separate Evroc authorization with %s saved runtime slots", async (condition) => {
+    const directoryPath = join(directory, ".opper");
+    await mkdir(directoryPath);
+    const path = join(directoryPath, "config.json");
+    const original = condition === "malformed" ? "{invalid json" : JSON.stringify({ version: 1, defaultKey: "default", keys: {
+      default: { apiKey: "synthetic-main", baseUrl: "https://api.opper.ai" },
+      one: { apiKey: "synthetic-one", baseUrl: "https://api.evroc.on.opper.ai" },
+      two: { apiKey: "synthetic-two", baseUrl: "https://api.evroc.on.opper.ai" },
+    } });
+    await writeFile(path, original);
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
+    const { mcpUrl, ...options } = opts();
+    await keysCreateCommand(options);
+    expect(authFlow.mock.calls[0]![0].toString()).toBe("https://api.evroc.on.opper.ai/mcp");
+    expect(fetchMock.mock.calls[0]![1].headers.Authorization).toBe("Bearer private-delegated-token");
+    expect(await readFile(path, "utf8")).toBe(original);
   });
 
   it("records main explicitly so a sourced env file does not inherit another deployment", async () => {

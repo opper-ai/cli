@@ -1,4 +1,4 @@
-import { resolveApiBaseUrl } from "../api/resolve.js";
+import { resolveSetupApiBaseUrl } from "../api/resolve.js";
 import { configureOpenCode } from "../setup/opencode.js";
 import { OpperError } from "../errors.js";
 import { brand } from "../ui/colors.js";
@@ -19,7 +19,7 @@ export async function mcpAddCommand(client: string, opts: McpAddOptions): Promis
     throw new OpperError("INVALID_ARGUMENT", `MCP setup is not supported for "${client}".`,
       `Supported clients: ${MCP_CLIENTS.join(", ")}.`);
   }
-  const url = opts.url ?? `${(await resolveApiBaseUrl(opts.key)).replace(/\/+$/, "")}/mcp`;
+  const url = opts.url ?? `${(await resolveSetupApiBaseUrl(opts.key)).replace(/\/+$/, "")}/mcp`;
   const result = await configureOpenCode({
     location: opts.location,
     mcp: true,

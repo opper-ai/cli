@@ -2,7 +2,7 @@ import { Argument, Option } from "commander";
 import { MCP_CLIENTS, mcpAddCommand } from "../commands/mcp.js";
 import type { RegisterFn } from "./types.js";
 
-const register: RegisterFn = (program, ctx) => {
+const register: RegisterFn = (program) => {
   const mcp = program.command("mcp")
     .description("Connect agents and editors to Opper account tools");
 
@@ -15,9 +15,10 @@ const register: RegisterFn = (program, ctx) => {
     .option("--url <url>", "MCP endpoint (default: selected deployment; loopback HTTP allowed)")
     .option("--scopes <scopes>", "advanced: limit browser permission choices to these space-separated OAuth scopes")
     .action(async (client: string, opts: { local?: boolean; url?: string; scopes?: string }) => {
+      const key = program.opts().key as string | undefined;
       await mcpAddCommand(client, {
         location: opts.local ? "local" : "global",
-        key: ctx.key(),
+        ...(key !== undefined ? { key } : {}),
         ...(opts.url !== undefined ? { url: opts.url } : {}),
         ...(opts.scopes !== undefined ? { scopes: opts.scopes } : {}),
       });

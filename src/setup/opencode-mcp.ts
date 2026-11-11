@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { isIP } from "node:net";
 import { applyEdits, getNodeValue, modify, parseTree, type Node, type ParseError } from "jsonc-parser";
 import { OpperError } from "../errors.js";
-import { resolveApiBaseUrl } from "../api/resolve.js";
+import { resolveSetupApiBaseUrl } from "../api/resolve.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import type { ConfigureOpenCodeResult } from "./opencode.js";
 
@@ -149,7 +149,7 @@ export async function configureOpenCodeMcp(
   requestedUrl?: string,
   requestedScopes?: string,
 ): Promise<ConfigureOpenCodeResult> {
-  const url = validateMcpUrl(requestedUrl ?? `${(await resolveApiBaseUrl()).replace(/\/+$/, "")}/mcp`);
+  const url = validateMcpUrl(requestedUrl ?? `${(await resolveSetupApiBaseUrl()).replace(/\/+$/, "")}/mcp`);
   const scopes = requestedScopes === undefined ? undefined : selectedScopes(requestedScopes);
   const jsonPath = opencodeConfigPath(location);
   const directory = dirname(jsonPath);
