@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 describe("real CLI deployment workflow", () => {
@@ -20,7 +20,7 @@ describe("real CLI deployment workflow", () => {
     const env = { ...process.env, OPPER_HOME: home, NO_UPDATE_NOTIFIER: "1", NO_COLOR: "1", ...extra };
     for (const name of ["OPPER_API_KEY", "OPPER_BASE_URL", "OPPER_DEPLOYMENT"]) if (!(name in extra)) delete env[name];
     return new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
-      const child = execFile(process.execPath, ["--import", "tsx", ...(bootstrap ? ["--import", bootstrap] : []), "src/index.ts", ...args], { cwd: ROOT, env },
+      const child = execFile(process.execPath, ["--import", "tsx", ...(bootstrap ? ["--import", pathToFileURL(bootstrap).href] : []), "src/index.ts", ...args], { cwd: ROOT, env },
         (error, stdout, stderr) => done({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr }));
       child.stdin?.end();
     });
@@ -92,7 +92,7 @@ describe("real CLI deployment workflow", () => {
     await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Missing HTTP fixture address");
-    const bootstrap = join(home, "fixture.mjs");
+    const bootstrap = join(home, "fixture # portable.mjs");
     writeFileSync(bootstrap, `
       import childProcess from "node:child_process";
       import { EventEmitter } from "node:events";
