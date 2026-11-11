@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { startActivity } from "../../src/sandbox/activity.js";
 import { toolHookArgs } from "../../src/sandbox/tool-hooks.js";
@@ -118,7 +118,7 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
     }
   });
 
-  it("runs Claude hooks without saving tool inputs or responses", async () => {
+  it("runs Claude hooks without consuming tool inputs or responses", async () => {
     const home = temp();
     const events = temp();
     const args = await toolHookArgs("claude", ["-p", "hello"], home, events);
@@ -144,6 +144,28 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
         },
       );
     }
+    // An open input pipe must not keep the hook alive: it never waits for
+    // JSON, EOF, or any portion of the tool payload.
+    const command = settings.hooks.PreToolUse.find(
+      (entry: any) => entry.matcher === "^Read$",
+    ).hooks[0].command;
+    const child = spawn("/bin/sh", ["-c", command], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Hook consumed stdin"));
+      }, 3000);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        code === 0 ? resolve() : reject(new Error(`Hook exited ${code}`));
+      });
+    });
     const data = readFileSync(join(events, "tools.jsonl"), "utf8");
     expect(data).not.toContain("secret");
     expect(
@@ -151,7 +173,7 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line).phase),
-    ).toEqual(["ready", "start", "end", "error"]);
+    ).toEqual(["ready", "start", "end", "error", "start"]);
   });
 
   it("registers Pi tool callbacks and reports failure without modifying results", async () => {
@@ -170,7 +192,9 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
       callbacks.tool_call!({
         toolName: "bash",
         toolCallId: "one",
-        input: "secret",
+        get input() {
+          throw new Error("Tool input must not be read");
+        },
       }),
     ).toBeUndefined();
     expect(
@@ -178,7 +202,9 @@ describe.skipIf(process.platform === "win32")("sandbox activity", () => {
         toolName: "bash",
         toolCallId: "one",
         isError: true,
-        content: "secret",
+        get content() {
+          throw new Error("Tool result must not be read");
+        },
       }),
     ).toBeUndefined();
     const data = readFileSync(join(events, "tools.jsonl"), "utf8");

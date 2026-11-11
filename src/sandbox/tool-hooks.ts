@@ -32,38 +32,49 @@ const emit = (phase, tool, id = '') => { try { appendFileSync(${log}, JSON.strin
     return ["--extension", extension, ...args];
   }
   const hook = join(directory, "claude.mjs");
-  await writeFile(
-    hook,
-    writer +
-      `let input = '';
-for await (const chunk of process.stdin) { input += chunk; if (input.length > 1048576) process.exit(0); }
-try {
-  const e = JSON.parse(input);
-  if (e.hook_event_name === 'SessionStart') emit('ready', 'claude');
-  else emit(e.hook_event_name === 'PreToolUse' ? 'start' : e.hook_event_name === 'PostToolUseFailure' ? 'error' : 'end', e.tool_name, e.tool_use_id);
-} catch {}
-`,
-    { mode: 0o600 },
-  );
-  const hooks = Object.fromEntries(
-    ["SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure"].map(
-      (event) => [
-        event,
-        [
-          {
-            matcher: "",
-            hooks: [
-              {
-                type: "command",
-                command: `${shellQuote(process.execPath)} ${shellQuote(hook)}`,
-                timeout: 5,
-              },
-            ],
-          },
-        ],
-      ],
-    ),
-  );
+  // Hook payloads can contain complete file contents. Static matchers supply
+  // metadata without consuming Claude's stdin, even for post-tool events.
+  await writeFile(hook, writer + `emit(process.argv[2], process.argv[3]);\n`, {
+    mode: 0o600,
+  });
+  const tools = [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "Agent",
+    "NotebookEdit",
+    "TodoWrite",
+  ];
+  const entry = (matcher: string, phase: string, tool: string) => ({
+    matcher,
+    hooks: [
+      {
+        type: "command",
+        command: `${[process.execPath, hook, phase, tool].map(shellQuote).join(" ")} < /dev/null`,
+        timeout: 5,
+      },
+    ],
+  });
+  const hooks: Record<string, unknown[]> = {
+    SessionStart: [entry("", "ready", "claude")],
+  };
+  for (const [event, phase] of [
+    ["PreToolUse", "start"],
+    ["PostToolUse", "end"],
+    ["PostToolUseFailure", "error"],
+  ] as const) {
+    hooks[event] = [
+      ...tools.map((tool) => entry(`^${tool}$`, phase, tool)),
+      entry(`^(?!(?:${tools.join("|")})$).*$`, phase, "other"),
+    ];
+  }
   return claudeSettingsArgs(args, hooks, home);
 }
 

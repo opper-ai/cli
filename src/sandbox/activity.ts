@@ -126,7 +126,8 @@ export function startActivity(
           }
           let duration = "";
           if (item.phase === "start") {
-            if (now !== undefined && starts.size < 10000) starts.set(id, now);
+            if (id && now !== undefined && starts.size < 10000)
+              starts.set(id, now);
           } else {
             const start = starts.get(id);
             if (start !== undefined && now !== undefined && now >= start)

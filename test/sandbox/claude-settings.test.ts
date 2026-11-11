@@ -46,7 +46,7 @@ describe("Claude under outer SRT", () => {
     });
     expect(merged.permissions).toEqual(settings.permissions);
     expect(merged.env).toEqual(settings.env);
-    expect(merged.hooks.PreToolUse).toHaveLength(2);
+    expect(merged.hooks.PreToolUse.length).toBeGreaterThan(2);
     expect(merged.hooks.PreToolUse[0]).toEqual(existingHook);
     if (process.platform !== "win32")
       expect((await stat(args[1]!)).mode & 0o777).toBe(0o600);
