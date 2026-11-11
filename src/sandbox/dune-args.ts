@@ -2,6 +2,13 @@ export interface DuneOptions {
   domains: string[];
   env: string[];
   write: string[];
+  /**
+   * Block every host that is not allowed, instead of the default: permit
+   * everything the machine policy does not deny. Implied by --allow-domain.
+   */
+  strict?: boolean;
+  /** Decrypt HTTPS in the proxy to log each request's method and URL path. */
+  logUrls?: boolean;
 }
 export function parseDuneArgs(argv: string[]): {
   command: string[];
@@ -19,6 +26,14 @@ export function parseDuneArgs(argv: string[]): {
     if (!arg.startsWith("-")) break;
     if (arg === "--help" || arg === "-h")
       return { command: [], options, mode: "help" };
+    if (arg === "--strict") {
+      options.strict = true;
+      continue;
+    }
+    if (arg === "--log-urls") {
+      options.logUrls = true;
+      continue;
+    }
     const [flag, ...inline] = arg.split("=");
     const target =
       flag === "--allow-domain"

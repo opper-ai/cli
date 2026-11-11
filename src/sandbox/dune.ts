@@ -134,9 +134,28 @@ export async function launchDune(
           ? "Existing Opper configuration is readable, not writable. Renew credentials outside Dune."
           : "Clean environment; only explicitly selected variables are passed.",
     );
+    // The machine policy is the only network configuration: with no rules
+    // everything is reachable, and each deny narrows it. An allowlist is the
+    // exception, asked for with --strict or --allow-domain.
+    const open = !options.strict && !options.domains.length;
+    if (open || options.logUrls)
+      activity.emit(
+        "NETMODE",
+        [open && "allow-all", options.logUrls && "urls"]
+          .filter(Boolean)
+          .join(" "),
+      );
     activity.emit(
       "COVERAGE",
-      "Network: blocked proxy requests only; allowed traffic is not logged. Direct Claude/Pi commands have agent-reported tool hooks; other commands have no tool-call instrumentation.",
+      `Network: ${
+        open
+          ? "every host is permitted unless a policy rule denies it; each connection's host is logged, allowed or blocked."
+          : "only permitted hosts are reachable; each connection's host is logged, allowed or blocked."
+      }${
+        options.logUrls
+          ? " HTTPS is decrypted in the local proxy to log each request's method and URL path; query strings, headers and bodies are not logged."
+          : ""
+      } Direct Claude/Pi commands have agent-reported tool hooks; other commands have no tool-call instrumentation.`,
     );
     const defaults = nativeClaude
       ? claudeDomains
@@ -151,7 +170,8 @@ export async function launchDune(
           ]
         : [];
     const allowedDomains = [...new Set([...defaults, ...options.domains])];
-    for (const domain of allowedDomains) activity.emit("ALLOW", domain);
+    if (!open)
+      for (const domain of allowedDomains) activity.emit("ALLOW", domain);
     const env = { ...sandboxEnvironment(home, temp), ...inherited };
     if (profile) env.CLAUDE_CONFIG_DIR = profile;
     if (nativeClaude) env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
@@ -163,7 +183,16 @@ export async function launchDune(
     ];
     const literal = (path: string) => ({ path, literal: true as const });
     process.stderr.write(
-      `Dune experimental sandbox · ${harness}\nProject edits are live. ${profile ? `Claude profile: ${profile}` : "Temporary home; network restricted to permitted hosts."}\n`,
+      open
+        ? "Network follows the machine policy: every host is reachable and logged unless a rule denies it. Use --strict for an allowlist.\n"
+        : "Network is an allowlist: only permitted hosts are reachable.\n",
+    );
+    if (options.logUrls)
+      process.stderr.write(
+        "HTTPS is decrypted by the local proxy to log request URLs. Clients that pin certificates may fail.\n",
+      );
+    process.stderr.write(
+      `Dune experimental sandbox · ${harness}\nProject edits are live. ${profile ? `Claude profile: ${profile}` : "Temporary home."}\n`,
     );
     const code = await runSrt(
       command,
@@ -204,6 +233,7 @@ export async function launchDune(
       project,
       activity.emit,
       policyPath,
+      { allowAll: open, urls: options.logUrls === true },
     );
     activity.emit("EXIT", `agent exited ${code}`);
     return code;

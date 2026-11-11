@@ -52,6 +52,7 @@ export function summarize(id, first, tail, clipped, now = Date.now()) {
       header.find((e) => e.kind === "MODEL")?.detail ??
       "Unavailable in older logs",
     backend: header.find((e) => e.kind === "BACKEND")?.detail ?? "srt",
+    networkMode: header.find((e) => e.kind === "NETMODE")?.detail ?? "",
     monitorPid:
       header.find((e) => e.kind === "MONITOR")?.detail ?? "Unavailable",
     state,

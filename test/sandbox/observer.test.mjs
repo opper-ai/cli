@@ -20,6 +20,12 @@ test("maps policy, observations and heartbeat without interpreting content", () 
   assert.equal(s.model, "test-model");
   assert.equal(s.monitorPid, "123");
   assert.deepEqual(s.allowed, ["api.opper.ai"]);
+  assert.equal(s.networkMode, "");
+  assert.equal(
+    summarize("one", `${time}  NETMODE    allow-all urls\n` + log, log, false)
+      .networkMode,
+    "allow-all urls",
+  );
   assert.equal(s.events.at(-1).detail, "changed <img src=x onerror=alert(1)>");
   assert.equal(
     summarize("one", log, log, false, Date.now() + 30000).state,

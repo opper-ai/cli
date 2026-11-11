@@ -305,6 +305,11 @@ h1 {
   background: var(--blocked);
   fill: var(--blocked);
 }
+.key.allowed,
+.ribbon rect.allowed {
+  background: var(--ok);
+  fill: var(--ok);
+}
 .key.file,
 .ribbon rect.file {
   background: var(--file);
@@ -454,7 +459,7 @@ td small {
 }
 .attempts span {
   display: inline-block;
-  min-width: 3ch;
+  min-width: 15ch;
   font-variant-numeric: tabular-nums;
 }
 .bar {
@@ -466,6 +471,10 @@ td small {
   background: linear-gradient(var(--blocked), var(--blocked)) no-repeat
     var(--blocked-wash);
   background-size: var(--share, 0%) 100%;
+}
+.bar.permitted {
+  background-image: linear-gradient(var(--ok), var(--ok));
+  background-color: var(--ok-wash);
 }
 .actions {
   text-align: right;
@@ -678,4 +687,102 @@ button.quiet:hover {
     height: 100vh;
     overflow: auto;
   }
+}
+
+.graph {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.graph figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 24px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.graph svg {
+  display: block;
+  width: 100%;
+  min-width: 520px;
+  height: auto;
+}
+#graph {
+  overflow-x: auto;
+}
+.graph text {
+  font-size: 13px;
+  fill: var(--ink);
+}
+.graph text.sub {
+  font-size: 11px;
+  fill: var(--soft);
+}
+.graph .edge {
+  fill: none;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+.graph .edge.ok {
+  stroke: var(--ok);
+}
+.graph .edge.blocked {
+  stroke: var(--blocked);
+}
+.graph .edge:hover {
+  opacity: 1;
+}
+.graph .edge.fresh {
+  animation: pulse 0.9s ease-out;
+}
+@keyframes pulse {
+  from {
+    opacity: 1;
+    filter: brightness(1.6);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph .edge.fresh {
+    animation: none;
+  }
+}
+.graph .agent {
+  cursor: pointer;
+}
+.graph .agent rect {
+  fill: var(--paper);
+  stroke: var(--line);
+}
+.graph .agent.selected rect {
+  stroke: var(--teal);
+  stroke-width: 2;
+}
+.graph .agent:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.graph .agent .dot {
+  fill: var(--soft);
+}
+.graph .agent.live .dot {
+  fill: var(--ok);
+}
+.graph .host circle {
+  fill: var(--ok);
+}
+.graph .host.blocked circle {
+  fill: var(--blocked);
+}
+.graph .host.mixed circle {
+  fill: var(--ok);
+  stroke: var(--blocked);
+  stroke-width: 3;
+}
+#detail.overview > :not(.tabs) {
+  display: none;
+}
+#detail.overview .tabs {
+  margin-top: 0;
 }

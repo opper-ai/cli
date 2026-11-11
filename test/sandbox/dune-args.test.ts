@@ -39,3 +39,9 @@ it.each([["--unknown"], ["--allow-domain"], ["--env", "KEY=value"]])(
     expect(() => parseDuneArgs(args)).toThrow();
   },
 );
+it("takes the network switches without a value", () => {
+  const result = parseDuneArgs(["--strict", "--log-urls", "curl", "--strict"]);
+  expect(result.options).toMatchObject({ strict: true, logUrls: true });
+  expect(result.command).toEqual(["curl", "--strict"]);
+  expect(parseDuneArgs(["curl"]).options.strict).toBeUndefined();
+});

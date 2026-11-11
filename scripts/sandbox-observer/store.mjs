@@ -34,6 +34,7 @@ const HEADER = {
   MODEL: "model",
   BACKEND: "backend",
   MONITOR: "monitor_pid",
+  NETMODE: "net_mode",
 };
 
 /** Opens the history, or returns null where this Node has no SQLite. */
@@ -58,6 +59,12 @@ export async function openStore(path) {
   chmodSync(path, 0o600);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  try {
+    // Added after the first release of this file.
+    db.exec("ALTER TABLE sessions ADD COLUMN net_mode TEXT");
+  } catch {
+    /* Already there. */
+  }
   db.prepare("DELETE FROM sessions WHERE updated < ?").run(
     new Date(Date.now() - KEEP_DAYS * 86400000).toISOString(),
   );
@@ -66,7 +73,7 @@ export async function openStore(path) {
   const create = db.prepare("INSERT INTO sessions (id) VALUES (?)");
   const save = db.prepare(`UPDATE sessions SET
     name = ?, harness = ?, model = ?, backend = ?, project = ?,
-    monitor_pid = ?, started = ?, updated = ?, stopped = ?,
+    monitor_pid = ?, net_mode = ?, started = ?, updated = ?, stopped = ?,
     policy_version = ?, allowed = ?, read_offset = ?,
     events = ?, blocked = ?, files = ?, tools = ? WHERE id = ?`);
   const insert = db.prepare(
@@ -130,7 +137,7 @@ export async function openStore(path) {
             (kind === "SESSION" && detail === "monitor stopped")
           )
             row.stopped = 1;
-          if (kind === "NETWORK") row.blocked++;
+          if (kind === "NETWORK" && detail.endsWith(" blocked")) row.blocked++;
           else if (kind === "FILE") row.files++;
           else if (kind === "TOOL" && detail.endsWith(" start")) row.tools++;
           insert.run(id, row.events++, time, kind, detail);
@@ -142,6 +149,7 @@ export async function openStore(path) {
           row.backend,
           row.project,
           row.monitor_pid,
+          row.net_mode,
           row.started,
           row.updated,
           row.stopped,
@@ -182,6 +190,7 @@ export async function openStore(path) {
           harness: row.harness ?? "Unavailable",
           model: row.model ?? "Unavailable in older logs",
           backend: row.backend ?? "srt",
+          networkMode: row.net_mode ?? "",
           monitorPid: row.monitor_pid ?? "Unavailable",
           clipped: row.events > 300,
           name: row.name ?? "Sandbox session",

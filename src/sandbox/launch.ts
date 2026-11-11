@@ -133,7 +133,7 @@ export async function launchSandbox(
   );
   activity.emit(
     "COVERAGE",
-    "Network: blocked proxy requests only; allowed traffic is not logged.",
+    "Network: each connection's host is logged, allowed or blocked.",
   );
   activity.emit(
     "COVERAGE",

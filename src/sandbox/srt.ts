@@ -5,12 +5,21 @@ import {
 import type { ActivitySink } from "./activity.js";
 import { constants } from "node:os";
 import { spawn } from "node:child_process";
+import { watchProcesses } from "./processes.js";
 // Keep the optional dependency out of compile-time resolution on Node 20,
 // where npm omits SRT because its engine requires Node 22.12 or later.
 type FilesystemPath = string | { path: string; literal: true };
 export interface SandboxRuntimeConfig {
   allowPty?: boolean;
-  network: { allowedDomains: string[]; deniedDomains: string[] };
+  network: {
+    allowedDomains: string[];
+    deniedDomains: string[];
+    tlsTerminate?: Record<string, never>;
+    filterRequest?: (
+      request: Request,
+      info?: { scheme?: "http" | "https" },
+    ) => Promise<{ action: "allow" }>;
+  };
   filesystem: {
     allowWrite: FilesystemPath[];
     denyRead: FilesystemPath[];
@@ -22,9 +31,13 @@ interface SandboxLibrary {
     initialize(
       config: SandboxRuntimeConfig,
       ask?: (request: { host: string; port?: number }) => Promise<boolean>,
+      enableLogMonitor?: boolean,
     ): Promise<void>;
     wrapWithSandbox(command: string, shell: string): Promise<string>;
     updateConfig(config: SandboxRuntimeConfig): void;
+    getSandboxViolationStore?(): {
+      subscribe(listener: (violations: { line: string }[]) => void): () => void;
+    };
     reset(): Promise<void>;
   };
 }
@@ -50,6 +63,40 @@ export function shellQuote(argument: string): string {
   return "'" + argument.replaceAll("'", "'\\''") + "'";
 }
 
+export interface NetworkObservation {
+  /**
+   * Let every host through unless a deny rule blocks it, logging each
+   * connection. The allowlist is emptied so SRT asks about every host.
+   */
+  allowAll?: boolean;
+  /**
+   * Terminate TLS in the proxy and log each request's method and URL without
+   * its query string. Headers and bodies are never read.
+   */
+  urls?: boolean;
+}
+
+/**
+ * SRT's own rule: exact host, or `*.example.com` for strict subdomains. An
+ * entry may end in `:port` to match that port only.
+ */
+export function matchesDomain(
+  host: string,
+  pattern: string,
+  port?: number,
+): boolean {
+  const name = host.toLowerCase();
+  let rule = pattern.toLowerCase();
+  const ported = /^([^:]+):(\d+)$/.exec(rule);
+  if (ported) {
+    if (Number(ported[2]) !== port) return false;
+    rule = ported[1]!;
+  }
+  if (!rule.startsWith("*.")) return name === rule;
+  // Never suffix-match an address: `1.2.3.4%x.example.com` is not a subdomain.
+  return !/[:%]/.test(name) && name.endsWith(rule.slice(1));
+}
+
 export async function runSrt(
   command: string[],
   config: SandboxRuntimeConfig,
@@ -57,10 +104,12 @@ export async function runSrt(
   cwd: string,
   activity?: ActivitySink,
   policyPath?: string,
+  observe: NetworkObservation = {},
 ): Promise<number> {
   let manager: SandboxLibrary["SandboxManager"] | undefined;
   let policyTimer: ReturnType<typeof setInterval> | undefined;
   let pid: number | undefined;
+  let stopProcesses: (() => void) | undefined;
   let interrupted: NodeJS.Signals | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const signalGroup = (signal: NodeJS.Signals) => {
@@ -91,19 +140,103 @@ export async function runSrt(
     manager = (await loadSrt()).SandboxManager;
     if (interrupted) return interruptedCode()!;
     let applied = policyPath ? readPolicy(policyPath) : undefined;
-    const effective = () =>
-      applied
-        ? { ...config, network: applyPolicy(config.network, applied) }
-        : config;
+    const base: SandboxRuntimeConfig = observe.urls
+      ? {
+          ...config,
+          network: {
+            ...config.network,
+            tlsTerminate: {},
+            filterRequest: async (request, info) => {
+              try {
+                const url = new URL(request.url);
+                activity?.(
+                  "REQUEST",
+                  `${request.method} ${info?.scheme ?? url.protocol.slice(0, -1)}://${url.host}${url.pathname}`.slice(
+                    0,
+                    400,
+                  ),
+                );
+              } catch {
+                /* Logging must never decide a request. */
+              }
+              return { action: "allow" };
+            },
+          },
+        }
+      : config;
+    // SRT lets a host on its allowlist through without telling anyone. To log
+    // every connection, the list is kept here instead and SRT is handed an
+    // empty one, so each host that no deny rule stops reaches the callback.
+    const decideHere = Boolean(activity) || observe.allowAll === true;
+    let allowed: string[] = [];
+    const withPolicy = (policy: typeof applied): SandboxRuntimeConfig => {
+      if (!decideHere) {
+        if (!policy) return base;
+        return {
+          ...base,
+          network: { ...base.network, ...applyPolicy(base.network, policy) },
+        };
+      }
+      const network = policy ? applyPolicy(base.network, policy) : base.network;
+      allowed = network.allowedDomains;
+      return {
+        ...base,
+        network: { ...base.network, ...network, allowedDomains: [] },
+      };
+    };
     await manager.initialize(
-      effective(),
-      activity
+      withPolicy(applied),
+      decideHere
         ? async ({ host, port }) => {
-            activity("NETWORK", `${host}:${port ?? "unknown"} blocked`);
-            return false;
+            const pass =
+              observe.allowAll === true ||
+              allowed.some((pattern) => matchesDomain(host, pattern, port));
+            activity?.(
+              "NETWORK",
+              `${host}:${port ?? "unknown"} ${pass ? "allowed" : "blocked"}`,
+            );
+            return pass;
           }
         : undefined,
+      // Report refused file access; on macOS this reads the system log.
+      Boolean(activity),
     );
+    if (activity) {
+      // A host on the deny list never reaches the callback above; SRT reports
+      // the refusal as a violation instead, in the spelling the client used.
+      const reported = new WeakSet<object>();
+      const refused = new Set<string>();
+      manager.getSandboxViolationStore?.()?.subscribe((violations) => {
+        for (const violation of violations) {
+          if (reported.has(violation)) continue;
+          reported.add(violation);
+          // macOS: `cat(123) deny(1) file-read-data /path`. Linux reports
+          // refused writes only: `deny openat /path`.
+          const file =
+            /\bdeny(?:\(\d+\))? file-(read|write)\S* (\/.*)$/.exec(
+              violation.line,
+            ) ?? /^deny (?!network-outbound )(\S+) (\/.*)$/.exec(violation.line);
+          if (file) {
+            const text = `${file[1] === "read" ? "read" : "write"} blocked ${file[2]}`;
+            // A retry loop would otherwise fill the log with one path.
+            if (refused.size < 5000 && !refused.has(text)) {
+              refused.add(text);
+              activity("FILE", text);
+            }
+            continue;
+          }
+          const host =
+            /^deny network-outbound (\S+) \(host is on the deny list\)$/.exec(
+              violation.line,
+            )?.[1];
+          if (host)
+            activity(
+              "NETWORK",
+              `${host.toLowerCase().replace(/\.(?=:\d+$|$)/, "")} blocked`,
+            );
+        }
+      });
+    }
     if (interrupted) return interruptedCode()!;
     const wrapped = await manager.wrapWithSandbox(
       command.map(shellQuote).join(" "),
@@ -123,10 +256,7 @@ export async function runSrt(
           if (next.version < applied!.version)
             throw new Error("Policy rollback");
           if (next.version !== applied!.version) {
-            manager!.updateConfig({
-              ...config,
-              network: applyPolicy(config.network, next),
-            });
+            manager!.updateConfig(withPolicy(next));
             applied = next;
           }
           activity?.("POLICY", String(applied!.version));
@@ -150,6 +280,7 @@ export async function runSrt(
       });
       // Signal the worker, agent and ordinary subprocesses as one process group.
       pid = child.pid;
+      if (pid && activity) stopProcesses = watchProcesses(pid, activity);
       child.once("error", reject);
       child.once("close", (code, signal: NodeJS.Signals | null) => {
         resolve(code ?? (signal ? 128 + constants.signals[signal] : 1));
@@ -159,6 +290,7 @@ export async function runSrt(
     for (const [signal, handler] of handlers) process.off(signal, handler);
     if (killTimer) clearTimeout(killTimer);
     if (policyTimer) clearInterval(policyTimer);
+    stopProcesses?.();
     signalGroup("SIGKILL");
     await manager?.reset();
   }

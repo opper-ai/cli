@@ -10,19 +10,23 @@ try {
 Run any executable inside an experimental SRT sandbox.
 Dune options go BEFORE the command; all later arguments pass through unchanged.
 
-  --allow-domain <host>  Permit a network host (repeatable)
+  --allow-domain <host>  Permit a network host; implies --strict (repeatable)
   --env <NAME>           Pass a named environment variable (repeatable)
+  --strict               Block every host not allowed (default: all hosts reachable
+                         and logged unless the machine policy denies them)
+  --log-urls             Decrypt HTTPS locally to log request URLs (experimental)
   --allow-write <path>   Permit writes to an existing directory (repeatable)
   -h, --help             Show this help
 
   dune claude                      Native Claude subscription profile
   dune opper launch pi             Opper login and model selection
-  dune --allow-domain registry.npmjs.org npm test
+  dune --allow-domain registry.npmjs.org npm test   Allowlist only
   dune --env OPENAI_API_KEY python script.py
   dune observe                     Local activity dashboard
   dune -- observe                  Run an executable named observe
 
-Generic commands get a temporary home and no network access unless allowed.
+Commands get a temporary home. Every host is reachable and logged unless the
+machine policy in dune observe denies it; --strict blocks all but allowed hosts.
 Project edits are live. Claude and Opper have scoped authentication defaults.`);
   } else if (mode === "observe") {
     const observerUrl = new URL(

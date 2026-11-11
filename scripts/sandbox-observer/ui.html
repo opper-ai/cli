@@ -33,7 +33,7 @@
             seconds.
           </p>
           <pre><code>dune claude
-dune --allow-domain registry.npmjs.org npm test</code></pre>
+dune npm test</code></pre>
         </div>
         <article id="detail" hidden>
           <div class="heading">
@@ -48,6 +48,7 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
               <span id="ribbon-title"></span>
               <span class="legend">
                 <i class="key blocked"></i>Blocked network
+                <i class="key allowed"></i>Allowed network
                 <i class="key file"></i>File changes
                 <i class="key tool"></i>Tools
               </span>
@@ -75,6 +76,15 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
               tabindex="-1"
             >
               Activity <span id="activity-count" class="count"></span>
+            </button>
+            <button
+              id="graph-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="graph-panel"
+              tabindex="-1"
+            >
+              Graph <span id="graph-count" class="count"></span>
             </button>
           </div>
 
@@ -115,6 +125,14 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
                   <h2>Files changed</h2>
                   <ul id="files" class="tally"></ul>
                 </section>
+                <section id="urls-box" hidden>
+                  <h2>URLs requested</h2>
+                  <ul id="urls" class="tally"></ul>
+                </section>
+                <section id="programs-box" hidden>
+                  <h2>Programs run</h2>
+                  <ul id="programs" class="tally"></ul>
+                </section>
                 <section>
                   <h2>Tools used</h2>
                   <ul id="tools" class="tally"></ul>
@@ -139,8 +157,8 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
                 <tr>
                   <th>Destination</th>
                   <th>Status</th>
-                  <th>Blocked attempts</th>
-                  <th>Last blocked</th>
+                  <th>Traffic seen</th>
+                  <th>Last seen</th>
                   <th><span class="sr">Change rule</span></th>
                 </tr>
               </thead>
@@ -167,8 +185,9 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
             </div>
             <p class="fine">
               Exact hostname or IP address, without wildcards, ports or URLs.
-              Rules apply to every Dune session on this machine, and a deny
-              beats a launch allowlist.
+              Rules apply to every Dune session on this machine. Sessions reach
+              everything that is not denied; an allow rule only matters to
+              sessions started with <code>--strict</code>.
             </p>
           </form>
           <p id="policy-result" class="result" role="status"></p>
@@ -176,13 +195,34 @@ dune --allow-domain registry.npmjs.org npm test</code></pre>
           <ul id="policy-agents" class="sync"></ul>
         </section>
 
+        <section
+          id="graph-panel"
+          role="tabpanel"
+          aria-labelledby="graph-tab"
+          hidden
+        >
+          <figure class="graph">
+            <figcaption>
+              <span id="graph-note"></span>
+              <span class="legend">
+                <i class="key allowed"></i>went through
+                <i class="key blocked"></i>blocked
+              </span>
+            </figcaption>
+            <div id="graph"></div>
+          </figure>
+        </section>
+
         <details class="coverage">
           <summary>What this view can’t see</summary>
           <p>
-            Connections that were allowed, file reads and subprocesses are not
-            recorded, so a quiet session is not proof that nothing happened.
-            File changes can include edits made outside the sandbox, and tool
-            events are reported by the agent itself.
+            Every connection is logged by host, allowed or blocked. Programs
+            are sampled a few times a second, so one that starts and exits in
+            between is missed, and their arguments are never logged. File
+            access the sandbox refuses is logged, but successful file reads are
+            not: tracing them needs root. File changes can include edits made
+            outside the sandbox, and tool events are reported by the agent
+            itself.
           </p>
           <ul id="coverage"></ul>
         </details>

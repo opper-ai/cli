@@ -65,7 +65,7 @@ export function startActivity(
   );
   emit(
     "COVERAGE",
-    "File notifications may be coalesced and include external edits; file reads and subprocess execution are not traced. Tool hooks are agent-reported; arguments, outputs and file contents are omitted.",
+    "File notifications may be coalesced and include external edits. File access the sandbox refuses is logged; successful reads are not. Programs are sampled from the process table, so short-lived ones can be missed, and their arguments are not logged. Tool hooks are agent-reported; arguments, outputs and file contents are omitted.",
   );
   let input: number;
   try {

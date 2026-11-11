@@ -23,7 +23,7 @@ function svg(tag, attrs = {}, text) {
   if (text !== undefined) node.textContent = text;
   return node;
 }
-// Polling re-renders every two seconds. Rebuilding only when the inputs
+// Polling re-renders every second. Rebuilding only when the inputs
 // change keeps focus, hover and scroll position where the reader left them.
 const signatures = new WeakMap();
 function sync(node, signature, build) {
@@ -53,27 +53,48 @@ function ago(time) {
   return `${Math.floor(minutes / 1440)}d ago`;
 }
 const shortPath = (path) => path.replace(/^\/(?:Users|home)\/[^/]+/, "~");
-const blockedHost = (event) => event.detail.replace(/ blocked$/, "");
-// Policy rules name a bare host; blocked attempts are logged as host:port.
+// A NETWORK event is "<host>:<port> blocked", or "… allowed" in a session
+// launched with --allow-all.
+const netHost = (event) => event.detail.replace(/ (?:blocked|allowed)$/, "");
+const wasAllowed = (event) => event.detail.endsWith(" allowed");
+const isBlocked = (event) => event.kind === "NETWORK" && !wasAllowed(event);
+// A REQUEST event is "<METHOD> <url without query>", from --log-urls.
+function requestHost(event) {
+  try {
+    return new URL(event.detail.split(" ")[1]).hostname;
+  } catch {
+    return "";
+  }
+}
+const allowsAll = (s) => (s.networkMode ?? "").includes("allow-all");
+const logsUrls = (s) => (s.networkMode ?? "").includes("urls");
+// Policy rules name a bare host; connections are logged as host:port.
 const bare = (host) =>
   host.replace(/:(?:\d+|unknown)$/, "").replace(/^\[|\]$/g, "");
 const command = (s) =>
   s.harness && s.harness !== "Unavailable" ? s.harness : s.name;
 const launcher = (s) => (s.name.includes(" / ") ? s.name.split(" / ")[0] : "");
 const hasProject = (s) => s.project.startsWith("/");
-const blockedTotal = (s) => s.totals?.blocked ?? count(s, "NETWORK");
-const count = (s, kind) => s.events.filter((e) => e.kind === kind).length;
+const blockedCount = (s) => s.events.filter(isBlocked).length;
+const blockedTotal = (s) => s.totals?.blocked ?? blockedCount(s);
 
 const GROUPS = {
-  NETWORK: "network",
+  REQUEST: "request",
   FILE: "file",
+  PROCESS: "process",
   TOOL: "tool",
   TOOLS: "tool",
 };
-const group = (event) => GROUPS[event.kind] ?? "other";
+const group = (event) =>
+  event.kind === "NETWORK"
+    ? wasAllowed(event)
+      ? "allowed"
+      : "network"
+    : (GROUPS[event.kind] ?? "other");
 const KIND_LABELS = {
-  NETWORK: "Blocked",
+  REQUEST: "Request",
   FILE: "File",
+  PROCESS: "Program",
   TOOL: "Tool",
   TOOLS: "Tool",
   SESSION: "Session",
@@ -177,10 +198,23 @@ function renderHeader(s) {
   $("project").title = s.project;
   sync(
     $("metadata"),
-    [s.id, s.model, s.started, s.monitorPid, s.policyVersion, s.totals],
+    [
+      s.id,
+      s.model,
+      s.started,
+      s.monitorPid,
+      s.policyVersion,
+      s.totals,
+      s.networkMode,
+    ],
     () =>
       [
         ["Sandbox", [launcher(s), s.backend].filter(Boolean).join(" on ")],
+        [
+          "Network",
+          (allowsAll(s) ? "Open, every host logged" : "Allowlist") +
+            (logsUrls(s) ? ", URLs logged" : ""),
+        ],
         ["Model", s.model],
         [
           "Started",
@@ -209,9 +243,12 @@ function renderHeader(s) {
 }
 
 // One bar per time slice across the event window: when things happened, and
-// whether it was blocked traffic, file changes or tool calls.
+// whether it was network traffic, file changes or tool calls. Requests are
+// left out: each one already shows as a connection.
 function renderRibbon(s) {
-  const marks = s.events.filter((e) => group(e) !== "other");
+  const marks = s.events.filter(
+    (e) => !["other", "request", "process"].includes(group(e)),
+  );
   const first = Date.parse(s.events[0]?.time ?? s.started);
   const last =
     s.state === "Live"
@@ -220,7 +257,7 @@ function renderRibbon(s) {
   const width = Math.max(last - first, 1000);
   $("ribbon-title").textContent = marks.length
     ? `${plural(marks.length, "event")} over ${span(width)}`
-    : "No blocked traffic, file changes or tool calls recorded";
+    : "No network traffic, file changes or tool calls recorded";
   $("ribbon-start").textContent = Number.isFinite(first) ? clock(first) : "";
   $("ribbon-end").textContent =
     s.state === "Live" ? "now" : Number.isFinite(last) ? clock(last) : "";
@@ -230,6 +267,7 @@ function renderRibbon(s) {
       slot = 1000 / slices;
     const buckets = Array.from({ length: slices }, () => ({
       network: 0,
+      allowed: 0,
       file: 0,
       tool: 0,
     }));
@@ -241,10 +279,10 @@ function renderRibbon(s) {
     }
     const peak = Math.max(
       1,
-      ...buckets.map((b) => b.network + b.file + b.tool),
+      ...buckets.map((b) => b.network + b.allowed + b.file + b.tool),
     );
     const canvas = svg("svg", {
-      viewBox: `0 0 1000 ${height}`,
+      viewBox: `0 0 760 ${height}`,
       preserveAspectRatio: "none",
       role: "img",
       "aria-label": $("ribbon-title").textContent,
@@ -255,7 +293,7 @@ function renderRibbon(s) {
     for (const [i, bucket] of buckets.entries()) {
       let y = height - 1;
       const parts = [];
-      for (const kind of ["tool", "file", "network"]) {
+      for (const kind of ["tool", "file", "allowed", "network"]) {
         if (!bucket[kind]) continue;
         const size = Math.max(3, (bucket[kind] / peak) * (height - 4));
         y -= size;
@@ -286,25 +324,35 @@ function renderRibbon(s) {
 function destinationRows(s) {
   const rows = new Map();
   const row = (host) => {
-    if (!rows.has(host)) rows.set(host, { host, attempts: 0 });
+    if (!rows.has(host)) rows.set(host, { host, attempts: 0, passed: 0 });
     return rows.get(host);
   };
   if (s) {
     for (const host of s.allowed) row(host).allowed = true;
     for (const event of s.events.filter((e) => e.kind === "NETWORK")) {
-      const entry = row(bare(blockedHost(event)));
-      entry.attempts++;
+      const entry = row(bare(netHost(event)));
+      if (wasAllowed(event)) entry.passed++;
+      else entry.attempts++;
       entry.last = event.time;
     }
   }
   for (const [host, action] of Object.entries(policy?.rules ?? {}))
     row(host).rule = action;
   const rank = (r) =>
-    r.attempts ? 0 : r.rule === "deny" ? 1 : r.rule === "allow" ? 2 : 3;
+    r.attempts
+      ? 0
+      : r.passed
+        ? 1
+        : r.rule === "deny"
+          ? 2
+          : r.rule === "allow"
+            ? 3
+            : 4;
   return [...rows.values()].sort(
     (a, b) =>
       rank(a) - rank(b) ||
       b.attempts - a.attempts ||
+      b.passed - a.passed ||
       a.host.localeCompare(b.host),
   );
 }
@@ -314,18 +362,20 @@ function renderNetwork(s) {
   $("network-title").hidden = !!s;
   $("network-note").textContent = !s
     ? "Rules below apply to every Dune session on this machine, including ones you start later."
-    : s.policyVersion === null
-      ? "This session’s network access was fixed at launch, so rule changes won’t reach it. Only blocked attempts are recorded; allowed connections are not."
-      : "Only blocked attempts are recorded; allowed connections are not. Rule changes reach running Dune sessions within a few seconds.";
+    : allowsAll(s)
+      ? `This session follows the machine policy: every host is reachable unless a rule denies it, and each connection is listed here.${logsUrls(s) ? " Request URLs are in the Activity tab." : ""} Deny a host to block it in every session from now on; connections already open stay open.`
+      : s.policyVersion === null
+        ? "This session’s network access was fixed at launch, so rule changes won’t reach it. Only blocked attempts are recorded; allowed connections are not."
+        : "Only blocked attempts are recorded; allowed connections are not. Rule changes reach running Dune sessions within a few seconds.";
   const rows = destinationRows(s);
-  const peak = Math.max(1, ...rows.map((r) => r.attempts));
+  const peak = Math.max(1, ...rows.map((r) => r.attempts + r.passed));
   sync($("destinations"), [s?.id, s?.policyVersion, rows, policyBusy], () => {
     if (!rows.length) {
       const cell = el(
         "td",
         s
-          ? "No hosts allowed and no blocked attempts in this window."
-          : "No rules yet. Add one below, or open a session and allow a blocked host.",
+          ? "No hosts allowed and no network traffic seen in this window."
+          : "No rules yet, so sessions can reach every host. Deny one below, or from a session’s list of hosts.",
         "fine",
       );
       cell.colSpan = 5;
@@ -336,12 +386,12 @@ function renderNetwork(s) {
     return rows.map((r) => {
       const line = el("tr");
       const name = el("td");
-      if (r.attempts && s) {
+      if ((r.attempts || r.passed) && s) {
         const jump = el("button", r.host, "link host");
-        jump.title = "Show these attempts in the activity timeline";
+        jump.title = "Show this host’s traffic in the activity timeline";
         jump.onclick = () => {
           hostFilter = r.host;
-          filter = "network";
+          filter = "all";
           showView("activity");
         };
         name.append(jump);
@@ -355,26 +405,40 @@ function renderNetwork(s) {
             ? [
                 "Allowed by rule",
                 "permitted",
-                s && !r.allowed
-                  ? s.policyVersion === null
-                    ? "not followed by this session"
-                    : s.state === "Live"
-                      ? "not applied yet"
-                      : ""
-                  : "",
+                s && allowsAll(s)
+                  ? "no effect here, only in --strict sessions"
+                  : s && !r.allowed
+                    ? s.policyVersion === null
+                      ? "not followed by this session"
+                      : s.state === "Live"
+                        ? "not applied yet"
+                        : ""
+                    : "",
               ]
             : r.allowed
               ? ["Allowed at launch", "permitted", ""]
-              : ["Blocked", "blocked", "not on the allowlist"];
+              : r.passed && !r.attempts
+                ? ["Allowed", "permitted", "no rule denies it"]
+                : s && allowsAll(s)
+                  ? ["Blocked earlier", "blocked", "its deny rule was removed"]
+                  : ["Blocked", "blocked", "not on the allowlist"];
       status.append(el("span", label, `tag ${tone}`));
       if (hint) status.append(el("small", hint));
 
       const attempts = el("td", undefined, "attempts");
-      if (r.attempts) {
-        const bar = el("i", undefined, "bar");
-        bar.style.setProperty("--share", `${(r.attempts / peak) * 100}%`);
-        attempts.append(el("span", r.attempts.toLocaleString()), bar);
-      } else attempts.append(el("span", s ? "none" : "", "fine"));
+      for (const [n, text, tone] of [
+        [r.attempts, "blocked", "blocked"],
+        [r.passed, r.passed === 1 ? "connection" : "connections", "permitted"],
+      ]) {
+        if (!n) continue;
+        const line = el("div");
+        const bar = el("i", undefined, `bar ${tone}`);
+        bar.style.setProperty("--share", `${(n / peak) * 100}%`);
+        line.append(el("span", `${n.toLocaleString()} ${text}`, tone), bar);
+        attempts.append(line);
+      }
+      if (!r.attempts && !r.passed)
+        attempts.append(el("span", s ? "none seen" : "", "fine"));
 
       const last = el("td", r.last ? ago(r.last) : "", "fine");
       if (r.last) last.title = new Date(r.last).toLocaleString();
@@ -388,9 +452,14 @@ function renderNetwork(s) {
           button.onclick = () => changeRule(r.host, action);
           actions.append(button);
         };
-        if (r.rule !== "allow" && !(r.allowed && !r.rule))
+        const open = s && allowsAll(s) && !r.rule;
+        if (
+          r.rule !== "allow" &&
+          !(r.allowed && !r.rule) &&
+          !(s && allowsAll(s))
+        )
           offer("Allow", "allow", "allow");
-        if (r.rule !== "deny" && (r.allowed || r.rule))
+        if (r.rule !== "deny" && (r.allowed || r.rule || open))
           offer("Deny", "deny", "deny");
         if (r.rule) offer("Remove rule", "inherit", "quiet");
       }
@@ -426,17 +495,34 @@ function describe(event) {
   const cell = el("td");
   const code = (text) => el("code", text);
   if (event.kind === "NETWORK") {
-    cell.append(code(blockedHost(event)), " blocked");
+    cell.append(
+      code(netHost(event)),
+      wasAllowed(event) ? " connection allowed" : " blocked",
+    );
+  } else if (event.kind === "REQUEST") {
+    const [method, ...url] = event.detail.split(" ");
+    cell.append(`${method} `, code(url.join(" ")));
   } else if (event.kind === "FILE") {
     const match = /^(changed|created\/deleted\/renamed) (.+)$/.exec(
       event.detail,
     );
-    if (!match) cell.append(event.detail);
+    const refused = REFUSED.exec(event.detail);
+    if (refused) {
+      cell.append(
+        code(shortPath(refused[2])),
+        ` ${refused[1]} refused by the sandbox`,
+      );
+      cell.className = "blocked";
+    } else if (!match) cell.append(event.detail);
     else
       cell.append(
         code(match[2]),
         match[1] === "changed" ? " changed" : " created, removed or renamed",
       );
+  } else if (event.kind === "PROCESS") {
+    const match = /^(.+) \(pid (\d+)\)$/.exec(event.detail);
+    if (!match) cell.append(event.detail);
+    else cell.append(code(shortPath(match[1])), ` ran as pid ${match[2]}`);
   } else if (event.kind === "TOOL") {
     const match = /^(\S+) (start|end|error)(?: · (\d+)ms observed)?$/.exec(
       event.detail,
@@ -463,6 +549,8 @@ function describe(event) {
   return cell;
 }
 
+const REFUSED = /^(read|write) blocked (.+)$/;
+
 function tally(id, entries, empty, unit) {
   const counts = new Map();
   for (const key of entries) counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -487,7 +575,10 @@ function renderActivity(s) {
   const totals = {
     all: s.events.length,
     network: 0,
+    allowed: 0,
+    request: 0,
     file: 0,
+    process: 0,
     tool: 0,
     other: 0,
   };
@@ -496,7 +587,10 @@ function renderActivity(s) {
     [
       ["all", "Everything"],
       ["network", "Blocked network"],
+      ...(totals.allowed ? [["allowed", "Allowed network"]] : []),
+      ...(totals.request ? [["request", "Requests"]] : []),
       ["file", "Files"],
+      ...(totals.process ? [["process", "Programs"]] : []),
       ["tool", "Tools"],
       ["other", "Session"],
     ].map(([value, label]) => {
@@ -505,7 +599,6 @@ function renderActivity(s) {
       chip.setAttribute("aria-pressed", String(filter === value));
       chip.onclick = () => {
         filter = value;
-        if (value !== "network") hostFilter = undefined;
         render();
       };
       return chip;
@@ -513,13 +606,14 @@ function renderActivity(s) {
   );
   $("host-filter").hidden = !hostFilter;
   $("host-filter-text").textContent = hostFilter
-    ? `Only attempts to reach ${hostFilter}. `
+    ? `Only traffic to ${hostFilter}. `
     : "";
   const events = s.events.filter(
     (e) =>
       (filter === "all" || group(e) === filter) &&
       (!hostFilter ||
-        (e.kind === "NETWORK" && bare(blockedHost(e)) === hostFilter)),
+        (e.kind === "NETWORK" && bare(netHost(e)) === hostFilter) ||
+        (e.kind === "REQUEST" && requestHost(e) === hostFilter)),
   );
   sync(
     $("timeline"),
@@ -543,9 +637,13 @@ function renderActivity(s) {
           kind.append(
             el(
               "span",
-              KIND_LABELS[e.kind] ??
-                e.kind.charAt(0) + e.kind.slice(1).toLowerCase(),
-              `tag ${e.kind === "NETWORK" || e.kind === "ERROR" ? "blocked" : ""}`,
+              e.kind === "NETWORK"
+                ? wasAllowed(e)
+                  ? "Allowed"
+                  : "Blocked"
+                : (KIND_LABELS[e.kind] ??
+                    e.kind.charAt(0) + e.kind.slice(1).toLowerCase()),
+              `tag ${isBlocked(e) || e.kind === "ERROR" || (e.kind === "FILE" && REFUSED.test(e.detail)) ? "blocked" : e.kind === "NETWORK" ? "permitted" : ""}`,
             ),
           );
           line.append(time, kind, describe(e));
@@ -563,11 +661,27 @@ function renderActivity(s) {
   tally(
     "files",
     s.events
-      .filter((e) => e.kind === "FILE")
+      .filter((e) => e.kind === "FILE" && !REFUSED.test(e.detail))
       .map((e) =>
         e.detail.replace(/^(changed|created\/deleted\/renamed) /, ""),
       ),
     "No file changes seen.",
+    (n) => `${n}×`,
+  );
+  const requests = s.events.filter((e) => e.kind === "REQUEST");
+  $("urls-box").hidden = !requests.length;
+  tally(
+    "urls",
+    requests.map((e) => e.detail),
+    "",
+    (n) => `${n}×`,
+  );
+  const programs = s.events.filter((e) => e.kind === "PROCESS");
+  $("programs-box").hidden = !programs.length;
+  tally(
+    "programs",
+    programs.map((e) => shortPath(e.detail.replace(/ \(pid \d+\)$/, ""))),
+    "",
     (n) => `${n}×`,
   );
   tally(
@@ -579,6 +693,156 @@ function renderActivity(s) {
     (n) => plural(n, "call"),
   );
 }
+
+// Every running agent on the left, every destination any of them contacted on
+// the right, and one line per agent, destination and outcome. Calls with the
+// same outcome share a line that thickens with their number; drawing each
+// call separately turns a busy session into a solid block.
+const lastCalls = new Map();
+function renderGraph() {
+  $("graph-panel").hidden = view !== "graph";
+  // The graph is about every agent, so the selected session's header steps
+  // aside and the picture starts at the top of the page.
+  $("detail").classList.toggle("overview", view === "graph");
+  const running = sessions.filter((s) => s.state === "Live");
+  const agents = (
+    running.length ? running : sessions.filter((s) => !s.archived)
+  ).slice(0, 24);
+  const links = new Map();
+  const hosts = new Map();
+  agents.forEach((s, index) => {
+    for (const event of s.events) {
+      if (event.kind !== "NETWORK") continue;
+      const host = bare(netHost(event));
+      const ok = wasAllowed(event);
+      const key = `${s.id} ${host} ${ok}`;
+      const link = links.get(key) ?? { agent: index, host, ok, calls: 0 };
+      link.calls++;
+      links.set(key, link);
+      const node = hosts.get(host) ?? { host, ok: 0, blocked: 0, pull: 0 };
+      node[ok ? "ok" : "blocked"]++;
+      node.pull += index;
+      hosts.set(host, node);
+    }
+  });
+  // Destinations sit near the agents that use them, so lines cross less.
+  const ranked = [...hosts.values()].sort(
+    (a, b) =>
+      a.pull / (a.ok + a.blocked) - b.pull / (b.ok + b.blocked) ||
+      a.host.localeCompare(b.host),
+  );
+  const shown = ranked.slice(0, 60);
+  const place = new Map(shown.map((node, index) => [node.host, index]));
+  const edges = [...links.entries()].filter(([, link]) =>
+    place.has(link.host),
+  );
+  $("graph-count").textContent = agents.length ? String(agents.length) : "";
+  $("graph-note").textContent = !agents.length
+    ? "No agents yet."
+    : `${running.length ? plural(agents.length, "running agent") : `No agent is running; showing ${plural(agents.length, "ended session")}`} and ${plural(shown.length, "destination")}${ranked.length > shown.length ? ` (${ranked.length - shown.length} quieter ones hidden)` : ""}. Lines update as calls happen.`;
+  sync(
+    $("graph"),
+    [
+      selected,
+      agents.map((s) => [s.id, command(s), s.project, s.state]),
+      edges.map(([key, link]) => [key, link.calls]),
+    ],
+    () => {
+      if (!agents.length)
+        return [el("p", "Start an agent with dune to see it here.", "fine")];
+      const row = 46;
+      const left = 200;
+      const right = 470;
+      const gap = (count) =>
+        (Math.max(agents.length, shown.length) - count) * (row / 2);
+      const agentY = (i) => 30 + gap(agents.length) + i * row;
+      const hostY = (i) => 30 + gap(shown.length) + i * row;
+      const height = 60 + (Math.max(agents.length, shown.length, 1) - 1) * row;
+      const canvas = svg("svg", {
+        viewBox: `0 0 760 ${height}`,
+        role: "img",
+        "aria-label": `${plural(agents.length, "agent")} and ${plural(shown.length, "destination")}; ${edges.filter(([, l]) => !l.ok).length} blocked routes`,
+      });
+      for (const [key, link] of edges) {
+        const both = links.has(
+          `${agents[link.agent].id} ${link.host} ${!link.ok}`,
+        );
+        const lift = both ? (link.ok ? -4 : 4) : 0;
+        const y1 = agentY(link.agent) + lift;
+        const y2 = hostY(place.get(link.host)) + lift;
+        const path = svg("path", {
+          d: `M ${left} ${y1} C ${left + 120} ${y1}, ${right - 120} ${y2}, ${right} ${y2}`,
+          class: `edge ${link.ok ? "ok" : "blocked"}${link.calls > (lastCalls.get(key) ?? link.calls) ? " fresh" : ""}`,
+          "stroke-width": Math.min(1.5 + 1.8 * Math.log2(link.calls), 14).toFixed(1),
+        });
+        path.append(
+          svg(
+            "title",
+            {},
+            `${command(agents[link.agent])} → ${link.host}: ${plural(link.calls, "call")} ${link.ok ? "went through" : "blocked"}`,
+          ),
+        );
+        canvas.append(path);
+      }
+      agents.forEach((s, i) => {
+        const node = svg("g", {
+          class: `agent${s.id === selected ? " selected" : ""}${s.state === "Live" ? " live" : ""}`,
+          tabindex: 0,
+          role: "button",
+        });
+        node.append(
+          svg("rect", {
+            x: 20,
+            y: agentY(i) - 17,
+            width: left - 20,
+            height: 34,
+            rx: 8,
+          }),
+          svg("circle", { cx: 36, cy: agentY(i), r: 4, class: "dot" }),
+          svg("text", { x: 48, y: agentY(i) - 1 }, clip(command(s), 24)),
+          svg(
+            "text",
+            { x: 48, y: agentY(i) + 12, class: "sub" },
+            hasProject(s) ? clip(s.project.split("/").at(-1), 30) : "",
+          ),
+        );
+        node.onclick = () => {
+          selected = s.id;
+          render();
+        };
+        node.onkeydown = (event) => {
+          if (event.key === "Enter" || event.key === " ") node.onclick();
+        };
+        canvas.append(node);
+      });
+      shown.forEach((host, i) => {
+        const node = svg("g", {
+          class: `host ${host.blocked ? (host.ok ? "mixed" : "blocked") : "ok"}`,
+        });
+        node.append(
+          svg("circle", { cx: right, cy: hostY(i), r: 6 }),
+          svg("text", { x: right + 14, y: hostY(i) - 1 }, clip(host.host, 38)),
+          svg(
+            "text",
+            { x: right + 14, y: hostY(i) + 12, class: "sub" },
+            [
+              host.ok && `${host.ok} ok`,
+              host.blocked && `${host.blocked} blocked`,
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          ),
+        );
+        canvas.append(node);
+      });
+      return [canvas];
+    },
+  );
+  lastCalls.clear();
+  for (const [key, link] of edges) lastCalls.set(key, link.calls);
+}
+const clip = (text, length) =>
+  text.length > length ? `${text.slice(0, length - 1)}…` : text;
 
 function render() {
   renderSessions();
@@ -592,35 +856,48 @@ function render() {
   if (!s) return;
   renderHeader(s);
   renderRibbon(s);
-  const blocked = count(s, "NETWORK");
-  $("network-count").textContent = blocked ? `${blocked} blocked` : "";
+  const blocked = blockedCount(s);
+  const reached = new Set(
+    s.events
+      .filter((e) => e.kind === "NETWORK" && wasAllowed(e))
+      .map((e) => bare(netHost(e))),
+  ).size;
+  $("network-count").textContent = blocked
+    ? `${blocked} blocked`
+    : reached
+      ? `${reached} ${reached === 1 ? "host" : "hosts"} reached`
+      : "";
   $("network-count").className = `count ${blocked ? "blocked" : ""}`;
   $("activity-count").textContent = String(s.events.length);
   renderActivity(s);
+  renderGraph();
 }
 
+const VIEWS = ["network", "activity", "graph"];
 function showView(next) {
   view = next;
-  for (const name of ["network", "activity"]) {
+  for (const name of VIEWS) {
     $(`${name}-tab`).setAttribute("aria-selected", String(name === view));
     $(`${name}-tab`).tabIndex = name === view ? 0 : -1;
   }
   if (view === "network") hostFilter = undefined;
   render();
 }
-for (const name of ["network", "activity"]) {
+for (const name of VIEWS) {
   $(`${name}-tab`).onclick = () => showView(name);
   $(`${name}-tab`).onkeydown = (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
+    const at = VIEWS.indexOf(name);
     const next =
       event.key === "Home"
-        ? "network"
+        ? VIEWS[0]
         : event.key === "End"
-          ? "activity"
-          : name === "network"
-            ? "activity"
-            : "network";
+          ? VIEWS.at(-1)
+          : VIEWS[
+              (at + (event.key === "ArrowRight" ? 1 : -1) + VIEWS.length) %
+                VIEWS.length
+            ];
     showView(next);
     $(`${next}-tab`).focus();
   };
@@ -702,7 +979,7 @@ async function refresh() {
     connection.className = "connection error";
     connection.textContent = error.message;
   } finally {
-    setTimeout(refresh, 2000);
+    setTimeout(refresh, 1000);
   }
 }
 refresh();

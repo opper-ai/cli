@@ -5,10 +5,14 @@ const mocks = vi.hoisted(() => ({
   initialize: vi.fn(),
   wrapWithSandbox: vi.fn(),
   reset: vi.fn(),
+  getSandboxViolationStore: vi.fn(),
   spawn: vi.fn(),
 }));
 vi.mock("@anthropic-ai/sandbox-runtime", () => ({ SandboxManager: mocks }));
-vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
+vi.mock("node:child_process", () => ({
+  spawn: mocks.spawn,
+  execFile: vi.fn(),
+}));
 import { loadSrt, runSrt, shellQuote } from "../../src/sandbox/srt.js";
 const nodeVersion = process.versions.node;
 beforeEach(() => {
@@ -86,10 +90,93 @@ it("logs unmatched network requests while keeping them denied", async () => {
     filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
   };
   await runSrt(["echo"], config, {}, "/project", emit);
-  expect(mocks.initialize.mock.calls[0]![0]).toBe(config);
-  const callback = mocks.initialize.mock.calls[0]![1];
+  // The allowlist is decided in the callback so allowed hosts are logged too.
+  const [applied, callback] = mocks.initialize.mock.calls[0]!;
+  expect(applied.network.allowedDomains).toEqual([]);
   expect(await callback({ host: "unlisted.example", port: 443 })).toBe(false);
   expect(emit).toHaveBeenCalledWith("NETWORK", "unlisted.example:443 blocked");
+  expect(await callback({ host: "API.opper.ai", port: 443 })).toBe(true);
+  expect(emit).toHaveBeenCalledWith("NETWORK", "API.opper.ai:443 allowed");
+  expect(await callback({ host: "evil-api.opper.ai.example", port: 443 })).toBe(
+    false,
+  );
+});
+
+it("can open the network while logging hosts and query-free URLs", async () => {
+  const emit = vi.fn();
+  mocks.spawn.mockImplementation(() => {
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    setImmediate(() => child.emit("close", 0));
+    return child;
+  });
+  const config = {
+    network: {
+      allowedDomains: ["api.opper.ai"],
+      deniedDomains: ["bad.example"],
+    },
+    filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
+  };
+  await runSrt(["echo"], config, {}, "/project", emit, undefined, {
+    allowAll: true,
+    urls: true,
+  });
+  const [applied, callback] = mocks.initialize.mock.calls[0]!;
+  // An empty allowlist sends every host to the callback; denies stay.
+  expect(applied.network.allowedDomains).toEqual([]);
+  expect(applied.network.deniedDomains).toEqual(["bad.example"]);
+  expect(applied.network.tlsTerminate).toEqual({});
+  expect(await callback({ host: "anything.example", port: 443 })).toBe(true);
+  expect(emit).toHaveBeenCalledWith("NETWORK", "anything.example:443 allowed");
+  expect(
+    await applied.network.filterRequest(
+      new Request("https://anything.example/a/b?token=secret", {
+        method: "POST",
+      }),
+      { scheme: "https" },
+    ),
+  ).toEqual({ action: "allow" });
+  expect(emit).toHaveBeenCalledWith(
+    "REQUEST",
+    "POST https://anything.example/a/b",
+  );
+  expect(JSON.stringify(emit.mock.calls)).not.toContain("secret");
+});
+
+it("logs connections refused by a deny rule from SRT's violation reports", async () => {
+  const emit = vi.fn();
+  mocks.spawn.mockImplementation(() => {
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    setImmediate(() => child.emit("close", 0));
+    return child;
+  });
+  let report!: (violations: { line: string }[]) => void;
+  mocks.getSandboxViolationStore.mockReturnValue({
+    subscribe: (listener: typeof report) => {
+      report = listener;
+      return () => {};
+    },
+  });
+  await runSrt(
+    ["echo"],
+    {
+      network: { allowedDomains: [], deniedDomains: [] },
+      filesystem: { allowWrite: [], denyRead: [], denyWrite: [] },
+    },
+    {},
+    "/project",
+    emit,
+  );
+  const denied = {
+    line: "deny network-outbound EXAMPLE.ORG.:443 (host is on the deny list)",
+  };
+  report([
+    denied,
+    { line: "deny network-outbound other.example:443 (user denied)" },
+  ]);
+  report([denied]);
+  expect(emit.mock.calls.filter(([kind]) => kind === "NETWORK")).toEqual([
+    ["NETWORK", "example.org:443 blocked"],
+  ]);
 });
 
 it("signals the whole sandbox process group and reaps leftover children", async () => {
