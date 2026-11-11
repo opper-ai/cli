@@ -150,7 +150,7 @@ describe("launchCommand", () => {
     });
 
     const code = await launchCommand({ agent: "hermes", key: "default" });
-    expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+    expect(loginMock).toHaveBeenCalledWith({ key: "default", activate: false });
     expect(code).toBe(0);
     expect(adapter.spawn).toHaveBeenCalledWith(
       [],
@@ -176,7 +176,7 @@ describe("launchCommand", () => {
     });
 
     await launchCommand({ agent: "hermes", key: "default" });
-    expect(loginMock).toHaveBeenCalledWith({ key: "default" });
+    expect(loginMock).toHaveBeenCalledWith({ key: "default", activate: false });
     expect(adapter.spawn).toHaveBeenCalledWith(
       [], expect.objectContaining({ apiKey: "op_live_new" }), expect.any(Object),
     );

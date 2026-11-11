@@ -140,6 +140,7 @@ export async function replaceSlotIfUnchanged(
   name: string,
   expected: AuthSlot | null,
   replacement: AuthSlot,
+  options: { preserveDefaultKey?: boolean } = {},
 ): Promise<boolean> {
   return withConfigLock(async () => {
     const cfg = (await readConfig()) ?? emptyConfig();
@@ -147,7 +148,7 @@ export async function replaceSlotIfUnchanged(
     if (!isDeepStrictEqual(current, expected)) return false;
     const isFirstSlot = Object.keys(cfg.keys).length === 0;
     cfg.keys[name] = replacement;
-    if (isFirstSlot) cfg.defaultKey = name;
+    if (isFirstSlot && !options.preserveDefaultKey) cfg.defaultKey = name;
     await writeConfigUnlocked(cfg);
     return true;
   });

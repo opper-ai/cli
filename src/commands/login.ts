@@ -14,6 +14,8 @@ export interface LoginOptions {
   baseUrl?: string;
   force?: boolean;
   renew?: boolean;
+  /** Automatic authentication must not change the saved active profile. */
+  activate?: boolean;
   projectUuid?: string | undefined;
   /** Override legacy file path (for tests). */
   legacyPath?: string;
@@ -50,7 +52,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
           throw new OpperError("API_ERROR", "The stored credential changed while setting its resource default. Retry.");
         }
       }
-      if (deployment) await setDefaultSlot(opts.key);
+      if (deployment && opts.activate !== false) await setDefaultSlot(opts.key);
       const who = existing.user ? ` as ${existing.user.email}` : "";
       log.success(`Already signed in${who}. Use --renew to replace this key, or --force to re-authenticate.`);
       return;
@@ -105,7 +107,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
 
     // Browser approval can take minutes. Compare and write under one lock so
     // another process's newer credential cannot be overwritten by this result.
-    if (!await replaceSlotIfUnchanged(opts.key, existing, slot)) {
+    if (!await replaceSlotIfUnchanged(opts.key, existing, slot, { preserveDefaultKey: opts.activate === false })) {
       throw new OpperError(
         "API_ERROR",
         "The stored credential changed while browser approval was in progress.",
@@ -113,7 +115,7 @@ export async function loginCommand(opts: LoginOptions): Promise<void> {
       );
     }
 
-    if (deployment) await setDefaultSlot(opts.key);
+    if (deployment && opts.activate !== false) await setDefaultSlot(opts.key);
     const who = slot.user ? slot.user.email : opts.key;
     if (promptShown) s.stop(`Signed in as ${who}`);
     else log.success(`Signed in as ${who}`);
