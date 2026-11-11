@@ -54,7 +54,7 @@ describe("config commands", () => {
     }
   });
 
-  it("list prints one line per slot with masked keys", async () => {
+  it("list prints deployments without any key material", async () => {
     await setSlot("default", { apiKey: "op_live_abc123def456" });
     await setSlot("staging", { apiKey: "op_live_stagingKey9999" });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -64,6 +64,9 @@ describe("config commands", () => {
       expect(out).toContain("default");
       expect(out).toContain("staging");
       expect(out).not.toContain("op_live_abc123def456");
+      expect(out).not.toContain("op_liv");
+      expect(out).not.toContain("f456");
+      expect(out).not.toContain("9999");
     } finally {
       log.mockRestore();
     }

@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { useTempOpperHome } from "../helpers/temp-home.js";
 import { setSlot } from "../../src/auth/config.js";
 import { whoamiCommand } from "../../src/commands/whoami.js";
 
 useTempOpperHome();
+afterEach(() => vi.unstubAllEnvs());
 
 describe("whoami", () => {
   it("prints slot info when logged in", async () => {
@@ -20,7 +21,8 @@ describe("whoami", () => {
       expect(out).toContain("me@example.com");
       expect(out).toContain("Me");
       expect(out).toContain("default");
-      expect(out).toContain("op_live_a"); // fingerprint prefix
+      expect(out).toContain("configured (redacted)");
+      expect(out).not.toContain("op_live_");
       expect(out).not.toContain("op_live_abc123def456"); // full key hidden
     } finally {
       spy.mockRestore();
@@ -55,4 +57,22 @@ describe("whoami", () => {
       spy.mockRestore();
     }
   });
+});
+
+it("shows effective environment credentials without borrowing saved account metadata", async () => {
+  await setSlot("default", { apiKey: "saved-secret", user: { email: "saved@example.com", name: "Saved" }, baseUrl: "https://api.opper.ai" });
+  vi.stubEnv("OPPER_API_KEY", "synthetic-env-secret");
+  vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  try {
+    await whoamiCommand({ key: "default" });
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("OPPER_API_KEY");
+    expect(output).toContain("evroc");
+    expect(output).toContain("https://api.evroc.on.opper.ai");
+    expect(output).not.toContain("saved@example.com");
+    expect(output).not.toContain("synthetic-env-secret");
+    expect(output).not.toContain("synthetic-");
+    expect(output).toContain("configured (redacted)");
+  } finally { log.mockRestore(); }
 });

@@ -20,6 +20,7 @@ export interface AuthSlot {
   /** Absolute server-issued expiry. Omitted for credentials without a lifetime. */
   expiresAt?: string;
   baseUrl?: string;
+  deployment?: "main" | "evroc";
   user?: { email: string; name: string };
   obtainedAt?: string;
   source?: "device-flow" | "manual" | "migrated";
@@ -134,19 +135,33 @@ export async function setSlot(name: string, slot: AuthSlot): Promise<void> {
   });
 }
 
+function assertInactiveSlotCreationInConfig(name: string, config: Config): void {
+  if (config.defaultKey === name && !config.keys[name]) {
+    throw new OpperError("INVALID_ARGUMENT", "Automatic sign-in would change the default deployment.",
+      "Choose another --key slot (for example, evroc), or run `opper login` explicitly to select this profile.");
+  }
+}
+
+/** Preflight only; credential writes repeat this check under their config lock. */
+export async function assertInactiveSlotCreation(name: string): Promise<void> {
+  assertInactiveSlotCreationInConfig(name, (await readConfig()) ?? emptyConfig());
+}
+
 /** Compare and replace inside one lock so a late browser result cannot overwrite a newer slot. */
 export async function replaceSlotIfUnchanged(
   name: string,
   expected: AuthSlot | null,
   replacement: AuthSlot,
+  options: { preserveDefaultKey?: boolean; rejectDefaultSlotCreation?: boolean } = {},
 ): Promise<boolean> {
   return withConfigLock(async () => {
     const cfg = (await readConfig()) ?? emptyConfig();
     const current = cfg.keys[name] ?? null;
     if (!isDeepStrictEqual(current, expected)) return false;
+    if (options.rejectDefaultSlotCreation) assertInactiveSlotCreationInConfig(name, cfg);
     const isFirstSlot = Object.keys(cfg.keys).length === 0;
     cfg.keys[name] = replacement;
-    if (isFirstSlot) cfg.defaultKey = name;
+    if (isFirstSlot && !options.preserveDefaultKey) cfg.defaultKey = name;
     await writeConfigUnlocked(cfg);
     return true;
   });
@@ -170,5 +185,15 @@ export async function clearAllSlots(): Promise<void> {
     const cfg = await readConfig();
     if (!cfg || Object.keys(cfg.keys).length === 0) return;
     await writeConfigUnlocked({ ...cfg, keys: {}, defaultKey: "default" });
+  });
+}
+
+/** Switch the default without replacing credentials or touching other slots. */
+export async function setDefaultSlot(name: string): Promise<void> {
+  await withConfigLock(async () => {
+    const cfg = await readConfig();
+    if (!cfg?.keys[name]) throw new OpperError("AUTH_REQUIRED", `No slot named "${name}"`, "Run `opper login --key <slot>` first.");
+    cfg.defaultKey = name;
+    await writeConfigUnlocked(cfg);
   });
 }

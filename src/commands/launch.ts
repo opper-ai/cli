@@ -64,7 +64,7 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
 
   let slot = process.env.OPPER_API_KEY ? null : await getSlot(opts.key);
   if (!process.env.OPPER_API_KEY && (!slot || isSlotExpired(slot))) {
-    await loginCommand({ key: opts.key });
+    await loginCommand({ key: opts.key, activate: false });
     slot = await getSlot(opts.key);
     if (!slot) {
       throw new OpperError(

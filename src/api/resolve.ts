@@ -1,5 +1,6 @@
-import { getSlot, isSlotExpired } from "../auth/config.js";
+import { getSlot, isSlotExpired, type AuthSlot } from "../auth/config.js";
 import { OpperError } from "../errors.js";
+import { deploymentForApiUrl, resolveDeploymentEndpoint, sameApiUrl, selectedDeployment, slotNameForSelection } from "../config/deployments.js";
 
 const DEFAULT_BASE_URL = "https://api.opper.ai";
 
@@ -23,25 +24,47 @@ export function validateProjectUuid(value: string): string {
   return value;
 }
 
-export async function resolveApiContext(keyName: string, opts: ApiScopeOptions = {}): Promise<ApiContext> {
+/** Resolve setup endpoints without requiring a runtime credential. */
+export async function resolveApiBaseUrl(keyName?: string): Promise<string> {
+  const slot = process.env.OPPER_API_KEY ? null : await getSlot(await slotNameForSelection(keyName));
+  return endpointForSlot(slot);
+}
+
+/** Fresh MCP authorization needs an endpoint, not an existing runtime credential. */
+export async function resolveSetupApiBaseUrl(keyName?: string): Promise<string> {
+  if (selectedDeployment() || process.env.OPPER_BASE_URL !== undefined) {
+    return resolveDeploymentEndpoint();
+  }
+  return resolveApiBaseUrl(keyName);
+}
+
+function endpointForSlot(slot: AuthSlot | null): string {
+  const baseUrl = resolveDeploymentEndpoint(slot?.baseUrl);
+  if (slot && (selectedDeployment() || deploymentForApiUrl(baseUrl)) && !sameApiUrl(slot.baseUrl ?? DEFAULT_BASE_URL, baseUrl)) {
+    throw new OpperError("INVALID_ARGUMENT", "The selected credential slot belongs to another deployment.", "Choose a matching --key slot, or run `opper login -d <deployment>`.");
+  }
+  return baseUrl;
+}
+
+export async function resolveApiContext(keyName?: string, opts: ApiScopeOptions = {}): Promise<ApiContext> {
   // An environment key is an independent credential: never combine it with
   // the selected slot's host, expiry, organization, or resource default.
-  const slot = process.env.OPPER_API_KEY ? null : await getSlot(keyName);
+  const name = process.env.OPPER_API_KEY ? keyName ?? "environment" : await slotNameForSelection(keyName);
+  const slot = process.env.OPPER_API_KEY ? null : await getSlot(name);
   const apiKey = process.env.OPPER_API_KEY ?? slot?.apiKey;
-  const baseUrl =
-    process.env.OPPER_BASE_URL ?? slot?.baseUrl ?? DEFAULT_BASE_URL;
+  const baseUrl = endpointForSlot(slot);
 
   if (!apiKey) {
     throw new OpperError(
       "AUTH_REQUIRED",
-      `No API key for slot "${keyName}"`,
+      `No API key for slot "${name}"`,
       "Run `opper login`, or set OPPER_API_KEY in the environment.",
     );
   }
   if (!process.env.OPPER_API_KEY && slot && isSlotExpired(slot)) {
     throw new OpperError(
       "AUTH_EXPIRED",
-      `Stored API key for slot "${keyName}" has expired.`,
+      `Stored API key for slot "${name}" has expired.`,
       "Run `opper login` to obtain a new credential.",
     );
   }

@@ -16,7 +16,7 @@ test.each([
  const server=http.createServer(async(req,res)=>{
   let body='';for await(const part of req)body+=part;
   res.setHeader('content-type','application/json');
-  if(req.url==='/oauth/device'){posted=Object.fromEntries(new URLSearchParams(body));res.end(JSON.stringify({device_code:'synthetic',user_code:'TEST',verification_uri:'https://platform.opper.ai/activate',expires_in:30,interval:0}));}
+  if(req.url==='/oauth/device'){posted=Object.fromEntries(new URLSearchParams(body));res.end(JSON.stringify({device_code:'synthetic',user_code:'TEST',verification_uri:host+'/activate',expires_in:30,interval:0}));}
   else res.end(JSON.stringify({api_key:'synthetic-new',credential_id:'2',org_id:1,...(projectId!==undefined?{project_id:projectId}:{}),user:previous.user,expires_at:'2030-01-01T00:00:00Z'}));
  });
  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));onTestFinished(()=>{server.closeAllConnections();server.close();});
@@ -35,7 +35,7 @@ test('closing the session cancels shared polling before any key is issued',async
  let polls=0;const controller=new AbortController();
  const server=http.createServer((req,res)=>{
   if(req.url?.endsWith('/token'))polls++;
-  res.end(JSON.stringify({device_code:'synthetic',user_code:'TEST',verification_uri:'https://platform.opper.ai/activate',expires_in:600,interval:5}));
+  res.end(JSON.stringify({device_code:'synthetic',user_code:'TEST',verification_uri:host+'/activate',expires_in:600,interval:5}));
  });
  await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));onTestFinished(()=>{server.closeAllConnections();server.close();});
  const host=`http://127.0.0.1:${(server.address() as {port:number}).port}`;

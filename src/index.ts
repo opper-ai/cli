@@ -18,6 +18,7 @@ import registerMcp from "./cli/mcp.js";
 import registerProxy from "./cli/proxy.js";
 import { addGroupedHelpText } from "./cli/help.js";
 import { checkForUpdate } from "./util/update-check.js";
+import { getDeployment, slotNameForSelection } from "./config/deployments.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -39,7 +40,8 @@ program
   .name("opper")
   .description("The official Opper CLI")
   .version(pkg.version, "-v, --version")
-  .option("--key <slot>", "API key slot to use", "default")
+  .option("--key <slot>", "API key slot to use (defaults to the active slot)")
+  .option("-d, --deployment <name>", "Opper deployment: main (AWS) or evroc (or OPPER_DEPLOYMENT)")
   .option("--project-uuid <uuid>", "explicit Opper project target (does not bind the API key)")
   .option("--debug", "enable debug output", false)
   .option("--no-telemetry", "disable anonymous telemetry")
@@ -58,10 +60,36 @@ program
       program.outputHelp();
       return;
     }
-    await menuCommand({ key: program.opts().key, version: pkg.version, projectUuid: program.opts().projectUuid });
+    await menuCommand({ key: activeKey, version: pkg.version, projectUuid: program.opts().projectUuid });
   });
 
-program.hook("preAction", () => {
+let activeKey = "default";
+program.hook("preAction", async (_command, actionCommand) => {
+  if (program.opts().deployment !== undefined) {
+    process.env.OPPER_DEPLOYMENT = getDeployment(program.opts().deployment).name;
+  }
+  const name = actionCommand.name();
+  const parent = actionCommand.parent?.name();
+  const options = actionCommand.opts();
+  // These actions either operate on explicit configuration arguments or use
+  // no API credentials. Leave any necessary config reads to the action itself.
+  const independent = parent === "config" || parent === "skills"
+    || (parent === "keys" && name === "create")
+    || (parent === "mcp" && name === "add")
+    || name === "version" || name === "help"
+    || (parent === "agents" && ["list", "remove"].includes(name))
+    || (parent === "editors" && (name === "list"
+      || (name === "opencode" && (options.removeLoginBridge || options.mcp))
+      || (name === "github-copilot-vscode" && options.remove)))
+    || (parent === "proxy" && ["status", "tag", "clear", "stop"].includes(name))
+    || (name === "logout" && options.all)
+    || (actionCommand === program && (!process.stdin.isTTY || !process.stdout.isTTY || actionCommand.args.length > 0));
+  // Login and single-slot logout operate on saved credentials even when an
+  // environment key is present. Runtime environment keys never read slots.
+  const environmentCredential = process.env.OPPER_API_KEY && name !== "login" && name !== "logout";
+  activeKey = independent || environmentCredential
+    ? program.opts().key ?? "default"
+    : await slotNameForSelection(program.opts().key);
   if (program.opts().color === false) {
     process.env.NO_COLOR = "1";
   }
@@ -75,7 +103,7 @@ program
   });
 
 const ctx: CliContext = {
-  key: () => program.opts().key as string,
+  key: () => activeKey,
   projectUuid: () => program.opts().projectUuid as string | undefined,
   version: pkg.version,
 };

@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+import { deploymentForApiUrl } from "../config/deployments.js";
 import { fork } from "node:child_process";
 import { assetPath } from "../util/assets.js";
 import type { AuthSlot } from "./config.js";
@@ -28,7 +30,11 @@ export function renewAgentCredential(options: {
       try{
         if(value.type==="prompt"&&value.prompt){
           const url=value.prompt.verificationUriComplete??value.prompt.verificationUri;
-          if(new URL(url).origin!=="https://platform.opper.ai")throw new Error("Unexpected Opper approval website.");
+          const api = new URL(options.baseUrl);
+          const local = api.hostname === "localhost" || api.hostname === "[::1]" || (isIP(api.hostname) === 4 && api.hostname.startsWith("127."));
+          const expected = deploymentForApiUrl(options.baseUrl)?.platformUrl ??
+            (local && !api.username && !api.password && !api.search && !api.hash && api.pathname === "/" && ["http:", "https:"].includes(api.protocol) ? api.origin : undefined);
+          if(!expected || new URL(url).origin!==expected)throw new Error("Unexpected Opper approval website.");
           options.onPrompt({url,code:value.prompt.userCode});
         }else if(value.type==="result"){
           if(!value.slot?.apiKey||/[\r\n]/.test(value.slot.apiKey))throw new Error("Invalid credential returned by Opper.");

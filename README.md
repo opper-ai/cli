@@ -49,22 +49,61 @@ Run `opper` with no arguments for an interactive menu (Account · Ask · Agents 
 
 ## Authentication
 
-Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on runtime commands to pick which slot to read from (defaults to `default`). Private key creation below uses its own browser authorization instead.
+Runtime auth state lives in `~/.opper/config.json` as a list of "slots", each holding an API key, a base URL, and the user metadata returned by the device flow. Use `--key <slot>` on runtime commands to override the saved active slot. A fresh installation defaults to main (AWS). Private key creation below uses its own browser authorization instead.
 
 | Command | Description |
 |---------|-------------|
-| `opper login [--force] [--renew] [--base-url <url>]` | OAuth device flow; stores into the active slot. `--renew` requests a replacement key after fresh browser approval. |
+| `opper login [-d main|evroc] [--force] [--renew] [--base-url <url>]` | OAuth device flow; stores into the active slot. `--renew` requests a replacement key after fresh browser approval. |
 | `opper logout [--all] [--yes]` | Clear credentials for the active slot, or every slot. |
 | `opper whoami` | Show the authenticated user for the active slot. |
 | `opper config add <name> <api-key> [--base-url <url>]` | Manually store an API key in a slot. |
-| `opper config list` | List configured slots. |
+| `opper config list` | List configured slots, deployments, and API roots; mark the active slot. |
+| `opper config use <slot>` | Make a stored slot active for future commands. |
 | `opper config get <name>` | Print the raw API key (for scripting). |
 | `opper config remove <name>` | Delete a stored slot. |
 | `opper config project <name> [uuid]` | Set a default resource project for a slot; omit the UUID to clear it. |
 
-Key resolution at request time: `OPPER_API_KEY` env var > the slot named by `--key` (or `default`).
-An environment key uses `OPPER_BASE_URL` or the production API root; it does not
-borrow a stored slot's host, expiry, organization, or resource project.
+A fresh installation defaults to the main (AWS) deployment without prompting.
+Select Evroc by name; no API URL is needed:
+
+```bash
+opper login -d evroc       # approve on Evroc, save and activate its slot
+opper whoami              # shows Evroc in this and future shells
+opper models list
+opper login -d main        # approve or reuse a main deployment slot, then activate it
+opper config use evroc     # switch to an existing slot without browser approval
+opper -d evroc models list # one-command override; leaves the active slot unchanged
+opper -d evroc launch claude # place global deployment flags before launch
+```
+
+Deployment names are `main` (`https://api.opper.ai`) and `evroc`
+(`https://api.evroc.on.opper.ai`). `-d` is shorthand for `--deployment`;
+`OPPER_DEPLOYMENT` supplies the same selection for scripts. With `launch`, place
+the deployment flag before the command. To forward a child flag named `-d` or
+`--deployment`, put it after `--`, for example
+`opper -d evroc launch claude -- -d`. Login reuses a matching
+slot, or creates one named after the deployment. If several slots match and the
+active slot belongs elsewhere, choose `--key <slot>`. A named deployment never
+reuses a credential from another API endpoint or overwrites that endpoint's slot.
+`--key <slot>` overrides the active slot for one command. `config use` persists a
+switch; a successful named deployment login also activates the selected slot.
+
+Key resolution at request time: `OPPER_API_KEY` env var > the selected stored slot.
+An environment key uses `-d` / `OPPER_DEPLOYMENT`, an explicit `OPPER_BASE_URL`, or
+the main API root. It does not borrow a stored slot's host, expiry, organization,
+or resource project. For example:
+
+```bash
+# Supply OPPER_API_KEY privately through your environment or secret manager.
+OPPER_DEPLOYMENT=evroc opper models list
+```
+
+`--base-url` on login/config add and `OPPER_BASE_URL` remain available for custom
+deployments. A raw URL that contradicts a named deployment is rejected. Without a
+named deployment, deliberate custom `OPPER_BASE_URL` overrides retain their
+existing behavior; a saved credential cannot be redirected to the other known
+deployment. `whoami` shows the effective deployment, URL, and credential source;
+environment keys do not inherit the saved account's user details.
 
 Organization personal agent credentials have no project binding. Inference,
 models, project discovery, and usage work at organization scope without a target.
@@ -893,7 +932,8 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 
 | Flag | Description |
 |------|-------------|
-| `--key <slot>` | API key slot to use (default: `default`). |
+| `--key <slot>` | Stored credential slot for this command (defaults to the remembered active slot). |
+| `-d, --deployment <name>` | Select `main` (AWS) or `evroc`; named login remembers the selected profile. Also accepts `OPPER_DEPLOYMENT`. |
 | `--project-uuid <uuid>` | Explicit project target sent as `X-Opper-Project`. |
 | `--debug` | Verbose diagnostic output. |
 | `--no-telemetry` | Disable anonymous telemetry. |
