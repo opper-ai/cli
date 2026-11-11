@@ -8,16 +8,12 @@ export interface WhoamiOptions {
   key: string;
 }
 
-function fingerprint(apiKey: string): string {
-  return apiKey.slice(0, 10) + "…";
-}
-
 export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
   const baseUrl = await resolveApiBaseUrl(opts.key);
   const deployment = deploymentForApiUrl(baseUrl)?.name ?? "custom";
   if (process.env.OPPER_API_KEY) {
     console.log(`${brand.bold("source:")}  OPPER_API_KEY (overrides stored slots)`);
-    console.log(`${brand.bold("api key:")} ${fingerprint(process.env.OPPER_API_KEY)}`);
+    console.log(`${brand.bold("api key:")} configured (redacted)`);
     console.log(`${brand.bold("deployment:")} ${deployment}`);
     console.log(`${brand.bold("base url:")} ${baseUrl}`);
     return;
@@ -35,7 +31,7 @@ export async function whoamiCommand(opts: WhoamiOptions): Promise<void> {
   if (slot.user) {
     console.log(`${brand.bold("user:")}    ${slot.user.name} <${slot.user.email}>`);
   }
-  console.log(`${brand.bold("api key:")} ${fingerprint(slot.apiKey)}`);
+  console.log(`${brand.bold("api key:")} configured (redacted)`);
   if (slot.credentialId) console.log(`${brand.bold("key id:")}  ${slot.credentialId}`);
   if (slot.orgId !== undefined) console.log(`${brand.bold("org id:")}  ${slot.orgId}`);
   if (slot.projectName) console.log(`${brand.bold("project:")} ${slot.projectName}${slot.projectUuid ? ` (${slot.projectUuid})` : ""}`);

@@ -21,7 +21,8 @@ describe("whoami", () => {
       expect(out).toContain("me@example.com");
       expect(out).toContain("Me");
       expect(out).toContain("default");
-      expect(out).toContain("op_live_a"); // fingerprint prefix
+      expect(out).toContain("configured (redacted)");
+      expect(out).not.toContain("op_live_");
       expect(out).not.toContain("op_live_abc123def456"); // full key hidden
     } finally {
       spy.mockRestore();
@@ -71,5 +72,7 @@ it("shows effective environment credentials without borrowing saved account meta
     expect(output).toContain("https://api.evroc.on.opper.ai");
     expect(output).not.toContain("saved@example.com");
     expect(output).not.toContain("synthetic-env-secret");
+    expect(output).not.toContain("synthetic-");
+    expect(output).toContain("configured (redacted)");
   } finally { log.mockRestore(); }
 });
