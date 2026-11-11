@@ -932,7 +932,8 @@ opper launch codex --model claude-sonnet-5 -- "implement this feature"
 
 | Flag | Description |
 |------|-------------|
-| `--key <slot>` | API key slot to use (default: `default`). |
+| `--key <slot>` | Stored credential slot for this command (defaults to the remembered active slot). |
+| `-d, --deployment <name>` | Select `main` (AWS) or `evroc`; named login remembers the selected profile. Also accepts `OPPER_DEPLOYMENT`. |
 | `--project-uuid <uuid>` | Explicit project target sent as `X-Opper-Project`. |
 | `--debug` | Verbose diagnostic output. |
 | `--no-telemetry` | Disable anonymous telemetry. |
