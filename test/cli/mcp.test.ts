@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "jsonc-parser";
+import { setSlot } from "../../src/auth/config.js";
 import registerMcp from "../../src/cli/mcp.js";
 import registerEditors from "../../src/cli/editors.js";
 
@@ -48,6 +49,29 @@ describe("MCP command configuration", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(existsSync(join(directory, ".opper"))).toBe(false);
     expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toContain("choose permissions in Opper");
+  });
+
+  it("defaults MCP setup to the named Evroc deployment without authenticating", async () => {
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    await run(["mcp", "add", "opencode"]);
+    expect(parse(readFileSync(configPath, "utf8")).mcp.opper.url).toBe("https://api.evroc.on.opper.ai/mcp");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("uses the selected slot's Evroc endpoint for the legacy editor alias", async () => {
+    await setSlot("default", { apiKey: "synthetic", baseUrl: "https://api.evroc.on.opper.ai" });
+    await run(["editors", "opencode", "--mcp"]);
+    expect(parse(readFileSync(configPath, "utf8")).mcp.opper.url).toBe("https://api.evroc.on.opper.ai/mcp");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves existing custom MCP settings when a new deployment conflicts", async () => {
+    const original = JSON.stringify({ mcp: { opper: { type: "remote", url: "https://custom.example/mcp", oauth: { clientId: "keep" } } } });
+    seed(original);
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    await expect(run(["mcp", "add", "opencode"])).rejects.toMatchObject({ code: "AGENT_CONFIG_CONFLICT" });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("accepts a local endpoint and explicit permission ceiling", async () => {

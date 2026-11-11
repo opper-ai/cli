@@ -157,6 +157,31 @@ function modelsFromCatalog(entries) {
   return models;
 }
 
+// This plugin is copied into OpenCode's config directory, so it cannot import
+// CLI modules. Registry parity is exercised against config/deployments.ts.
+const DEPLOYMENT_API_URLS = {
+  main: "https://api.opper.ai",
+  evroc: "https://api.evroc.on.opper.ai",
+};
+function selectedApiUrl(savedBaseUrl) {
+  const name = process.env.OPPER_DEPLOYMENT;
+  const deployment = name === undefined ? undefined : DEPLOYMENT_API_URLS[name];
+  const override = process.env.OPPER_BASE_URL;
+  const same = (a, b) => new URL(a).href.replace(/\/+$/, "") === new URL(b).href.replace(/\/+$/, "");
+  const known = (url) => Object.values(DEPLOYMENT_API_URLS).some((api) => same(api, url));
+  try {
+    if ((name !== undefined && !Object.hasOwn(DEPLOYMENT_API_URLS, name)) ||
+        (deployment && override !== undefined && !same(override, deployment)) ||
+        (deployment && savedBaseUrl !== undefined && !same(savedBaseUrl, deployment)) ||
+        (override && savedBaseUrl !== undefined && known(override) && known(savedBaseUrl) && !same(override, savedBaseUrl))) {
+      throw new Error();
+    }
+    return deployment ?? override ?? savedBaseUrl ?? DEPLOYMENT_API_URLS.main;
+  } catch {
+    console.warn("Opper deployment does not match the pinned CLI slot or endpoint. Reconfigure the login bridge for the selected deployment, or unset conflicting environment overrides.");
+  }
+}
+
 async function credential() {
   const projectUuid = process.env.OPPER_PROJECT_UUID || (!process.env.OPPER_API_KEY ? DEFAULT_PROJECT_UUID : undefined);
   if (projectUuid && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectUuid)) {
@@ -164,14 +189,15 @@ async function credential() {
     return;
   }
   if (process.env.OPPER_API_KEY) {
-    return { apiKey: process.env.OPPER_API_KEY, baseUrl: process.env.OPPER_BASE_URL, projectUuid };
+    const baseUrl = selectedApiUrl();
+    return baseUrl ? { apiKey: process.env.OPPER_API_KEY, baseUrl, projectUuid } : undefined;
   }
   let slot;
   try {
     const root = process.env.OPPER_EDITOR_HOME || homedir();
     const config = JSON.parse(await readFile(join(process.env.OPPER_HOME || join(root, ".opper"), "config.json"), "utf8"));
-    // The CLI's unqualified commands use the literal `default` slot, even if
-    // config.defaultKey points at the first (differently named) slot created.
+    // Installation pins the selected CLI slot. Later active-profile changes
+    // never silently replace this editor's account.
     slot = config.keys?.[process.env.OPPER_KEY_SLOT || DEFAULT_SLOT];
   } catch {
     // A missing or invalid CLI config is equivalent to no selected credential.
@@ -181,7 +207,8 @@ async function credential() {
     console.warn("Opper credential expired. Renew the selected CLI slot with `opper --key <slot> login --renew` and restart OpenCode.");
     return;
   }
-  return { apiKey: slot.apiKey, baseUrl: process.env.OPPER_BASE_URL || slot.baseUrl, projectUuid };
+  const baseUrl = selectedApiUrl(slot.baseUrl ?? DEPLOYMENT_API_URLS.main);
+  return baseUrl ? { apiKey: slot.apiKey, baseUrl, projectUuid } : undefined;
 }
 
 function removeOpper(config) {

@@ -19,11 +19,13 @@ describe("explicit OpenCode MCP setup", () => {
     previous = process.env.OPPER_EDITOR_HOME;
     sandbox = mkdtempSync(join(tmpdir(), "opper-mcp-setup-"));
     process.env.OPPER_EDITOR_HOME = sandbox;
+    vi.stubEnv("OPPER_HOME", join(sandbox, ".opper"));
     directory = join(sandbox, ".config", "opencode");
     mkdirSync(directory, { recursive: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     rmSync(sandbox, { recursive: true, force: true });
     if (previous === undefined) delete process.env.OPPER_EDITOR_HOME;
     else process.env.OPPER_EDITOR_HOME = previous;

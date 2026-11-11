@@ -1,3 +1,4 @@
+import { slotNameForSelection } from "../config/deployments.js";
 import { openCodeCatalogSelection } from "../setup/opencode-catalog-selection.js";
 import { validateModelKinds, type ModelKinds } from "../setup/model-catalog.js";
 import { configureOpenCode, readProjectConfigState } from "../setup/opencode.js";
@@ -14,7 +15,7 @@ import { OpperError } from "../errors.js";
 import { opencodeConfigPath, type Location } from "../util/editor-paths.js";
 import { mcpAddCommand } from "./mcp.js";
 import { installOpenCodeLoginBridge, removeOpenCodeLoginBridge, openCodeLoginBridgePath } from "../setup/opencode-login-bridge.js";
-import { resolveApiContext, validateProjectUuid } from "../api/resolve.js";
+import { resolveApiBaseUrl, resolveApiContext, validateProjectUuid } from "../api/resolve.js";
 
 export interface EditorsOpenCodeOptions {
   location: Location;
@@ -70,10 +71,11 @@ export async function editorsOpenCodeCommand(
       console.log(removed ? `Removed Opper login bridge from ${openCodeLoginBridgePath()}.` : "No Opper login bridge installed.");
       return;
     }
-    const selectedSlot = opts.key ?? "default";
+    const selectedSlot = opts.key ?? await slotNameForSelection();
+    const baseUrl = await resolveApiBaseUrl(selectedSlot);
     const result = await installOpenCodeLoginBridge(selectedSlot, opts.projectUuid, opts.modelKinds);
     console.log(brand.accent(`✓ Installed OpenCode login bridge at ${result.path}.`));
-    console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot}. Restart OpenCode after renewing that slot.`);
+    console.log(`Start plain \`opencode\` to use Opper CLI slot ${selectedSlot} at ${baseUrl}. Restart OpenCode after renewing that slot.`);
     return;
   }
   if ((opts.mcpUrl !== undefined || opts.mcpScopes !== undefined) && !opts.mcp) {
@@ -82,6 +84,7 @@ export async function editorsOpenCodeCommand(
   if (opts.mcp) {
     await mcpAddCommand("opencode", {
       location: opts.location,
+      ...(opts.key !== undefined ? { key: opts.key } : {}),
       ...(opts.mcpUrl !== undefined ? { url: opts.mcpUrl } : {}),
       ...(opts.mcpScopes !== undefined ? { scopes: opts.mcpScopes } : {}),
     });
@@ -95,7 +98,7 @@ export async function editorsOpenCodeCommand(
     return;
   }
 
-  const context = await resolveApiContext(opts.key ?? "default", { projectUuid: opts.projectUuid })
+  const context = await resolveApiContext(opts.key, { projectUuid: opts.projectUuid })
     .catch((error: unknown) => {
       if (error instanceof OpperError && error.code === "AUTH_REQUIRED") return undefined;
       throw error;
@@ -106,7 +109,7 @@ export async function editorsOpenCodeCommand(
     ...(opts.overwrite ? { overwrite: true } : {}),
     ...(models ? { models } : {}),
     ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
-    ...(context ? { baseUrl: context.baseUrl } : {}),
+    baseUrl: context?.baseUrl ?? await resolveApiBaseUrl(opts.key),
   });
   if (!result.wrote && result.reason === "exists") {
     console.log(
@@ -117,7 +120,7 @@ export async function editorsOpenCodeCommand(
   console.log(brand.accent(`✓ Wrote OpenCode config to ${result.path}.`));
 }
 
-export async function editorsGitHubCopilotVSCodeCommand(projectUuid?: string): Promise<void> {
+export async function editorsGitHubCopilotVSCodeCommand(projectUuid?: string, key?: string): Promise<void> {
   if (projectUuid) throw new OpperError("INVALID_ARGUMENT", "VS Code Copilot setup does not support an explicit project target.", "Use organization inference without --project-uuid, or launch a supported agent with the target.");
   const detect = await githubCopilotVSCode.detect();
   if (!detect.installed) {
@@ -130,7 +133,7 @@ export async function editorsGitHubCopilotVSCodeCommand(projectUuid?: string): P
 
   // The setup function detects the missing extension and prompts the user
   // before installing — no extra orchestration needed here.
-  const result = await configureGitHubCopilotVSCode({ channel: "stable" });
+  const result = await configureGitHubCopilotVSCode({ channel: "stable", baseUrl: await resolveApiBaseUrl(key) });
   console.log(
     brand.accent(`✓ Wrote Opper provider block to ${result.path}.`),
   );

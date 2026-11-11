@@ -3,10 +3,12 @@ import { link, lstat, mkdtemp, open, realpath, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { withMcpKeyAuthorization, validateMcpServerUrl } from "../auth/mcp-key-flow.js";
-import { OPPER_HOST } from "../config/endpoints.js";
+import { resolveApiBaseUrl } from "../api/resolve.js";
+import { deploymentForApiUrl } from "../config/deployments.js";
 import { OpperError } from "../errors.js";
 
 export interface KeysCreateOptions {
+  key?: string;
   project: string;
   name: string;
   output: string;
@@ -28,7 +30,7 @@ export async function keysCreateCommand(options: KeysCreateOptions): Promise<voi
     throw new OpperError("INVALID_ARGUMENT", "The key name must contain 1–200 characters without control characters.");
   }
   if (!options.output) throw new OpperError("INVALID_ARGUMENT", "Choose a new output file for the private runtime key.");
-  const mcpUrl = validateMcpServerUrl(options.mcpUrl ?? `${OPPER_HOST}/mcp`);
+  const mcpUrl = validateMcpServerUrl(options.mcpUrl ?? `${(await resolveApiBaseUrl(options.key)).replace(/\/+$/, "")}/mcp`);
   const requestedPath = resolve(options.output);
   let output: string;
   try { output = join(await realpath(dirname(requestedPath)), basename(requestedPath)); }
@@ -97,7 +99,12 @@ export async function keysCreateCommand(options: KeysCreateOptions): Promise<voi
       }
       try {
         const handle = await open(join(temporary, "key.env"), "wx", 0o600);
-        try { await handle.writeFile(`OPPER_API_KEY=${value.data.key}\n`); await handle.sync(); }
+        try {
+          const deployment = deploymentForApiUrl(mcpUrl.origin);
+          const deploymentSetting = deployment ? `OPPER_DEPLOYMENT=${deployment.name}\n` : "";
+          await handle.writeFile(`OPPER_API_KEY=${value.data.key}\n${deploymentSetting}`);
+          await handle.sync();
+        }
         finally { await handle.close(); }
         // link() installs atomically and refuses existing files and symlinks.
         await link(join(temporary, "key.env"), output);

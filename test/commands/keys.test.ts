@@ -16,18 +16,35 @@ let log: ReturnType<typeof vi.spyOn>;
 
 beforeEach(async () => {
   directory = await realpath(await mkdtemp(join(tmpdir(), "opper-key-test-")));
+  vi.stubEnv("OPPER_HOME", join(directory, ".opper"));
   vi.stubGlobal("fetch", fetchMock);
   fetchMock.mockReset();
   authFlow.mockReset().mockImplementation(async (_url, action) => action("private-delegated-token"));
   log = vi.spyOn(console, "log").mockImplementation(() => {});
 });
-afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
 function opts() { return { project, name: "App key", output: join(directory, ".env.local"), mcpUrl: "http://localhost:8080/mcp" }; }
 function projectResponse() { return Response.json({ data: { uuid: project, name: "App" } }); }
 function created() { return Response.json({ data: { id: 42, name: "App key", key: secret } }, { status: 201 }); }
 
 describe("private runtime key creation", () => {
+  it("creates through Evroc fresh OAuth and records deployment alongside the private key", async () => {
+    vi.stubEnv("OPPER_DEPLOYMENT", "evroc");
+    fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
+    const { mcpUrl, ...options } = opts();
+    await keysCreateCommand(options);
+    expect(authFlow.mock.calls[0]![0].toString()).toBe("https://api.evroc.on.opper.ai/mcp");
+    expect(fetchMock.mock.calls[0]![0].toString()).toBe(`https://api.evroc.on.opper.ai/user/v1/projects/${project}`);
+    expect(await readFile(options.output, "utf8")).toBe(`OPPER_API_KEY=${secret}\nOPPER_DEPLOYMENT=evroc\n`);
+  });
+
+  it("records main explicitly so a sourced env file does not inherit another deployment", async () => {
+    fetchMock.mockResolvedValueOnce(projectResponse()).mockResolvedValueOnce(created());
+    await keysCreateCommand({ ...opts(), mcpUrl: "https://api.opper.ai/mcp" });
+    expect(await readFile(opts().output, "utf8")).toBe(`OPPER_API_KEY=${secret}\nOPPER_DEPLOYMENT=main\n`);
+  });
+
   it("refuses a client reset during idempotent recovery before authorization", async () => {
     await expect(keysCreateCommand({ ...opts(), resetClient: true, idempotencyKey: "6ba3d2bf-35e7-48b6-bd24-48064df1acbe" }))
       .rejects.toThrow(/cannot reset.*recover/i);

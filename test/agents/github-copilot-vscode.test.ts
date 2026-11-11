@@ -49,6 +49,7 @@ describe("github-copilot-vscode adapter", () => {
     runMock.mockReset();
     confirmMock.mockReset();
     sandbox = mkdtempSync(join(tmpdir(), "opper-ghcp-"));
+    vi.stubEnv("OPPER_HOME", join(sandbox, ".opper"));
     vi.stubEnv("OPPER_EDITOR_HOME", sandbox);
     vi.stubEnv("HOME", sandbox);
     vi.stubEnv("USERPROFILE", sandbox);
@@ -103,6 +104,15 @@ describe("github-copilot-vscode adapter", () => {
     expect(await githubCopilotVSCode.isConfigured()).toBe(true);
     // No prompt fired because the extension was already present.
     expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it("configures the Evroc API endpoint and recognizes its existing provider", async () => {
+    stubExtensionInstalled();
+    const { configureGitHubCopilotVSCode } = await import("../../src/setup/github-copilot-vscode.js");
+    await configureGitHubCopilotVSCode({ baseUrl: "https://api.evroc.on.opper.ai" });
+    const parsed = JSON.parse(readFileSync(vscodeUserSettingsPath("stable"), "utf8"));
+    expect(parsed["oaicopilot.baseUrl"]).toBe("https://api.evroc.on.opper.ai/v3/compat");
+    expect(await githubCopilotVSCode.isConfigured()).toBe(true);
   });
 
   it("configure preserves unrelated keys and other oaicopilot.* extension settings", async () => {

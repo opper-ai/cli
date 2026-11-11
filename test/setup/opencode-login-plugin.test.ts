@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEPLOYMENTS } from "../../src/config/deployments.js";
 import { OpperLoginPlugin } from "../../data/opencode-login-plugin.js";
 
 let home: string;
@@ -12,6 +13,7 @@ let oldSlot: string | undefined;
 let oldOpperHome: string | undefined;
 let oldLaunch: string | undefined;
 let oldProject: string | undefined;
+let oldDeployment: string | undefined;
 
 const catalog = (ids: string[]) => ({ data: ids.map((id) => ({
   id,
@@ -83,6 +85,7 @@ beforeEach(async () => {
   oldOpperHome = process.env.OPPER_HOME;
   oldLaunch = process.env.OPPER_CLI_LAUNCH_OPENCODE;
   oldProject = process.env.OPPER_PROJECT_UUID;
+  oldDeployment = process.env.OPPER_DEPLOYMENT;
   process.env.OPPER_EDITOR_HOME = home;
   delete process.env.OPPER_API_KEY;
   delete process.env.OPPER_BASE_URL;
@@ -90,6 +93,7 @@ beforeEach(async () => {
   delete process.env.OPPER_HOME;
   delete process.env.OPPER_CLI_LAUNCH_OPENCODE;
   delete process.env.OPPER_PROJECT_UUID;
+  delete process.env.OPPER_DEPLOYMENT;
 });
 
 afterEach(async () => {
@@ -109,6 +113,8 @@ afterEach(async () => {
   else process.env.OPPER_CLI_LAUNCH_OPENCODE = oldLaunch;
   if (oldProject === undefined) delete process.env.OPPER_PROJECT_UUID;
   else process.env.OPPER_PROJECT_UUID = oldProject;
+  if (oldDeployment === undefined) delete process.env.OPPER_DEPLOYMENT;
+  else process.env.OPPER_DEPLOYMENT = oldDeployment;
   await rm(home, { recursive: true, force: true });
 });
 
@@ -184,6 +190,54 @@ describe("OpenCode login plugin", () => {
     expect(config.provider.opper.models["anthropic/claude-sonnet-5"].cost).toEqual({ input: 1, output: 2 });
     expect(fetchMock).toHaveBeenCalledWith("https://api.opper.ai/v3/compat/models", expect.objectContaining({ headers: { Authorization: "Bearer synthetic-key" } }));
     expect(await readFile(join(home, ".opper", "config.json"), "utf8")).not.toContain("old-key");
+  });
+
+  it.each(Object.values(DEPLOYMENTS))("routes an independent environment key through $name in registry parity", async (deployment) => {
+    await slot({ apiKey: "stored-main", baseUrl: "https://api.opper.ai" });
+    process.env.OPPER_API_KEY = "independent-key";
+    process.env.OPPER_DEPLOYMENT = deployment.name;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => catalog(["model/one"]) });
+    vi.stubGlobal("fetch", fetchMock);
+    const config = await run({});
+    expect(config.provider.opper.options.baseURL).toBe(`${deployment.apiUrl}/v3/compat`);
+    expect(config.provider.opper.options.apiKey).toBe("independent-key");
+    expect(fetchMock).toHaveBeenCalledWith(`${deployment.apiUrl}/v3/compat/models`, expect.anything());
+  });
+
+  it.each(["main", "unknown"])("refuses to rebind a pinned Evroc credential to %s", async (deployment) => {
+    await slot({ apiKey: "stored-evroc", baseUrl: "https://api.evroc.on.opper.ai" });
+    process.env.OPPER_DEPLOYMENT = deployment;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const config = await run({ provider: { other: { name: "keep" } } });
+    expect(config.provider.opper).toBeUndefined();
+    expect(config.provider.other).toEqual({ name: "keep" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["https://api.evroc.on.opper.ai", "https://api.opper.ai"],
+    ["https://api.opper.ai", "https://api.evroc.on.opper.ai"],
+  ])("refuses raw known-deployment overrides from %s to %s", async (saved, override) => {
+    await slot({ apiKey: "stored-key", baseUrl: saved });
+    process.env.OPPER_BASE_URL = override;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect((await run({})).provider?.opper).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects conflicting named and custom endpoints before fetching", async () => {
+    process.env.OPPER_API_KEY = "independent-key";
+    process.env.OPPER_DEPLOYMENT = "evroc";
+    process.env.OPPER_BASE_URL = "https://api.opper.ai";
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect((await run({})).provider?.opper).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses an environment credential without borrowing the stored slot's scope or host", async () => {
