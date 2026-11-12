@@ -73,7 +73,7 @@ program.hook("preAction", async (_command, actionCommand) => {
   const options = actionCommand.opts();
   // These actions either operate on explicit configuration arguments or use
   // no API credentials. Leave any necessary config reads to the action itself.
-  const independent = name === "login" || parent === "config" || parent === "skills"
+  const independent = name === "call" || name === "login" || parent === "config" || parent === "skills"
     || (parent === "keys" && name === "create")
     || (parent === "mcp" && name === "add")
     || name === "version" || name === "help"

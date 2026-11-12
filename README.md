@@ -741,7 +741,7 @@ Direct access to the platform endpoints:
 
 | Command | Description |
 |---------|-------------|
-| `opper call <name> <instructions> [input] [--model <id>] [--stream]` | Run an Opper function. Reads input from stdin when the positional arg is omitted. |
+| `opper chat [prompt] -m <model> [--system <instructions>] [--stream]` | Send a one-shot prompt to a model. Accepts piped stdin; a model is required. |
 | `opper keys create --project <uuid> --name <name> --output <path> [--mcp-url <url>]` | Approve key creation in the browser and save the secret into a new private env file. Prints only metadata. |
 | `opper models list [filter] [--inference-location] [--storage-location] [--training] [--logging] [--moderation] [--json]` | List available models (built-in + custom) with where they run and their training, logging and moderation stances. The flags filter the way a model access rule on the Rules page does, e.g. `--inference-location EU --storage-location EU --training no --logging none --moderation none`. Values are comma-separated alternatives. |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
@@ -818,24 +818,48 @@ cannot be combined with `--idempotency-key`; recovery also refuses to register a
 new identity if the original cache is missing or invalid. Restore the original
 registration or reconcile the earlier key in Opper before starting a fresh create.
 
-### Calling a function from the shell or stdin
+### Chat from the shell or stdin
+
+`opper chat` sends one request to the selected model. Choose an available model
+with `opper models list`; `-m <model>` (or `--model <model>`) is required on every
+invocation. Model availability follows your selected deployment and credential.
+Replace the example model below with an ID available to your account.
 
 ```bash
-# Inline arguments
-opper call myfunction "respond in kind" "what is 2+2?"
+# Inline prompt
+opper chat "What is 2+2?" -m claude-sonnet-5
 
-# Stream the response token-by-token
-opper call --stream myfunction "respond in kind" "what is 2+2?"
+# Optional system instructions
+opper chat "What is 2+2?" -m claude-sonnet-5 --system "Be concise."
 
-# Pipe input from stdin (any text)
-echo "what is 2+2?" | opper call myfunction "respond in kind"
+# Opt in to streaming
+opper chat "Explain how rain forms." -m claude-sonnet-5 --stream
 
-# Pipe structured JSON in
-echo '{"name":"Johnny","age":41}' | opper call myfunction "only print age"
+# Use stdin as the prompt
+printf '%s\n' 'What is 2+2?' | opper chat -m claude-sonnet-5
 
-# Override the model for one call
-opper call --model claude-sonnet-5 myfunction "summarise" "long text…"
+# Combine an instruction with piped content
+cat notes.txt | opper chat "Summarize these notes." -m claude-sonnet-5
+
+# Structured input is ordinary prompt text
+printf '%s\n' '{"name":"Johnny","age":41}' | opper chat "Only print age." -m claude-sonnet-5
 ```
+
+When both a positional prompt and stdin are supplied, the command joins them
+with a blank line (`\n\n`), preserving the stdin text. Without `--stream`, it
+prints the completed answer. With `--stream`, it prints answer text as it arrives.
+The answer goes to stdout; errors go to stderr and return a nonzero exit code.
+A streaming failure can leave a partial answer on stdout.
+
+In the interactive menu, choose **Opper → Chat…**, enter a prompt and optional
+system instructions, then select from the live model list. Cancelling any step
+stops the wizard without submitting a chat.
+
+`opper call` now exits with the migration message “`opper call` has been retired.
+Use `opper chat` instead.” To update an old command, move its input to the chat
+prompt and its instructions to `--system`, select a model with `-m`, and omit
+the old function name. `opper ask` continues to answer questions about Opper
+using the installed skills.
 
 ### Registering a custom model
 
