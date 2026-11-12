@@ -143,6 +143,20 @@ describe("OpperApi", () => {
     });
   });
 
+  it("adds per-request headers on POST and on a stream", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const api = new OpperApi({ baseUrl: "https://api.opper.ai", apiKey: "k" });
+
+    await api.post("/v3/compat/chat/completions", {}, { "X-Opper-Name": "my-fn" });
+    for await (const _ of api.stream("/v3/compat/chat/completions", {}, { "X-Opper-Name": "my-fn" })) { /* no frames */ }
+
+    for (const [, init] of fetchMock.mock.calls as unknown as [string, RequestInit][]) {
+      expect(init.headers).toMatchObject({ Authorization: "Bearer k", "Content-Type": "application/json", "X-Opper-Name": "my-fn" });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("streams SSE data lines as an async iterator", async () => {
     const body = [
       "data: {\"delta\":\"hello\"}",

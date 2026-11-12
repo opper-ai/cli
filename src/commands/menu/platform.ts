@@ -31,7 +31,7 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
       { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
       { value: "traces", label: "Traces", hint: "Execution traces" },
       { value: "usage", label: "Usage", hint: "Tokens & cost" },
-      { value: "call", label: "Call function…", hint: "Run an Opper function with custom inputs" },
+      { value: "call", label: "Call model…", hint: "Send instructions and input to a model" },
       { value: "back", label: brand.dim("← Back") },
     ]);
     if (!choice) return;
@@ -150,7 +150,7 @@ async function indexesMenu(opts: MenuOptions): Promise<void> {
 }
 
 async function callWizard(opts: MenuOptions): Promise<void> {
-  const name = await ask("Function name", { required: true });
+  const name = await ask("Call name", { required: true });
   if (!name) return;
   const instructions = await ask("Instructions / system prompt", { required: true });
   if (!instructions) return;

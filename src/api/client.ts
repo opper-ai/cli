@@ -25,11 +25,11 @@ export class OpperApi {
     return this.parseJson<T>(res);
   }
 
-  async post<T>(path: string, body: unknown): Promise<T> {
+  async post<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
     const url = this.buildUrl(path);
     const res = await this.fetch(url, {
       method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
+      headers: this.headers({ "Content-Type": "application/json", ...headers }),
       body: JSON.stringify(body),
     });
     return this.parseJson<T>(res);
@@ -63,13 +63,14 @@ export class OpperApi {
     if (!res.ok) await this.throwApiError(res);
   }
 
-  async *stream(path: string, body: unknown): AsyncIterable<string> {
+  async *stream(path: string, body: unknown, headers: Record<string, string> = {}): AsyncIterable<string> {
     const url = this.buildUrl(path);
     const res = await this.fetch(url, {
       method: "POST",
       headers: this.headers({
         "Content-Type": "application/json",
         Accept: "text/event-stream",
+        ...headers,
       }),
       body: JSON.stringify(body),
     });
