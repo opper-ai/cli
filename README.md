@@ -230,6 +230,46 @@ opper agents remove claude-desktop   # works for any registered adapter
 
 This is the non-interactive equivalent of the menu's "Remove Opper integration" action. It clears Opper-owned config (e.g., flips Claude Desktop's `deploymentMode` back to `"1p"`, removes the `opper` provider block from OpenCode / Pi / OpenClaw, etc.) without touching anything you put there yourself.
 
+### Experimental sandbox
+
+`opper launch --sandbox srt <agent>` runs the whole agent process under Anthropic's open-source Sandbox Runtime (SRT), with a temporary home, filesystem restrictions and a network allowlist. Missing libraries and startup failures never fall back to an unsandboxed launch.
+
+SRT 0.0.81 is bundled as an optional npm dependency; keep optional dependencies enabled. It requires Node >=22.12 and a host-installed agent. On Debian/Ubuntu, install OS dependencies with `sudo apt-get install bubblewrap socat`. macOS uses its native sandbox mechanism. No VM, container daemon or image download is needed. Supported agents: `claude`, `codex`, `pi`, `opencode`, and `hermes`. Interactive macOS launches enable SRT pseudo-terminal access so agent TUIs can use raw mode.
+
+Build in the CLI checkout, then launch from a scratch project. An existing globally installed `opper` will not include these local changes.
+
+```sh
+npm run build
+CLI="$PWD/dist/index.js"
+mkdir -p /tmp/opper-sandbox-playground
+cd /tmp/opper-sandbox-playground
+node "$CLI" launch --sandbox srt claude
+node "$CLI" launch --sandbox srt --sandbox-domain github.com pi
+```
+
+**The agent edits your current project directly.** Use a scratch copy for disposable edits. Existing home settings and history are not copied into the temporary home. Project secrets and the selected Opper key remain accessible to the agent. SRT denies reads of `.ssh`, `.aws`, `.azure`, `.kube`, and the Opper configuration directory, but other host files can remain readable. Network access is restricted to the configured Opper host plus repeatable `--sandbox-domain` entries. GUI applications and background gateways are unsupported.
+
+#### Claude Code sandbox coordination
+
+Opper wraps the whole Claude Code process, including its tools and subprocesses. It passes a temporary `--settings` file with `sandbox.enabled: false` so Claude does not attempt a second, nested sandbox. Claude's tool permissions remain unchanged. Explicit `--settings` JSON or file contents are preserved, with Opper's monitoring hooks added and only `sandbox.enabled` overridden. For repeated `--settings`, the last value is used. Original settings files are not edited; generated settings are deleted with the sandbox session.
+
+Organization-managed Claude settings take precedence over command-line settings and can require its internal sandbox. Opper does not bypass those policies. Such a configuration may fail when nested; the outer SRT boundary stays enforced, and Opper never retries outside it. Monitoring hooks may also be disabled by Claude settings, so the log records when hooks actually report ready.
+
+References: [SRT source](https://github.com/anthropics/sandbox-runtime), [Claude sandbox scope](https://code.claude.com/docs/en/sandboxing#what-runs-outside-the-sandbox), [settings precedence](https://code.claude.com/docs/en/settings#settings-precedence).
+
+#### Activity log
+
+Every sandbox launch prints a private host-side `activity.log` path and a `tail -f` command. Watch it in another terminal while keeping the agent's interactive terminal intact. Logs survive sandbox cleanup in the OS temporary directory; delete them when finished.
+
+The log records session start/exit, project file notifications, Claude/Pi tool start/finish/failure events, and SRT network requests rejected through its permission callback. Tool hooks report when ready. Unsupported agents and missing monitoring capabilities are labeled explicitly. No new npm dependency is needed for logging.
+
+Tool arguments, results, prompts, file contents, and HTTP bodies/headers are omitted. The selected Opper key is redacted from log lines. Paths and domain names remain visible. These logs are diagnostic telemetry: file notifications can be coalesced or include edits by other programs, and agent-reported tool events can be disabled or forged. They are not a complete or tamper-proof audit. Allowed SRT connections, file reads, and arbitrary subprocess execution are not currently observed. Monitoring does not add restrictions or change the existing live-project behavior.
+
+#### Verification
+
+After building, run `node test/sandbox/smoke.mjs` from the CLI checkout. It uses a fake Claude executable and fake key to verify session-only sandbox settings, tool hooks, allowed/blocked networking, literal arguments, filesystem restrictions, child processes, and cleanup. It makes no model inference request. Run from a normal terminal because nested macOS sandboxes can be rejected. These functional checks are not a security audit or a full Claude inference test.
+
+
 ### Codex / ChatGPT desktop on macOS and Windows
 
 On macOS, install the app with local Codex support from [ChatGPT downloads](https://chatgpt.com/download). On Windows, install the [Codex app](https://openai.com/codex/) from the Microsoft Store; the CLI discovers its registered MSIX package and bundled runtime. The bundled Codex runtime must be version 0.153.4 or later. The separate ChatGPT Classic app is not supported.
@@ -1107,3 +1147,86 @@ entries remain available during refresh; narrowing never silently removes an
 older selection. Existing native endpoint discovery remains in use where its
 response contract is compatible. See [agent model discovery](docs/agent-model-catalogs.md)
 for adapter support, compatibility boundaries and runtime validation.
+
+#### Local observability POC
+
+From a source checkout, run `node scripts/sandbox-observer/server.mjs` and open the full URL it prints. The dashboard discovers up to 64 recent sandbox sessions in your OS temporary directory, including sessions started in other terminals. It shows the harness, configured model, backend, project, start time and host monitor PID, alongside each session's network allowlist, blocked network attempts, project file-change notifications, reported tools, and a filterable event timeline. New sessions send a host heartbeat every five seconds; stale or older logs show an unknown status. An activity ribbon shows when blocked traffic, file changes and tool calls happened. The Network tab lists every destination with its status (blocked, allowed at launch, or allowed/denied by rule), blocked-attempt counts, and Allow/Deny/Remove rule buttons; clicking a blocked host filters the Activity timeline to it. A host that is allowed has not necessarily been contacted. Counters cover the displayed event window. Repeated policy acknowledgements are collapsed so only version changes appear in the timeline. The same tab publishes versioned local rules and shows which running Dune sessions have applied them.
+
+The collector binds to `127.0.0.1` on a random port and requires a per-run token for log access. Keep the printed URL private. Refreshing the page requires reopening that URL. It reads at most 128 KiB per session and displays the latest 300 events; resource counts cover that window. Allowed connections, file reads, and subprocess execution are **not** captured. File notifications can include outside edits, and tool events are agent-reported. An empty map does not prove that no access occurred. Host activity logs stop after 8 MiB with a coverage warning; the agent-owned hook spool is not disk-quota limited. Stop the collector with Ctrl+C and remove temporary logs when no longer needed.
+
+The collector also keeps a small SQLite history at `~/.dune/observer.db` (owner-only), using Node's built-in `node:sqlite`, so no dependency is added. While `dune observe` runs it copies new log lines into two tables, `sessions` and `events`. Sessions whose temporary logs have been cleaned up stay visible under History, and each session shows whole-session counts beside the 300-event window. It stores the same metadata as the logs (paths, hostnames, tool names; no arguments, outputs or file contents), drops heartbeats and repeated policy acknowledgements, and removes sessions idle for 30 days. Activity that happens while no collector is running is only captured if its log still exists the next time one starts. Sandboxed commands cannot write the file; a `dune claude` session can read it, like the rest of `~/.dune`. Delete the file to clear the history. On a Node without `node:sqlite` the dashboard runs without history.
+
+Run collector tests with `node --test test/sandbox/observer.test.mjs`.
+
+### Dune: command sandbox experiment
+
+Dune wraps any executable and forwards all arguments after its name unchanged. Dune options go before the executable; `--` explicitly ends option parsing. Generic commands use a temporary home. Network access follows the machine policy (see below). `--env NAME` passes a selected environment variable without putting its value in argv. `--allow-write DIRECTORY` grants writes to an existing extra directory, while filesystem roots and the host home remain rejected.
+
+```sh
+dune python script.py
+dune -- npm test
+dune --env OPENAI_API_KEY --allow-domain api.openai.com python script.py
+dune --allow-write /absolute/path/to/output node build.js
+dune opper launch --model deepseek-v4.1-flash-1017 pi
+```
+
+For `opper`, Dune makes the existing Opper configuration readable but not writable, passes Opper's API-key/base-URL environment overrides when set, and allows configured API hosts. Renew expired credentials with `opper login` outside Dune. Omit Opper's own `--sandbox` flag. Direct Claude and Pi commands receive tool hooks; wrapped programs and other executables receive lifecycle, file-change and blocked-network observation without tool-call instrumentation. `dune observe` is reserved for the collector; `dune -- observe` runs an executable named `observe`.
+
+`dune claude` runs the installed Claude Code binary directly inside SRT, without Opper authentication or inference routing. It uses a separate private profile at `~/.dune/claude`; Claude manages its login, credentials, settings, and session history there. Your existing Claude profile is not copied. Sign in once with your Claude subscription:
+
+```sh
+dune claude auth login
+dune claude
+# Put Dune options before the executable:
+dune --allow-domain github.com claude -p "Review this project"
+dune observe
+```
+
+If a browser does not open during login, open the URL Claude prints and paste the returned code into its prompt. `CLAUDE_CODE_OAUTH_TOKEN`, if explicitly set in your shell, is passed only to the native Claude process; API keys, Opper routing variables and other inherited credentials are omitted. The launcher never extracts your existing Keychain credentials. Claude's documented `CLAUDE_CONFIG_DIR` profile mechanism keeps the Dune login separate. See [Claude authentication](https://code.claude.com/docs/en/authentication).
+
+With `--strict`, direct Claude commands are allowed `api.anthropic.com`, `claude.ai`, `platform.claude.com`, and `console.anthropic.com` by default. It shares the sandbox and monitoring limitations described above. Project edits are live; the Dune profile persists and is writable to Claude, including its tools. Other host files outside explicitly denied paths can remain readable. It collects lifecycle, file-change notifications, blocked destinations, and Claude-reported tool metadata, without saving prompts, tool arguments, outputs or file contents in the activity log. Claude's own persistent history is separate from those logs.
+
+From this checkout, `npm run build` produces `dist/dune.js`; use `node /absolute/path/to/cli/dist/dune.js claude` before installing the package. The package exports the separate `dune` executable; `dune observe` prints its private local dashboard URL.
+
+### What a session logs
+
+Every connection is logged by host as `NETWORK <host>:<port> allowed` or `blocked`, in both the open default and `--strict` sessions. Programs that run under the sandboxed command are logged as `PROCESS <executable> (pid <n>)`; Dune samples the process table four times a second rather than tracing every exec (that needs root on macOS), so a program that starts and exits between samples is missed, and arguments are never logged. File access the sandbox refuses is logged as `FILE read blocked <path>` or `FILE write blocked <path>` (on Linux, refused writes only). Successful file reads are not logged.
+
+The dashboard's Graph tab draws every running agent, every destination they contacted and a line between them: green for calls that went through, red for blocked ones, thicker with more calls. It refreshes every second.
+
+### Demo layout
+
+On macOS with tmux, `scripts/dune-demo.sh` from a source checkout puts four shells in a grid on the left half of the screen and the dashboard on the right. Each shell starts in its own folder under `~/dune-demo` with this checkout's `dune` on its PATH, and its title bar suggests a command to try. It uses iTerm and Chrome when installed, otherwise Terminal and Safari; macOS asks once to let your terminal control them. The shells and the dashboard run on a private tmux server; `scripts/dune-demo.sh stop` ends both.
+
+### Network: open by default, narrowed by policy
+
+Dune takes its network configuration from the machine policy that `dune observe` edits, and nothing else. With no rules a session can reach every host; each deny rule an administrator adds removes one, for running sessions within a few seconds and for every later launch. Every connection is logged with its host and port, as `NETWORK <host>:<port> allowed` or `… blocked`, so the dashboard shows what a command actually reaches and offers a Deny button beside each host.
+
+```sh
+dune claude                    # reach anything the policy does not deny; hosts logged
+dune --log-urls npm test       # also log each request's method and URL
+dune --strict python script.py # allowlist instead: only permitted hosts
+dune --allow-domain registry.npmjs.org npm test   # implies --strict
+```
+
+**An open network is not a network sandbox.** Until a host is denied, a compromised or mistaken command can send project files and any credentials passed to it anywhere. Filesystem limits are unchanged. Use `--strict` (or `--allow-domain`, which implies it) for the previous behaviour: every host is blocked unless it is a launch default for Claude or Opper, named with `--allow-domain`, or allowed by a policy rule; only blocked attempts are logged.
+
+Open sessions empty SRT's allowlist and answer its per-host permission callback with yes. Deny rules are enforced by SRT itself, which also catches other spellings of a denied host, and Dune logs those refusals from SRT's violation reports. Allow rules have no effect on an open session.
+
+`--log-urls` uses SRT's experimental TLS termination: HTTPS is decrypted inside the local Dune process with an ephemeral CA that only the sandboxed command is told to trust, and each request is logged as `REQUEST <METHOD> <scheme>://<host><path>`. Query strings, headers and bodies are not logged, and paths are cut at 400 characters. Paths can still contain identifiers. Clients that pin certificates or ignore the injected trust bundle will fail, and non-HTTP traffic is logged by host only.
+
+The dashboard lists reached and blocked hosts with counts, has Allowed network and Requests filters in the timeline, and tallies requested URLs. Run `npm run build && node test/sandbox/open-smoke.mjs all urls` for a real check against example.com.
+
+### Live Dune network policy
+
+Open `dune observe` to allow or deny an exact hostname or IP address, either from a destination's row or with the form below the table. Changes apply to all policy-enabled Dune sessions on this machine, including future launches. `Remove rule` returns a host to the default: reachable in an open session, blocked in a `--strict` one unless allowed at launch. Denies always win; allow rules add to a `--strict` session's allowlist and do nothing in an open one. Wildcards, ports, and full URLs are not accepted in this editor.
+
+Policies are stored under `~/.dune/policy` with immutable numbered snapshots and an atomically replaced current policy. Dune protects that directory from sandbox writes. Each session polls every second, updates SRT in place, and reports its applied network version. The dashboard refreshes every two seconds; normal visibility is within roughly four seconds. Existing sessions launched before this feature need one relaunch. Direct `opper launch --sandbox srt` sessions are unmanaged by this policy panel.
+
+These updates affect new proxy connections; they do not close existing connections. Filesystem restrictions remain fixed for a session. Invalid policy updates or rollback cause the running sandbox to stop. Concurrent dashboard edits use version checks to prevent lost updates.
+
+This is a local control-plane POC. It does not yet distribute policy across machines or authenticate organization administrators. The machine owner can change local policy; sandboxed agents cannot. Network observations remain partial: blocked destinations are recorded, but allowed traffic and HTTPS URL paths are captured in open sessions (the default) and with `--log-urls`.
+
+Run `npm run build && node test/sandbox/policy-smoke.mjs` for a real SRT allow → deny → allow check against a temporary local HTTP server.
+
+Dune's Claude monitoring hooks use static tool-name matchers and disconnected stdin: they never parse tool payloads, which can contain file contents. They report tool name and phase only; other tools are grouped as `other`, and Claude tool-call IDs and durations are unavailable. Pi monitoring accesses only event metadata, never input or result content. File watchers and sandbox-denial events collect paths and operations without opening the target files. Successful file-read paths are not currently observed. User-configured hooks and the harness's own history are separate from Dune monitoring.

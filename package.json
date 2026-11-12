@@ -4,11 +4,14 @@
   "description": "The official Opper CLI — authenticate, route agent inference, and manage the Opper platform",
   "type": "module",
   "bin": {
-    "opper": "dist/index.js"
+    "opper": "dist/index.js",
+    "dune": "dist/dune.js"
   },
   "files": [
     "dist",
     "data",
+    "scripts/sandbox-observer",
+    "scripts/sandbox-policy",
     "README.md",
     "LICENSE"
   ],
@@ -19,7 +22,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && node --test test/scripts/build-bundles.test.mjs",
+    "test": "vitest run && node --test test/scripts/build-bundles.test.mjs test/sandbox/observer.test.mjs",
     "test:smoke": "node test/integration/package-smoke.mjs",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
@@ -58,5 +61,8 @@
     "cli",
     "ai",
     "llm"
-  ]
+  ],
+  "optionalDependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.81"
+  }
 }
