@@ -1,4 +1,8 @@
-import { callCommand } from "../call.js";
+import { autocomplete, isCancel, text } from "@clack/prompts";
+import { chatCommand } from "../chat.js";
+import { OpperApi } from "../../api/client.js";
+import { resolveApiContext } from "../../api/resolve.js";
+import { OpperError } from "../../errors.js";
 import { modelsListCommand } from "../models.js";
 import { projectsListCommand } from "../projects.js";
 import {
@@ -31,7 +35,7 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
       { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
       { value: "traces", label: "Traces", hint: "Execution traces" },
       { value: "usage", label: "Usage", hint: "Tokens & cost" },
-      { value: "call", label: "Call function…", hint: "Run an Opper function with custom inputs" },
+      { value: "chat", label: "Chat…", hint: "Send a prompt to an available model" },
       { value: "back", label: brand.dim("← Back") },
     ]);
     if (!choice) return;
@@ -53,8 +57,8 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
         case "usage":
           await usageListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
-        case "call":
-          await callWizard(opts);
+        case "chat":
+          await chatWizard(opts);
           break;
       }
     } catch (err) {
@@ -149,21 +153,45 @@ async function indexesMenu(opts: MenuOptions): Promise<void> {
   }
 }
 
-async function callWizard(opts: MenuOptions): Promise<void> {
-  const name = await ask("Function name", { required: true });
-  if (!name) return;
-  const instructions = await ask("Instructions / system prompt", { required: true });
-  if (!instructions) return;
-  const input = await ask("Input", { required: true });
-  if (!input) return;
-  const model = await ask("Model id (leave empty for default)");
+async function chatWizard(opts: MenuOptions): Promise<void> {
+  const prompt = await ask("Prompt", { required: true });
+  if (!prompt) return;
+  // The shared ask helper treats blank input as cancellation. Here blank means
+  // no system instructions, while Escape must stop before any API request.
+  const system = await text({ message: "System instructions (optional)" });
+  if (isCancel(system)) return;
 
-  await callCommand({
-    name,
-    instructions,
-    input,
-    key: opts.key,
+  const context = await resolveApiContext(opts.key, {
     ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
-    ...(model ? { model } : {}),
+  });
+  const catalog = await new OpperApi(context).get<{ data?: unknown }>("/v3/compat/models");
+  const ids = Array.isArray(catalog?.data)
+    ? [...new Set(catalog.data.flatMap((model: unknown) => {
+      if (!model || typeof model !== "object" || !("id" in model)
+        || typeof model.id !== "string" || !model.id || /\s|[\u0000-\u001f\u007f]/.test(model.id)) return [];
+      const metadata = "opper" in model ? model.opper : undefined;
+      if (metadata && typeof metadata === "object" && "type" in metadata && metadata.type === "embedding") return [];
+      return [model.id];
+    }))]
+    : [];
+  if (ids.length === 0) {
+    throw new OpperError("API_ERROR", "No chat models are available for the selected account.",
+      "Run `opper models list` to check model access, or choose another deployment.");
+  }
+  const model = await autocomplete({
+    message: "Model (type to filter)",
+    options: ids.map(id => ({ value: id, label: id })),
+  });
+  if (isCancel(model) || typeof model !== "string") return;
+  if (!ids.includes(model)) {
+    throw new OpperError("API_ERROR", "The selected model is no longer available.", "Choose a model from the current list and retry.");
+  }
+  const systemText = typeof system === "string" ? system.trim() : "";
+  await chatCommand({
+    prompt,
+    model,
+    key: opts.key,
+    ...(systemText ? { system: systemText } : {}),
+    ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}),
   });
 }

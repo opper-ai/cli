@@ -1,5 +1,6 @@
 import { OpperError } from "../errors.js";
 import { callCommand } from "../commands/call.js";
+import { chatCommand } from "../commands/chat.js";
 import {
   modelsListCommand,
   modelsCreateCommand,
@@ -26,11 +27,12 @@ import { videoGenerateCommand } from "../commands/video.js";
 import { projectsListCommand } from "../commands/projects.js";
 import type { RegisterFn } from "./types.js";
 
-async function readStdinIfPiped(): Promise<string | null> {
+async function readStdinIfPiped(trim = true): Promise<string | null> {
   if (process.stdin.isTTY) return null;
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8").trim();
+  const input = Buffer.concat(chunks).toString("utf8");
+  return trim ? input.trim() : input;
 }
 
 const register: RegisterFn = (program, ctx) => {
@@ -43,39 +45,33 @@ const register: RegisterFn = (program, ctx) => {
       await projectsListCommand({ key: ctx.key(), ...(filter ? { filter } : {}) });
     });
 
-  // ---- call --------------------------------------------------------------
+  // ---- chat --------------------------------------------------------------
   program
-    .command("call")
-    .description("Execute a function by name via the Opper v3 /call endpoint")
-    .argument("<name>", "function name")
-    .argument("<instructions>", "instructions / system prompt")
-    .argument("[input]", "input (or piped via stdin)")
-    .option("--model <id>", "model identifier (e.g. claude-opus-5)")
-    .option("--stream", "stream the response token-by-token", false)
-    .action(async (
-      name: string,
-      instructions: string,
-      input: string | undefined,
-      cmdOpts: { model?: string; stream?: boolean },
-    ) => {
-      const resolvedInput = input ?? (await readStdinIfPiped());
-      if (!resolvedInput) {
-        throw new OpperError(
-          "API_ERROR",
-          "No input provided",
-          "Pass input as the third positional argument, or pipe via stdin.",
-        );
-      }
-      await callCommand({
-        name,
-        instructions,
-        input: resolvedInput,
+    .command("chat")
+    .description("Send a one-shot prompt to a model")
+    .argument("[prompt]", "prompt (combined with piped stdin using a blank line)")
+    .requiredOption("-m, --model <id>", "model identifier; use `opper models list` to find models")
+    .option("--system <instructions>", "optional system instructions")
+    .option("--stream", "stream answer text as it arrives", false)
+    .action(async (prompt: string | undefined, options: { model: string; system?: string; stream: boolean }) => {
+      const input = await readStdinIfPiped(false);
+      const combined = prompt && input ? `${prompt}\n\n${input}` : prompt || input || "";
+      await chatCommand({
+        prompt: combined,
+        model: options.model,
         key: ctx.key(),
+        ...(options.system !== undefined ? { system: options.system } : {}),
+        ...(options.stream ? { stream: true } : {}),
         ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.model ? { model: cmdOpts.model } : {}),
-        ...(cmdOpts.stream ? { stream: true } : {}),
       });
     });
+
+  program
+    .command("call")
+    .description("Retired: use chat instead")
+    .argument("[legacy-arguments...]", "retired function arguments")
+    .allowUnknownOption(true)
+    .action(() => { callCommand(); });
 
   // ---- models ------------------------------------------------------------
   const models = program.command("models").description("Manage models");

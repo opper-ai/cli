@@ -63,7 +63,7 @@ export class OpperApi {
     if (!res.ok) await this.throwApiError(res);
   }
 
-  async *stream(path: string, body: unknown): AsyncIterable<string> {
+  async *stream(path: string, body: unknown, options: { requireDone?: boolean } = {}): AsyncIterable<string> {
     const url = this.buildUrl(path);
     const res = await this.fetch(url, {
       method: "POST",
@@ -73,7 +73,7 @@ export class OpperApi {
       }),
       body: JSON.stringify(body),
     });
-    yield* this.readSse(res);
+    yield* this.readSse(res, options.requireDone);
   }
 
   /** SSE over GET — long-lived server push streams (e.g. app logs). */
@@ -86,31 +86,45 @@ export class OpperApi {
     yield* this.readSse(res);
   }
 
-  private async *readSse(res: Response): AsyncIterable<string> {
+  private async *readSse(res: Response, requireDone = false): AsyncIterable<string> {
     if (!res.ok) await this.throwApiError(res);
     if (!res.body) return;
 
     const decoder = new TextDecoder();
     let buffer = "";
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buffer.indexOf("\n")) !== -1) {
-        const line = buffer.slice(0, idx).replace(/\r$/, "");
-        buffer = buffer.slice(idx + 1);
-        if (line.startsWith("data:")) {
-          const payload = line.slice(5).replace(/^\s/, "");
-          if (payload === "[DONE]") return;
-          yield payload;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, idx).replace(/\r$/, "");
+          buffer = buffer.slice(idx + 1);
+          if (line.startsWith("data:")) {
+            const payload = line.slice(5).replace(/^\s/, "");
+            if (payload === "[DONE]") return;
+            yield payload;
+          }
         }
       }
-    }
-    if (buffer.startsWith("data:")) {
-      const payload = buffer.slice(5).replace(/^\s/, "");
-      if (payload && payload !== "[DONE]") yield payload;
+      if (buffer.startsWith("data:")) {
+        const payload = buffer.slice(5).replace(/^\s/, "");
+        if (payload === "[DONE]") return;
+        if (payload) yield payload;
+      }
+      if (requireDone) throw new OpperError("API_ERROR", "The response stream ended before completion.", "The partial response may be incomplete. Try the request again.");
+    } catch (error) {
+      if (error instanceof OpperError) throw error;
+      throw new OpperError("NETWORK_ERROR",
+        `Response stream failed: ${error instanceof Error ? error.message : String(error)}`,
+        "The partial response may be incomplete. Check your connection and try again.");
+    } finally {
+      // Stop an unread response on DONE or when its consumer rejects a frame.
+      // Cleanup must not replace the original transport or application error.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   }
 

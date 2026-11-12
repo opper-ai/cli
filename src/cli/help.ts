@@ -33,6 +33,7 @@ const GROUPS: HelpGroup[] = [
   {
     title: "Platform",
     commands: [
+      "chat",
       "call",
       "keys",
       "projects",
