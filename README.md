@@ -116,8 +116,8 @@ environment keys do not inherit the saved account's user details.
 
 Organization personal agent credentials have no project binding. Inference,
 models, project discovery, and usage work at organization scope without a target.
-Pass the global `--project-uuid <uuid>` flag to target a project explicitly. Indexes,
-named calls, and SDK `ask` require an explicit project or a resource default.
+Pass the global `--project-uuid <uuid>` flag to target a project explicitly. Named
+calls and SDK `ask` require an explicit project or a resource default.
 Traces without a target use the organization's projectless trace group; a
 configured resource default also applies to trace commands. Resource defaults
 never apply implicitly to inference or agent launches.
@@ -542,7 +542,6 @@ Either way, that is exactly what `opper launch` does for you — plus a fresh id
 `opper ask "<question>"` runs an Opper agent grounded on the locally-installed Opper skills (see below). Useful for "how do I…" questions about the platform, SDKs, or the CLI itself.
 
 ```bash
-opper ask "how do I create an index?"
 opper ask --model claude-opus-5 "compare the v2 and v3 APIs"
 ```
 
@@ -746,10 +745,6 @@ Direct access to the platform endpoints:
 | `opper models list [filter] [--inference-location] [--storage-location] [--training] [--logging] [--moderation] [--json]` | List available models (built-in + custom) with where they run and their training, logging and moderation stances. The flags filter the way a model access rule on the Rules page does, e.g. `--inference-location EU --storage-location EU --training no --logging none --moderation none`. Values are comma-separated alternatives. |
 | `opper models create <name> <identifier> <apiKey> [--extra <json>]` | Register a custom model. |
 | `opper models get <name>` / `delete <name>` | Inspect / remove a custom model. |
-| `opper indexes list [--limit] [--offset]` | List knowledge-base indexes. |
-| `opper indexes get <name>` / `create <name> [--embedding-model <id>]` / `delete <name>` | Manage indexes. |
-| `opper indexes add <name> <content> [--key <id>] [--metadata <json>]` | Add a document (`<content>` accepts `-` for stdin). |
-| `opper indexes query <name> <query> [--top-k <n>] [--filters <json>]` | Semantic search. |
 | `opper traces list [--limit] [--offset] [--name <substring>]` | List traces. |
 | `opper traces get <id>` / `delete <id>` | Inspect / remove a trace. |
 | `opper usage list [--from-date] [--to-date] [--granularity] [--fields] [--group-by] [--out csv]` | Token / cost analytics. |
@@ -873,21 +868,6 @@ opper models create my-gpt4 azure/my-gpt4-deployment my-api-key \
 # Inspect / delete
 opper models get my-gpt4
 opper models delete my-gpt4
-```
-
-### Indexing and querying a knowledge base
-
-```bash
-# Create an index
-opper indexes create support-docs
-
-# Add documents (inline or from stdin)
-opper indexes add support-docs "How to reset your password: …" --key reset-password
-cat refunds.md | opper indexes add support-docs - --key refunds --metadata '{"category":"billing"}'
-
-# Search
-opper indexes query support-docs "how do I get a refund?" --top-k 5
-opper indexes query support-docs "billing question" --filters '{"category":"billing"}'
 ```
 
 ### Cost / usage by tag

@@ -74,7 +74,7 @@ export async function menuCommand(opts: MenuOptions): Promise<void> {
     options.push({
       value: "platform",
       label: "Opper",
-      hint: "Projects, models, indexes, traces, usage",
+      hint: "Projects, models, traces, usage",
     });
     options.push({
       value: "account",
@@ -156,7 +156,7 @@ function warnOnLegacyCli(): void {
 async function askPrompt(opts: MenuOptions): Promise<void> {
   const question = await text({
     message: "Ask the Opper support agent",
-    placeholder: "e.g. how do I create an index?",
+    placeholder: "e.g. how do I authenticate?",
     validate: (v) =>
       (v ?? "").trim().length === 0 ? "Question cannot be empty" : undefined,
   });

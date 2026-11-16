@@ -10,13 +10,6 @@ import {
   tracesGetCommand,
   tracesDeleteCommand,
 } from "../traces.js";
-import {
-  indexesListCommand,
-  indexesGetCommand,
-  indexesCreateCommand,
-  indexesDeleteCommand,
-  indexesQueryCommand,
-} from "../indexes.js";
 import { usageListCommand } from "../usage.js";
 import { brand } from "../../ui/colors.js";
 import {
@@ -32,7 +25,6 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
     const choice = await pickMenuChoice("Opper", [
       { value: "projects", label: "Projects", hint: "Project names and UUIDs" },
       { value: "models", label: "Models", hint: "Available models" },
-      { value: "indexes", label: "Indexes", hint: "Knowledge bases" },
       { value: "traces", label: "Traces", hint: "Execution traces" },
       { value: "usage", label: "Usage", hint: "Tokens & cost" },
       { value: "chat", label: "Chat…", hint: "Send a prompt to an available model" },
@@ -47,9 +39,6 @@ export async function platformMenu(opts: MenuOptions): Promise<void> {
           break;
         case "models":
           await modelsListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        case "indexes":
-          await indexesMenu(opts);
           break;
         case "traces":
           await tracesMenu(opts);
@@ -93,57 +82,6 @@ async function tracesMenu(opts: MenuOptions): Promise<void> {
           if (!id) continue;
           if (!(await askConfirm(`Delete trace "${id}"?`))) continue;
           await tracesDeleteCommand({ id, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
-      }
-    } catch (err) {
-      reportError(err);
-    }
-  }
-}
-
-async function indexesMenu(opts: MenuOptions): Promise<void> {
-  while (true) {
-    const choice = await pickMenuChoice("Indexes", [
-      { value: "list", label: "List", hint: "All knowledge bases" },
-      { value: "get", label: "Get…", hint: "Show details of an index" },
-      { value: "create", label: "Create…", hint: "New empty index" },
-      { value: "delete", label: "Delete…", hint: "Remove an index" },
-      { value: "query", label: "Query…", hint: "Semantic search" },
-      { value: "back", label: brand.dim("← Back") },
-    ]);
-    if (!choice) return;
-
-    try {
-      switch (choice) {
-        case "list":
-          await indexesListCommand({ key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        case "get": {
-          const name = await ask("Index name", { required: true });
-          if (!name) continue;
-          await indexesGetCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
-        case "create": {
-          const name = await ask("New index name", { required: true });
-          if (!name) continue;
-          await indexesCreateCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
-        case "delete": {
-          const name = await ask("Index name", { required: true });
-          if (!name) continue;
-          if (!(await askConfirm(`Delete index "${name}"?`))) continue;
-          await indexesDeleteCommand({ name, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
-          break;
-        }
-        case "query": {
-          const name = await ask("Index name", { required: true });
-          if (!name) continue;
-          const query = await ask("Query", { required: true });
-          if (!query) continue;
-          await indexesQueryCommand({ name, query, key: opts.key, ...(opts.projectUuid ? { projectUuid: opts.projectUuid } : {}) });
           break;
         }
       }
