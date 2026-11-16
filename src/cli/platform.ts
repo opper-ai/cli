@@ -1,4 +1,3 @@
-import { OpperError } from "../errors.js";
 import { callCommand } from "../commands/call.js";
 import { chatCommand } from "../commands/chat.js";
 import {
@@ -13,26 +12,17 @@ import {
   tracesGetCommand,
   tracesDeleteCommand,
 } from "../commands/traces.js";
-import {
-  indexesListCommand,
-  indexesGetCommand,
-  indexesCreateCommand,
-  indexesDeleteCommand,
-  indexesQueryCommand,
-  indexesAddCommand,
-} from "../commands/indexes.js";
 import { usageListCommand } from "../commands/usage.js";
 import { imageGenerateCommand } from "../commands/image.js";
 import { videoGenerateCommand } from "../commands/video.js";
 import { projectsListCommand } from "../commands/projects.js";
 import type { RegisterFn } from "./types.js";
 
-async function readStdinIfPiped(trim = true): Promise<string | null> {
+async function readStdinIfPiped(): Promise<string | null> {
   if (process.stdin.isTTY) return null;
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const input = Buffer.concat(chunks).toString("utf8");
-  return trim ? input.trim() : input;
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 const register: RegisterFn = (program, ctx) => {
@@ -54,7 +44,7 @@ const register: RegisterFn = (program, ctx) => {
     .option("--system <instructions>", "optional system instructions")
     .option("--stream", "stream answer text as it arrives", false)
     .action(async (prompt: string | undefined, options: { model: string; system?: string; stream: boolean }) => {
-      const input = await readStdinIfPiped(false);
+      const input = await readStdinIfPiped();
       const combined = prompt && input ? `${prompt}\n\n${input}` : prompt || input || "";
       await chatCommand({
         prompt: combined,
@@ -169,110 +159,6 @@ const register: RegisterFn = (program, ctx) => {
     .argument("<id>", "trace id")
     .action(async (id: string) => {
       await tracesDeleteCommand({ id, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
-    });
-
-  // ---- indexes -----------------------------------------------------------
-  const indexes = program
-    .command("indexes")
-    .description("Manage knowledge base indexes");
-
-  indexes
-    .command("list")
-    .description("List indexes")
-    .option("--limit <n>", "max items", (v) => parseInt(v, 10))
-    .option("--offset <n>", "items to skip", (v) => parseInt(v, 10))
-    .action(async (cmdOpts: { limit?: number; offset?: number }) => {
-      await indexesListCommand({
-        key: ctx.key(),
-        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.limit !== undefined ? { limit: cmdOpts.limit } : {}),
-        ...(cmdOpts.offset !== undefined ? { offset: cmdOpts.offset } : {}),
-      });
-    });
-
-  indexes
-    .command("get")
-    .description("Show details of an index")
-    .argument("<name>", "index name")
-    .action(async (name: string) => {
-      await indexesGetCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
-    });
-
-  indexes
-    .command("create")
-    .description("Create a new index")
-    .argument("<name>", "index name")
-    .option("--embedding-model <id>", "override the embedding model")
-    .action(async (name: string, cmdOpts: { embeddingModel?: string }) => {
-      await indexesCreateCommand({
-        name,
-        key: ctx.key(),
-        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.embeddingModel ? { embeddingModel: cmdOpts.embeddingModel } : {}),
-      });
-    });
-
-  indexes
-    .command("delete")
-    .description("Delete an index by name")
-    .argument("<name>", "index name")
-    .action(async (name: string) => {
-      await indexesDeleteCommand({ name, key: ctx.key(), ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}) });
-    });
-
-  indexes
-    .command("query")
-    .description("Query an index")
-    .argument("<name>", "index name")
-    .argument("<query>", "query string")
-    .option("--top-k <n>", "number of results", (v) => parseInt(v, 10))
-    .option("--filters <json>", "JSON-encoded filter object")
-    .action(async (
-      name: string,
-      query: string,
-      cmdOpts: { topK?: number; filters?: string },
-    ) => {
-      await indexesQueryCommand({
-        name,
-        query,
-        key: ctx.key(),
-        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.topK !== undefined ? { topK: cmdOpts.topK } : {}),
-        ...(cmdOpts.filters ? { filtersJson: cmdOpts.filters } : {}),
-      });
-    });
-
-  indexes
-    .command("add")
-    .description("Add a document to an index")
-    .argument("<name>", "index name")
-    .argument("<content>", "document content (or - to read from stdin)")
-    .option("--key <id>", "document key / id")
-    .option("--metadata <json>", "JSON-encoded metadata object")
-    .action(async (
-      name: string,
-      content: string,
-      cmdOpts: { key?: string; metadata?: string },
-    ) => {
-      let resolvedContent = content;
-      if (content === "-") {
-        resolvedContent = (await readStdinIfPiped()) ?? "";
-        if (!resolvedContent) {
-          throw new OpperError(
-            "API_ERROR",
-            "No content on stdin",
-            "Pipe content into the CLI or pass it as a positional argument.",
-          );
-        }
-      }
-      await indexesAddCommand({
-        name,
-        content: resolvedContent,
-        key: ctx.key(),
-        ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
-        ...(cmdOpts.key ? { docKey: cmdOpts.key } : {}),
-        ...(cmdOpts.metadata ? { metadataJson: cmdOpts.metadata } : {}),
-      });
     });
 
   // ---- usage -------------------------------------------------------------
