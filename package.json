@@ -52,6 +52,7 @@
     "type": "git",
     "url": "git+https://github.com/opper-ai/cli.git"
   },
+  "homepage": "https://opper.ai",
   "license": "MIT",
   "keywords": [
     "opper",
