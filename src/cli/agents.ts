@@ -85,6 +85,8 @@ const register: RegisterFn = (program, ctx) => {
     .option("--model-kinds <kinds>", "Catalog: pools,routes or all, for Codex, Codex Desktop, Claude Desktop, OpenCode and Pi")
     .option("--codex-home <path>", "Codex desktop configuration directory (codex-desktop only)")
     .option("--install", "install the agent if missing", false)
+    .option("--sandbox <backend>", "use srt to sandbox the agent; edits affect the current project")
+    .option("--sandbox-domain <host>", "allow an extra network host with --sandbox srt (repeatable)", (host: string, hosts: string[]) => [...hosts, host], [])
     .option("--proxy", "use the local desktop session proxy (codex-desktop or claude-desktop)")
     .option("--state-dir <path>", "local proxy state directory (requires --proxy)")
     .option("--no-open", "print the session picker link without opening a browser (requires --proxy)")
@@ -111,6 +113,8 @@ const register: RegisterFn = (program, ctx) => {
           install?: boolean;
           project?: boolean;
           tag?: Record<string, string>;
+          sandbox?: string;
+          sandboxDomain?: string[];
           proxy?: boolean;
           stateDir?: string;
           open?: boolean;
@@ -120,6 +124,8 @@ const register: RegisterFn = (program, ctx) => {
         const args = (cmd.args as string[]).slice(1);
         const code = await launchCommand({
           agent: agentName,
+          ...(cmdOpts.sandbox ? { sandbox: cmdOpts.sandbox } : {}),
+          ...(cmdOpts.sandboxDomain?.length ? { sandboxDomains: cmdOpts.sandboxDomain } : {}),
           key: ctx.key(),
           ...(ctx.projectUuid?.() ? { projectUuid: ctx.projectUuid() } : {}),
           ...(cmdOpts.model ? { model: cmdOpts.model } : {}),

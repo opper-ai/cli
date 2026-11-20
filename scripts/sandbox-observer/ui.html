@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Dune observer</title>
+    <link rel="stylesheet" href="/ui.css" />
+    <script src="/ui.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <p class="wordmark">dune <span>observer</span></p>
+      <p id="connection" class="connection" role="status">Connecting…</p>
+    </header>
+    <div class="layout">
+      <aside>
+        <label class="search"
+          ><span class="sr">Find a session</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Find by command or project"
+        /></label>
+        <nav id="sessions" aria-label="Sandbox sessions"></nav>
+        <p id="limit" class="fine"></p>
+      </aside>
+      <main>
+        <div id="empty" class="empty">
+          <h1>No sandbox sessions yet</h1>
+          <p>
+            Start one in a project and it shows up here within a couple of
+            seconds.
+          </p>
+          <pre><code>dune claude
+dune npm test</code></pre>
+        </div>
+        <article id="detail" hidden>
+          <div class="heading">
+            <h1 id="name"></h1>
+            <span id="state" class="pill"></span>
+          </div>
+          <p id="project" class="path"></p>
+          <dl id="metadata" class="metadata"></dl>
+
+          <figure class="ribbon">
+            <figcaption>
+              <span id="ribbon-title"></span>
+              <span class="legend">
+                <i class="key blocked"></i>Blocked network
+                <i class="key allowed"></i>Allowed network
+                <i class="key file"></i>File changes
+                <i class="key tool"></i>Tools
+              </span>
+            </figcaption>
+            <div id="ribbon"></div>
+            <div class="ribbon-axis fine">
+              <span id="ribbon-start"></span><span id="ribbon-end"></span>
+            </div>
+          </figure>
+
+          <div class="tabs" role="tablist" aria-label="Session view">
+            <button
+              id="network-tab"
+              role="tab"
+              aria-selected="true"
+              aria-controls="network-panel"
+            >
+              Network <span id="network-count" class="count"></span>
+            </button>
+            <button
+              id="activity-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="activity-panel"
+              tabindex="-1"
+            >
+              Activity <span id="activity-count" class="count"></span>
+            </button>
+            <button
+              id="graph-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="graph-panel"
+              tabindex="-1"
+            >
+              Graph <span id="graph-count" class="count"></span>
+            </button>
+          </div>
+
+          <div
+            id="activity-panel"
+            role="tabpanel"
+            aria-labelledby="activity-tab"
+            hidden
+          >
+            <div class="columns">
+              <section class="timeline">
+                <div
+                  id="filters"
+                  class="chips"
+                  role="group"
+                  aria-label="Filter events"
+                ></div>
+                <p id="host-filter" class="fine" hidden>
+                  <span id="host-filter-text"></span>
+                  <button id="clear-host" class="link">Show all hosts</button>
+                </p>
+                <div class="scroller">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Kind</th>
+                        <th>What happened</th>
+                      </tr>
+                    </thead>
+                    <tbody id="timeline"></tbody>
+                  </table>
+                </div>
+                <p id="window" class="fine"></p>
+              </section>
+              <div class="tallies">
+                <section>
+                  <h2>Files changed</h2>
+                  <ul id="files" class="tally"></ul>
+                </section>
+                <section id="urls-box" hidden>
+                  <h2>URLs requested</h2>
+                  <ul id="urls" class="tally"></ul>
+                </section>
+                <section id="programs-box" hidden>
+                  <h2>Programs run</h2>
+                  <ul id="programs" class="tally"></ul>
+                </section>
+                <section>
+                  <h2>Tools used</h2>
+                  <ul id="tools" class="tally"></ul>
+                </section>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Outside the article so machine-wide rules stay editable when no
+             session is selected. -->
+        <section
+          id="network-panel"
+          role="tabpanel"
+          aria-labelledby="network-tab"
+        >
+          <h2 id="network-title" class="standalone">Network rules</h2>
+          <p id="network-note" class="fine"></p>
+          <div class="scroller">
+            <table class="destinations">
+              <thead>
+                <tr>
+                  <th>Destination</th>
+                  <th>Status</th>
+                  <th>Traffic seen</th>
+                  <th>Last seen</th>
+                  <th><span class="sr">Change rule</span></th>
+                </tr>
+              </thead>
+              <tbody id="destinations"></tbody>
+            </table>
+          </div>
+          <form id="policy-form" class="rule-form">
+            <label for="policy-host">Add a rule for another host</label>
+            <div class="rule-inputs">
+              <input
+                id="policy-host"
+                required
+                maxlength="253"
+                placeholder="example.com"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button type="submit" name="action" value="allow" class="allow">
+                Allow
+              </button>
+              <button type="submit" name="action" value="deny" class="deny">
+                Deny
+              </button>
+            </div>
+            <p class="fine">
+              Exact hostname or IP address, without wildcards, ports or URLs.
+              Rules apply to every Dune session on this machine. Sessions reach
+              everything that is not denied; an allow rule only matters to
+              sessions started with <code>--strict</code>.
+            </p>
+          </form>
+          <p id="policy-result" class="result" role="status"></p>
+          <p id="policy-summary" class="fine" role="status"></p>
+          <ul id="policy-agents" class="sync"></ul>
+        </section>
+
+        <section
+          id="graph-panel"
+          role="tabpanel"
+          aria-labelledby="graph-tab"
+          hidden
+        >
+          <figure class="graph">
+            <figcaption>
+              <span id="graph-note"></span>
+              <span class="legend">
+                <i class="key allowed"></i>went through
+                <i class="key blocked"></i>blocked
+              </span>
+            </figcaption>
+            <div id="graph"></div>
+          </figure>
+        </section>
+
+        <details class="coverage">
+          <summary>What this view can’t see</summary>
+          <p>
+            Every connection is logged by host, allowed or blocked. Programs
+            are sampled a few times a second, so one that starts and exits in
+            between is missed, and their arguments are never logged. File
+            access the sandbox refuses is logged, but successful file reads are
+            not: tracing them needs root. File changes can include edits made
+            outside the sandbox, and tool events are reported by the agent
+            itself.
+          </p>
+          <ul id="coverage"></ul>
+        </details>
+      </main>
+    </div>
+  </body>
+</html>

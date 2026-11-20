@@ -11,6 +11,7 @@ import type { OpperRouting, SpawnOptions } from "../agents/types.js";
 import { formatSessionSummary, type ModelUsage } from "./launch-summary.js";
 import { newSessionId, buildSessionBaseUrl } from "../util/session-url.js";
 import { prepareDesktopProxy, desktopOpenCommand, validateDesktopRoutingOptions } from "./desktop.js";
+import { checkSandbox, launchSandbox } from "../sandbox/launch.js";
 
 const TRACES_URL = "https://platform.opper.ai/traces";
 
@@ -28,9 +29,18 @@ export interface LaunchOptions {
   proxy?: boolean;
   stateDir?: string;
   open?: boolean;
+  sandbox?: string;
+  sandboxDomains?: string[];
 }
 
 export async function launchCommand(opts: LaunchOptions): Promise<number> {
+  if (opts.sandboxDomains?.length && opts.sandbox !== "srt") {
+    throw new OpperError("INVALID_ARGUMENT", "--sandbox-domain requires --sandbox srt.");
+  }
+  if (opts.sandbox && opts.install) {
+    throw new OpperError("INVALID_ARGUMENT", "--install runs on the host and cannot be combined with --sandbox. Install the agent before launching it with SRT.");
+  }
+  const sandbox = opts.sandbox ? await checkSandbox(opts.sandbox, opts.agent) : undefined;
   if (opts.projectUuid !== undefined) validateProjectUuid(opts.projectUuid);
   const adapter = getAdapter(opts.agent);
   if (!adapter) {
@@ -145,7 +155,9 @@ export async function launchCommand(opts: LaunchOptions): Promise<number> {
     ...(opts.codexHome !== undefined ? { codexHome: opts.codexHome } : {}),
   };
   try {
-    code = await adapter.spawn(opts.passthrough ?? [], routing, spawnOpts);
+    code = sandbox
+      ? await launchSandbox(sandbox, { agent: opts.agent, args: opts.passthrough ?? [], routing, spawnOptions: spawnOpts }, opts.sandboxDomains)
+      : await adapter.spawn(opts.passthrough ?? [], routing, spawnOpts);
     if (desktop && code === 0) {
       // Create the one-use ticket after model discovery/app setup, so it cannot expire during setup.
       await desktopOpenCommand({ key: opts.key, stateDir: desktop.proxy.stateDir,
